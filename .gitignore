@@ -1,0 +1,31 @@
+# ===== Python =====
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ===== Virtual Environment =====
+venv/
+.venv/
+robustness/
+env/
+
+# ===== OS =====
+.DS_Store
+Thumbs.db
+
+# ===== Logs =====
+*.log
+
+# ===== Jupyter =====
+.ipynb_checkpoints/
+
+# ===== Data =====
+datasets/
+*.pkl
+*.csv
+
+# ===== Model / Output =====
+checkpoints/
+outputs/
+results/
