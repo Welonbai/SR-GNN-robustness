@@ -9,7 +9,7 @@ from attack.common.config import Config, load_config
 from attack.common.paths import artifact_paths
 from attack.common.seed import set_seed
 from attack.data.session_stats import compute_session_stats, load_train_sessions
-from attack.data.target_selector import select_target_item
+from attack.data.target_selector import resolve_target_item
 from attack.models.srgnn_runner import SRGNNRunner
 from attack.pipeline.evaluator import (
     evaluate_runner,
@@ -56,7 +56,12 @@ def run_clean(config: Config, config_path: str | Path | None = None, epochs: int
 
     clean_sessions = load_train_sessions(config.dataset.train)
     stats = compute_session_stats(clean_sessions)
-    target_item = select_target_item(config.attack.target_selection_mode, stats)
+    target_item = resolve_target_item(
+        stats,
+        mode=config.attack.target_selection_mode,
+        explicit_item=config.attack.target_item,
+        seed=config.experiment.seed,
+    )
 
     metrics = evaluate_runner(runner, test_data, topk=config.evaluation.topk)
     targeted = evaluate_targeted_precision_at_k(

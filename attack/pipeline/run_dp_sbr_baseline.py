@@ -13,7 +13,7 @@ from attack.common.seed import set_seed
 from attack.data.dataset_serializer import load_srg_nn_train, save_srg_nn_train
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.data.session_stats import compute_session_stats
-from attack.data.target_selector import select_target_item
+from attack.data.target_selector import resolve_target_item
 from attack.generation.fake_session_generator import FakeSessionGenerator
 from attack.generation.fake_session_parameter_sampler import FakeSessionParameterSampler
 from attack.insertion.random_topk_replace import RandomTopKReplacePolicy
@@ -70,7 +70,12 @@ def run_dp_sbr_baseline(
     clean_sessions, clean_labels = load_srg_nn_train(config.dataset.train)
     stats = compute_session_stats(clean_sessions)
 
-    target_item = select_target_item(config.attack.target_selection_mode, stats)
+    target_item = resolve_target_item(
+        stats,
+        mode=config.attack.target_selection_mode,
+        explicit_item=config.attack.target_item,
+        seed=config.experiment.seed,
+    )
 
     poison_runner = SRGNNRunner(config)
     poison_runner.build_model(_build_default_opt(poison_epochs))

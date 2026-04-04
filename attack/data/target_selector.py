@@ -40,4 +40,23 @@ def select_target_item(
     raise ValueError(f"Unknown target selection mode: {mode}")
 
 
-__all__ = ["select_target_item"]
+def resolve_target_item(
+    stats: SessionStats,
+    mode: str,
+    explicit_item: int | None = None,
+    seed: int | None = None,
+    unpopular_threshold: int = 10,
+) -> int:
+    if explicit_item is not None:
+        return int(explicit_item)
+    rng = random.Random(seed) if seed is not None else None
+    return select_target_item(
+        mode=mode,
+        stats=stats,
+        explicit_item=explicit_item,
+        rng=rng,
+        unpopular_threshold=unpopular_threshold,
+    )
+
+
+__all__ = ["select_target_item", "resolve_target_item"]
