@@ -31,13 +31,17 @@ with open(dataset, "r") as f:
         reader = csv.DictReader(f, delimiter=',')
     else:
         reader = csv.DictReader(f, delimiter=';')
+        print(reader.fieldnames)
     sess_clicks = {}
     sess_date = {}
     ctr = 0
     curid = -1
     curdate = None
     for data in reader:
-        sessid = data['session_id']
+        if opt.dataset == 'diginetica':
+            sessid = data['sessionId']
+        else:
+            sessid = data['session_id']
         if curdate and not curid == sessid:
             date = ''
             if opt.dataset == 'yoochoose':
@@ -48,6 +52,8 @@ with open(dataset, "r") as f:
         curid = sessid
         if opt.dataset == 'yoochoose':
             item = data['item_id']
+        elif opt.dataset == 'diginetica':
+            item = data['itemId'], int(data['timeframe'])
         else:
             item = data['item_id'], int(data['timeframe'])
         curdate = ''

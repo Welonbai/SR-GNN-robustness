@@ -110,10 +110,11 @@ def trans_to_cpu(variable):
 
 def forward(model, i, data):
     alias_inputs, A, items, mask, targets = data.get_slice(i)
-    alias_inputs = trans_to_cuda(torch.Tensor(alias_inputs).long())
-    items = trans_to_cuda(torch.Tensor(items).long())
-    A = trans_to_cuda(torch.Tensor(A).float())
-    mask = trans_to_cuda(torch.Tensor(mask).long())
+    # Convert lists to numpy arrays first to avoid slow list->tensor paths.
+    alias_inputs = trans_to_cuda(torch.from_numpy(np.asarray(alias_inputs, dtype=np.int64)))
+    items = trans_to_cuda(torch.from_numpy(np.asarray(items, dtype=np.int64)))
+    A = trans_to_cuda(torch.from_numpy(np.asarray(A, dtype=np.float32)))
+    mask = trans_to_cuda(torch.from_numpy(np.asarray(mask, dtype=np.int64)))
     hidden = model(items, A)
     get = lambda i: hidden[i][alias_inputs[i]]
     seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
@@ -121,7 +122,6 @@ def forward(model, i, data):
 
 
 def train_test(model, train_data, test_data):
-    model.scheduler.step()
     print('start training: ', datetime.datetime.now())
     model.train()
     total_loss = 0.0
@@ -137,6 +137,7 @@ def train_test(model, train_data, test_data):
         if j % int(len(slices) / 5 + 1) == 0:
             print('[%d/%d] Loss: %.4f' % (j, len(slices), loss.item()))
     print('\tLoss:\t%.3f' % total_loss)
+    model.scheduler.step()
 
     print('start predicting: ', datetime.datetime.now())
     model.eval()
