@@ -1,0 +1,21 @@
+experiment:
+  name: dp_sbr_diginetica_phase1
+  seed: 2026
+
+paths:
+  dataset:
+    train: datasets/diginetica/train.txt
+    test: datasets/diginetica/test.txt
+    all_train_seq: datasets/diginetica/all_train_seq.txt
+  output:
+    root: outputs
+    run_dir: outputs/dp_sbr_diginetica_phase1
+
+attack:
+  size: 0.01
+  target_selection_mode: popular
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 0.2
+
+evaluation:
+  topk: 25
