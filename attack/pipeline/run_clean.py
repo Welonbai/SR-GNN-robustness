@@ -9,7 +9,7 @@ from attack.common.config import Config, load_config
 from attack.common.paths import artifact_paths
 from attack.common.seed import set_seed
 from attack.data.session_stats import compute_session_stats, load_train_sessions
-from attack.data.target_selector import resolve_target_item
+from attack.data.target_selector import sample_one_from_popular
 from attack.models.srgnn_runner import SRGNNRunner
 from attack.pipeline.evaluator import (
     evaluate_runner,
@@ -56,21 +56,22 @@ def run_clean(config: Config, config_path: str | Path | None = None, epochs: int
 
     clean_sessions = load_train_sessions(config.dataset.train)
     stats = compute_session_stats(clean_sessions)
-    target_item = resolve_target_item(
-        stats,
-        mode=config.attack.target_selection_mode,
-        explicit_item=config.attack.target_item,
-        seed=config.experiment.seed,
-    )
+    if config.attack.target_selection_mode != "sample_one_from_popular":
+        raise ValueError("Only target_selection_mode=sample_one_from_popular is supported.")
+    target_item = sample_one_from_popular(stats, seed=config.experiment.seed)
 
     metrics = evaluate_runner(runner, test_data, topk=config.evaluation.topk)
     targeted = evaluate_targeted_precision_at_k(
         runner, test_data, target_item=target_item, topk=config.evaluation.topk
     )
-    metrics["target_item"] = int(target_item)
     metrics["targeted_precision_at_k"] = float(targeted)
-    save_metrics({"clean": metrics}, artifacts["metrics"])
-    return metrics
+    payload = {
+        "run_type": "clean",
+        "metrics": metrics,
+        "target_item": int(target_item),
+    }
+    save_metrics(payload, artifacts["metrics"])
+    return payload
 
 
 def main() -> None:

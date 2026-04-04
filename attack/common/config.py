@@ -28,7 +28,6 @@ class OutputPaths:
 class AttackConfig:
     size: float
     target_selection_mode: str
-    target_item: int | None
     fake_session_generation_topk: int
     replacement_topk_ratio: float
 
@@ -65,10 +64,6 @@ def _as_int(value: Any, context: str) -> int:
     return value
 
 
-def _as_optional_int(value: Any, context: str) -> int | None:
-    if value is None:
-        return None
-    return _as_int(value, context)
 
 
 def _as_float(value: Any, context: str) -> float:
@@ -128,7 +123,6 @@ def load_config(path: str | Path) -> Config:
             _require(attack, "target_selection_mode", "attack"),
             "attack.target_selection_mode",
         ),
-        target_item=_as_optional_int(attack.get("target_item"), "attack.target_item"),
         fake_session_generation_topk=_as_int(
             _require(attack, "fake_session_generation_topk", "attack"),
             "attack.fake_session_generation_topk",

@@ -13,7 +13,7 @@ from attack.common.seed import set_seed
 from attack.data.dataset_serializer import load_srg_nn_train, save_srg_nn_train
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.data.session_stats import compute_session_stats
-from attack.data.target_selector import resolve_target_item
+from attack.data.target_selector import sample_one_from_popular
 from attack.generation.fake_session_generator import FakeSessionGenerator
 from attack.generation.fake_session_parameter_sampler import FakeSessionParameterSampler
 from attack.insertion.random_topk_replace import RandomTopKReplacePolicy
@@ -70,12 +70,9 @@ def run_dp_sbr_baseline(
     clean_sessions, clean_labels = load_srg_nn_train(config.dataset.train)
     stats = compute_session_stats(clean_sessions)
 
-    target_item = resolve_target_item(
-        stats,
-        mode=config.attack.target_selection_mode,
-        explicit_item=config.attack.target_item,
-        seed=config.experiment.seed,
-    )
+    if config.attack.target_selection_mode != "sample_one_from_popular":
+        raise ValueError("Only target_selection_mode=sample_one_from_popular is supported.")
+    target_item = sample_one_from_popular(stats, seed=config.experiment.seed)
 
     poison_runner = SRGNNRunner(config)
     poison_runner.build_model(_build_default_opt(poison_epochs))
@@ -126,9 +123,10 @@ def run_dp_sbr_baseline(
         target_item=target_item,
         topk=config.evaluation.topk,
     )
-    metrics = {
-        "attack": attack_metrics,
-        "targeted_precision_at_k": float(targeted),
+    attack_metrics["targeted_precision_at_k"] = float(targeted)
+    payload = {
+        "run_type": "attack",
+        "metrics": attack_metrics,
         "target_item": int(target_item),
         "fake_session_count": int(fake_count),
         "clean_session_count": int(len(clean_sessions)),
@@ -136,8 +134,8 @@ def run_dp_sbr_baseline(
         "attack_epochs": int(attack_epochs),
         "poisoned_train_path": str(poisoned_train_path),
     }
-    save_metrics(metrics, artifacts["metrics"])
-    return metrics
+    save_metrics(payload, artifacts["metrics"])
+    return payload
 
 
 def main() -> None:
