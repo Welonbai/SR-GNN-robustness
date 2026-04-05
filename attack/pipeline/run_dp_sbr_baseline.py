@@ -13,7 +13,7 @@ from attack.common.seed import set_seed
 from attack.data.dataset_serializer import load_srg_nn_train, save_srg_nn_train
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.data.session_stats import compute_session_stats
-from attack.data.target_selector import sample_one_from_popular
+from attack.data.target_selector import sample_one_from_popular, sample_one_from_unpopular
 from attack.generation.fake_session_generator import FakeSessionGenerator
 from attack.generation.fake_session_parameter_sampler import FakeSessionParameterSampler
 from attack.insertion.random_topk_replace import RandomTopKReplacePolicy
@@ -70,9 +70,12 @@ def run_dp_sbr_baseline(
     clean_sessions, clean_labels = load_srg_nn_train(config.dataset.train)
     stats = compute_session_stats(clean_sessions)
 
-    if config.attack.target_selection_mode != "sample_one_from_popular":
-        raise ValueError("Only target_selection_mode=sample_one_from_popular is supported.")
-    target_item = sample_one_from_popular(stats, seed=config.experiment.seed)
+    if config.attack.target_selection_mode == "sample_one_from_popular":
+        target_item = sample_one_from_popular(stats, seed=config.experiment.seed)
+    elif config.attack.target_selection_mode == "sample_one_from_unpopular":
+        target_item = sample_one_from_unpopular(stats, seed=config.experiment.seed)
+    else:
+        raise ValueError("Unsupported target_selection_mode.")
 
     poison_runner = SRGNNRunner(config)
     poison_runner.build_model(_build_default_opt(poison_epochs))

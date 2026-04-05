@@ -9,7 +9,7 @@ from attack.common.config import Config, load_config
 from attack.common.paths import artifact_paths
 from attack.common.seed import set_seed
 from attack.data.session_stats import compute_session_stats, load_train_sessions
-from attack.data.target_selector import sample_one_from_popular
+from attack.data.target_selector import sample_one_from_popular, sample_one_from_unpopular
 from attack.models.srgnn_runner import SRGNNRunner
 from attack.pipeline.evaluator import (
     evaluate_runner,
@@ -54,9 +54,12 @@ def run_clean(config: Config, config_path: str | Path | None = None, epochs: int
 
     clean_sessions = load_train_sessions(config.dataset.train)
     stats = compute_session_stats(clean_sessions)
-    if config.attack.target_selection_mode != "sample_one_from_popular":
-        raise ValueError("Only target_selection_mode=sample_one_from_popular is supported.")
-    target_item = sample_one_from_popular(stats, seed=config.experiment.seed)
+    if config.attack.target_selection_mode == "sample_one_from_popular":
+        target_item = sample_one_from_popular(stats, seed=config.experiment.seed)
+    elif config.attack.target_selection_mode == "sample_one_from_unpopular":
+        target_item = sample_one_from_unpopular(stats, seed=config.experiment.seed)
+    else:
+        raise ValueError("Unsupported target_selection_mode.")
     if epochs > 0:
         runner.train(
             train_data,

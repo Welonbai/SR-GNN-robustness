@@ -21,4 +21,19 @@ def sample_one_from_popular(stats: SessionStats, seed: int) -> int:
     return int(rng.choice(pool))
 
 
-__all__ = ["sample_one_from_popular"]
+def _unpopular_pool(stats: SessionStats, threshold: int = 10) -> list[int]:
+    if not stats.item_counts:
+        raise ValueError("item_counts is empty; cannot select a target item.")
+    pool = [item for item, count in stats.item_counts.items() if count < threshold]
+    if not pool:
+        raise ValueError("Unpopular pool is empty under item_count < 10.")
+    return pool
+
+
+def sample_one_from_unpopular(stats: SessionStats, seed: int, threshold: int = 10) -> int:
+    rng = random.Random(seed)
+    pool = _unpopular_pool(stats, threshold=threshold)
+    return int(rng.choice(pool))
+
+
+__all__ = ["sample_one_from_popular", "sample_one_from_unpopular"]
