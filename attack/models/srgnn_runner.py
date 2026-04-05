@@ -54,8 +54,10 @@ class SRGNNRunner:
         if self.model is None:
             raise RuntimeError("Model is not initialized. Call build_model() first.")
         history: list[tuple[float, float]] = []
-        for _ in range(epochs):
+        for epoch in range(epochs):
+            print(f"epoch {epoch + 1}/{epochs}")
             hit, mrr = train_test(self.model, train_data, test_data)
+            print(f"epoch {epoch + 1}/{epochs} metrics: hit={hit:.4f} mrr={mrr:.4f}")
             history.append((hit, mrr))
         return history
 
