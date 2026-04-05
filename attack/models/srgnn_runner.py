@@ -50,13 +50,29 @@ class SRGNNRunner:
         test_data = pickle.load(test_path.open("rb"))
         return Data(train_data, shuffle=shuffle_train), Data(test_data, shuffle=False)
 
-    def train(self, train_data: Data, test_data: Data, epochs: int) -> list[tuple[float, float]]:
+    def train(
+        self,
+        train_data: Data,
+        test_data: Data,
+        epochs: int,
+        target_item: int | None = None,
+        topk: int = 20,
+    ) -> list[tuple[float, float]]:
         if self.model is None:
             raise RuntimeError("Model is not initialized. Call build_model() first.")
         history: list[tuple[float, float]] = []
+        if target_item is not None:
+            from attack.pipeline.evaluator import evaluate_targeted_precision_at_k
         for epoch in range(epochs):
             print(f"epoch {epoch + 1}/{epochs}")
             hit, mrr = train_test(self.model, train_data, test_data)
+            if target_item is not None:
+                targeted = evaluate_targeted_precision_at_k(
+                    self, test_data, target_item=target_item, topk=topk
+                )
+                print(
+                    f"epoch {epoch + 1}/{epochs} targeted_p@{topk}={targeted:.4f}"
+                )
             print(f"epoch {epoch + 1}/{epochs} metrics: hit={hit:.4f} mrr={mrr:.4f}")
             history.append((hit, mrr))
         return history

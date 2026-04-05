@@ -51,14 +51,20 @@ def run_clean(config: Config, config_path: str | Path | None = None, epochs: int
     runner = SRGNNRunner(config)
     runner.build_model(_build_default_opt(epochs))
     train_data, test_data = runner.load_dataset()
-    if epochs > 0:
-        runner.train(train_data, test_data, epochs)
 
     clean_sessions = load_train_sessions(config.dataset.train)
     stats = compute_session_stats(clean_sessions)
     if config.attack.target_selection_mode != "sample_one_from_popular":
         raise ValueError("Only target_selection_mode=sample_one_from_popular is supported.")
     target_item = sample_one_from_popular(stats, seed=config.experiment.seed)
+    if epochs > 0:
+        runner.train(
+            train_data,
+            test_data,
+            epochs,
+            target_item=target_item,
+            topk=config.evaluation.topk,
+        )
 
     metrics = evaluate_runner(runner, test_data, topk=config.evaluation.topk)
     targeted = evaluate_targeted_precision_at_k(

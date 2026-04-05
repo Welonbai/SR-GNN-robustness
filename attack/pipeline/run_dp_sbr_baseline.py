@@ -78,7 +78,13 @@ def run_dp_sbr_baseline(
     poison_runner.build_model(_build_default_opt(poison_epochs))
     poison_train_data, poison_test_data = poison_runner.load_dataset()
     if poison_epochs > 0:
-        poison_runner.train(poison_train_data, poison_test_data, poison_epochs)
+        poison_runner.train(
+            poison_train_data,
+            poison_test_data,
+            poison_epochs,
+            target_item=target_item,
+            topk=config.evaluation.topk,
+        )
 
     sampler = FakeSessionParameterSampler(stats)
     generator = FakeSessionGenerator(
@@ -112,7 +118,13 @@ def run_dp_sbr_baseline(
         test_path=config.dataset.test,
     )
     if attack_epochs > 0:
-        attacked_runner.train(attacked_train_data, attacked_test_data, attack_epochs)
+        attacked_runner.train(
+            attacked_train_data,
+            attacked_test_data,
+            attack_epochs,
+            target_item=target_item,
+            topk=config.evaluation.topk,
+        )
 
     attack_metrics = evaluate_runner(
         attacked_runner, attacked_test_data, topk=config.evaluation.topk
