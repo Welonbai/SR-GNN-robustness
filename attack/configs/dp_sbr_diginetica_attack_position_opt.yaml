@@ -1,5 +1,5 @@
 experiment:
-  name: position_opt_diginetica_attack
+  name: dp_sbr_diginetica_attack_position_opt
   seed: 20260405
 
 paths:
@@ -9,7 +9,7 @@ paths:
     all_train_seq: datasets/diginetica/all_train_seq.txt
   output:
     root: outputs
-    run_dir: outputs/position_opt_diginetica_attack
+    run_dir: outputs/dp_sbr_diginetica_attack_position_opt
 
 attack:
   size: 0.01

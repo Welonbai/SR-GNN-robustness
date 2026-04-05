@@ -1,5 +1,5 @@
 experiment:
-  name: dp_sbr_diginetica_phase1_attack
+  name: dp_sbr_diginetica_phase2_attack
   seed: 20260405
 
 paths:
@@ -9,7 +9,7 @@ paths:
     all_train_seq: datasets/diginetica/all_train_seq.txt
   output:
     root: outputs
-    run_dir: outputs/dp_sbr_diginetica_phase1_attack
+    run_dir: outputs/dp_sbr_diginetica_phase2_attack
 
 attack:
   size: 0.01
