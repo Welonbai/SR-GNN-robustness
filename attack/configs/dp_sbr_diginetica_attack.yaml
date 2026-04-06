@@ -9,7 +9,7 @@ paths:
     all_train_seq: datasets/diginetica/all_train_seq.txt
   output:
     root: outputs
-    run_dir: outputs/dp_sbr_diginetica_phase2_attack
+    run_dir: runs
 
 attack:
   size: 0.01

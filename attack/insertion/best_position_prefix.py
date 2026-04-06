@@ -12,7 +12,7 @@ class BestPositionResult:
     target_score: float
 
 
-class BestPositionReplacePolicy:
+class BestPositionPrefixPolicy:
     def __init__(self, runner, topk_ratio: float) -> None:
         if not (0.0 < topk_ratio <= 1.0):
             raise ValueError("topk_ratio must be within (0, 1].")
@@ -24,11 +24,13 @@ class BestPositionReplacePolicy:
         max_index = min(topk_count, length) - 1
         return range(0, max_index + 1)
 
-    def _score_target(self, session: Sequence[int], target_item: int) -> float:
-        scores = self.runner.score_session(session)
+    def _score_target_prefix(self, prefix: Sequence[int], target_item: int) -> float:
+        if not prefix:
+            return float("-inf")
+        scores = self.runner.score_session(prefix)
         target_index = int(target_item) - 1
         if target_index < 0 or target_index >= scores.shape[0]:
-            raise ValueError("target_item is خارج於模型可用的 item 範圍。")
+            raise ValueError("target_item is outside the score vector range.")
         return float(scores[target_index].item())
 
     def apply(self, session: Sequence[int], target_item: int) -> list[int]:
@@ -47,7 +49,8 @@ class BestPositionReplacePolicy:
         for pos in self._candidate_positions(len(session)):
             candidate = list(session)
             candidate[pos] = int(target_item)
-            score = self._score_target(candidate, target_item)
+            prefix = candidate[:pos]
+            score = self._score_target_prefix(prefix, target_item)
             if best_score is None or score > best_score:
                 best_score = score
                 best_pos = pos
@@ -63,4 +66,4 @@ class BestPositionReplacePolicy:
         )
 
 
-__all__ = ["BestPositionReplacePolicy", "BestPositionResult"]
+__all__ = ["BestPositionPrefixPolicy", "BestPositionResult"]

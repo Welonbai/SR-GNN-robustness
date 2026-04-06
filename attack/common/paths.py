@@ -9,28 +9,49 @@ def output_root(config: Config) -> Path:
     return Path(config.output.root)
 
 
-def run_dir(config: Config) -> Path:
-    root = Path(config.output.root)
-    run_path = Path(config.output.run_dir)
-    if run_path.is_absolute() or root == Path("."):
-        return run_path
-    try:
-        run_path.relative_to(root)
-        return run_path
-    except ValueError:
-        return root / run_path
+def dataset_name(config: Config) -> str:
+    return Path(config.dataset.train).parent.name or "dataset"
 
 
-def artifact_paths(config: Config) -> dict[str, Path]:
-    base = run_dir(config)
+def shared_dir(config: Config) -> Path:
+    return output_root(config) / "shared" / dataset_name(config) / f"seed_{config.experiment.seed}"
+
+
+def runs_dir(config: Config) -> Path:
+    return output_root(config) / "runs" / dataset_name(config) / f"seed_{config.experiment.seed}"
+
+
+def run_dir(config: Config, method_name: str) -> Path:
+    return runs_dir(config) / method_name
+
+
+def shared_artifact_paths(config: Config) -> dict[str, Path]:
+    base = shared_dir(config)
     return {
-        "config_snapshot": base / "config.yaml",
-        "logs": base / "logs",
-        "checkpoints": base / "checkpoints",
-        "fake_sessions": base / "fake_sessions",
-        "poisoned_dataset": base / "poisoned_dataset",
-        "metrics": base / "metrics.json",
+        "shared_dir": base,
+        "poison_model": base / "poison_model.pt",
+        "fake_sessions": base / "fake_sessions.pkl",
+        "target_info": base / "target_info.json",
     }
 
 
-__all__ = ["output_root", "run_dir", "artifact_paths"]
+def run_artifact_paths(config: Config, method_name: str) -> dict[str, Path]:
+    base = run_dir(config, method_name)
+    return {
+        "run_dir": base,
+        "config_snapshot": base / "config.yaml",
+        "metrics": base / "metrics.json",
+        "poisoned_train": base / "poisoned_train.txt",
+        "best_position_metadata": base / "best_position_metadata.pkl",
+    }
+
+
+__all__ = [
+    "output_root",
+    "dataset_name",
+    "shared_dir",
+    "runs_dir",
+    "run_dir",
+    "shared_artifact_paths",
+    "run_artifact_paths",
+]

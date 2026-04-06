@@ -3,10 +3,9 @@ from __future__ import annotations
 import argparse
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
 
 from attack.common.config import Config, load_config
-from attack.common.paths import artifact_paths
+from attack.common.paths import run_artifact_paths
 from attack.common.seed import set_seed
 from attack.data.session_stats import compute_session_stats, load_train_sessions
 from attack.data.target_selector import sample_one_from_popular, sample_one_from_unpopular
@@ -16,29 +15,15 @@ from attack.pipeline.evaluator import (
     evaluate_targeted_precision_at_k,
     save_metrics,
 )
+from attack.pipeline.pipeline_utils import build_default_opt
 
 
-def _build_default_opt(epochs: int) -> SimpleNamespace:
-    return SimpleNamespace(
-        batchSize=100,
-        hiddenSize=100,
-        epoch=epochs,
-        lr=0.001,
-        lr_dc=0.1,
-        lr_dc_step=3,
-        l2=1e-5,
-        step=1,
-        patience=10,
-        nonhybrid=False,
-    )
-
-
-def _prepare_artifacts(config: Config, config_path: str | Path | None) -> dict[str, Path]:
-    artifacts = artifact_paths(config)
-    run_dir = artifacts["config_snapshot"].parent
+def _prepare_run_artifacts(
+    config: Config, method_name: str, config_path: str | Path | None
+) -> dict[str, Path]:
+    artifacts = run_artifact_paths(config, method_name)
+    run_dir = artifacts["run_dir"]
     run_dir.mkdir(parents=True, exist_ok=True)
-    for key in ("logs", "checkpoints", "fake_sessions", "poisoned_dataset"):
-        artifacts[key].mkdir(parents=True, exist_ok=True)
     if config_path:
         shutil.copyfile(config_path, artifacts["config_snapshot"])
     return artifacts
@@ -46,10 +31,10 @@ def _prepare_artifacts(config: Config, config_path: str | Path | None) -> dict[s
 
 def run_clean(config: Config, config_path: str | Path | None = None, epochs: int = 1) -> dict[str, float]:
     set_seed(config.experiment.seed)
-    artifacts = _prepare_artifacts(config, config_path)
+    artifacts = _prepare_run_artifacts(config, "clean", config_path)
 
     runner = SRGNNRunner(config)
-    runner.build_model(_build_default_opt(epochs))
+    runner.build_model(build_default_opt(epochs))
     train_data, test_data = runner.load_dataset()
 
     clean_sessions = load_train_sessions(config.dataset.train)
@@ -87,7 +72,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default="attack/configs/dp_sbr_diginetica.yaml",
+        default="attack/configs/dp_sbr_diginetica_clean.yaml",
         help="Path to YAML config.",
     )
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs.")

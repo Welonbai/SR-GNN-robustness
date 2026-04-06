@@ -1,61 +1,33 @@
 from __future__ import annotations
 
 import argparse
-import math
-import pickle
 import shutil
 from pathlib import Path
-from types import SimpleNamespace
 
 from attack.common.config import Config, load_config
-from attack.common.paths import artifact_paths
+from attack.common.paths import run_artifact_paths
 from attack.common.seed import set_seed
-from attack.data.dataset_serializer import load_srg_nn_train, save_srg_nn_train
+from attack.data.dataset_serializer import save_srg_nn_train
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
-from attack.data.session_stats import compute_session_stats
-from attack.data.target_selector import sample_one_from_popular, sample_one_from_unpopular
-from attack.generation.fake_session_generator import FakeSessionGenerator
-from attack.generation.fake_session_parameter_sampler import FakeSessionParameterSampler
-from attack.insertion.random_topk_replace import RandomTopKReplacePolicy
+from attack.insertion.dpsbr_baseline import DPSBRBaselinePolicy
 from attack.models.srgnn_runner import SRGNNRunner
 from attack.pipeline.evaluator import (
     evaluate_runner,
     evaluate_targeted_precision_at_k,
     save_metrics,
 )
+from attack.pipeline.pipeline_utils import build_default_opt, prepare_shared_attack_artifacts
 
 
-def _build_default_opt(epochs: int) -> SimpleNamespace:
-    return SimpleNamespace(
-        batchSize=100,
-        hiddenSize=100,
-        epoch=epochs,
-        lr=0.001,
-        lr_dc=0.1,
-        lr_dc_step=3,
-        l2=1e-5,
-        step=1,
-        patience=10,
-        nonhybrid=False,
-    )
-
-
-def _prepare_artifacts(config: Config, config_path: str | Path | None) -> dict[str, Path]:
-    artifacts = artifact_paths(config)
-    run_dir = artifacts["config_snapshot"].parent
+def _prepare_run_artifacts(
+    config: Config, method_name: str, config_path: str | Path | None
+) -> dict[str, Path]:
+    artifacts = run_artifact_paths(config, method_name)
+    run_dir = artifacts["run_dir"]
     run_dir.mkdir(parents=True, exist_ok=True)
-    for key in ("logs", "checkpoints", "fake_sessions", "poisoned_dataset"):
-        artifacts[key].mkdir(parents=True, exist_ok=True)
     if config_path:
         shutil.copyfile(config_path, artifacts["config_snapshot"])
     return artifacts
-
-
-def _fake_session_count(ratio: float, clean_count: int) -> int:
-    if ratio <= 0:
-        return 0
-    count = int(round(clean_count * ratio))
-    return max(1, count)
 
 
 def run_dp_sbr_baseline(
@@ -65,57 +37,28 @@ def run_dp_sbr_baseline(
     attack_epochs: int = 1,
 ) -> dict[str, object]:
     set_seed(config.experiment.seed)
-    artifacts = _prepare_artifacts(config, config_path)
-
-    clean_sessions, clean_labels = load_srg_nn_train(config.dataset.train)
-    stats = compute_session_stats(clean_sessions)
-
-    if config.attack.target_selection_mode == "sample_one_from_popular":
-        target_item = sample_one_from_popular(stats, seed=config.experiment.seed)
-    elif config.attack.target_selection_mode == "sample_one_from_unpopular":
-        target_item = sample_one_from_unpopular(stats, seed=config.experiment.seed)
-    else:
-        raise ValueError("Unsupported target_selection_mode.")
-
-    poison_runner = SRGNNRunner(config)
-    poison_runner.build_model(_build_default_opt(poison_epochs))
-    poison_train_data, poison_test_data = poison_runner.load_dataset()
-    if poison_epochs > 0:
-        poison_runner.train(
-            poison_train_data,
-            poison_test_data,
-            poison_epochs,
-            target_item=target_item,
-            topk=config.evaluation.topk,
-        )
-
-    sampler = FakeSessionParameterSampler(stats)
-    generator = FakeSessionGenerator(
-        poison_runner,
-        sampler,
-        topk=config.attack.fake_session_generation_topk,
+    artifacts = _prepare_run_artifacts(config, "dpsbr_baseline", config_path)
+    shared = prepare_shared_attack_artifacts(
+        config,
+        poison_epochs=poison_epochs,
+        require_poison_runner=False,
     )
-    fake_count = _fake_session_count(config.attack.size, len(clean_sessions))
-    template_sessions = [s.items for s in generator.generate_many(fake_count)]
 
-    policy = RandomTopKReplacePolicy(config.attack.replacement_topk_ratio)
-    fake_sessions = [policy.apply(session, target_item) for session in template_sessions]
+    target_item = shared.target_item
+    policy = DPSBRBaselinePolicy(config.attack.replacement_topk_ratio)
+    fake_sessions = [policy.apply(session, target_item) for session in shared.template_sessions]
 
-    max_item = max(stats.item_counts)
+    max_item = max(shared.stats.item_counts)
     if any(max(session) > max_item for session in fake_sessions):
         raise ValueError("Generated fake sessions contain invalid item IDs.")
 
-    poisoned = build_poisoned_dataset(clean_sessions, clean_labels, fake_sessions)
+    poisoned = build_poisoned_dataset(shared.clean_sessions, shared.clean_labels, fake_sessions)
 
-    fake_sessions_path = artifacts["fake_sessions"] / "fake_sessions.pkl"
-    with fake_sessions_path.open("wb") as handle:
-        pickle.dump(fake_sessions, handle)
-
-    poisoned_train_path = artifacts["poisoned_dataset"] / "poisoned_train.txt"
+    poisoned_train_path = artifacts["poisoned_train"]
     save_srg_nn_train(poisoned_train_path, poisoned.sessions, poisoned.labels)
 
     attacked_runner = SRGNNRunner(config)
-    attacked_runner.build_model(_build_default_opt(attack_epochs))
+    attacked_runner.build_model(build_default_opt(attack_epochs))
     attacked_train_data, attacked_test_data = attacked_runner.load_dataset(
         train_path=poisoned_train_path,
         test_path=config.dataset.test,
@@ -140,11 +83,11 @@ def run_dp_sbr_baseline(
     )
     attack_metrics["targeted_precision_at_k"] = float(targeted)
     payload = {
-        "run_type": "attack",
+        "run_type": "dpsbr_baseline",
         "metrics": attack_metrics,
         "target_item": int(target_item),
-        "fake_session_count": int(fake_count),
-        "clean_session_count": int(len(clean_sessions)),
+        "fake_session_count": int(shared.fake_session_count),
+        "clean_session_count": int(len(shared.clean_sessions)),
         "poison_epochs": int(poison_epochs),
         "attack_epochs": int(attack_epochs),
         "poisoned_train_path": str(poisoned_train_path),
@@ -157,7 +100,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default="attack/configs/dp_sbr_diginetica.yaml",
+        default="attack/configs/dp_sbr_diginetica_attack.yaml",
         help="Path to YAML config.",
     )
     parser.add_argument("--poison-epochs", type=int, default=1, help="Poison model epochs.")

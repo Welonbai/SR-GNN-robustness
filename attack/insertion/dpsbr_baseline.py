@@ -7,7 +7,7 @@ from typing import Sequence
 from .base_policy import InsertionPolicy
 
 
-class RandomTopKReplacePolicy(InsertionPolicy):
+class DPSBRBaselinePolicy(InsertionPolicy):
     def __init__(self, topk_ratio: float, rng: random.Random | None = None) -> None:
         if not (0.0 < topk_ratio <= 1.0):
             raise ValueError("topk_ratio must be within (0, 1].")
@@ -26,4 +26,4 @@ class RandomTopKReplacePolicy(InsertionPolicy):
         return updated
 
 
-__all__ = ["RandomTopKReplacePolicy"]
+__all__ = ["DPSBRBaselinePolicy"]
