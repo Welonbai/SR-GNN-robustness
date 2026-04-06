@@ -65,6 +65,7 @@ def _load_or_train_poison_runner(
     runner = SRGNNRunner(config)
     runner.build_model(build_default_opt(poison_epochs))
     if load_poison_model(runner, shared_paths["poison_model"]):
+        print(f"Loaded poison model checkpoint from {shared_paths['poison_model']}")
         return runner
 
     train_data, test_data = runner.load_dataset()
