@@ -2,9 +2,16 @@ from __future__ import annotations
 
 import math
 import random
+from dataclasses import dataclass
 from typing import Sequence
 
 from .base_policy import InsertionPolicy
+
+
+@dataclass(frozen=True)
+class DPSBRBaselineResult:
+    session: list[int]
+    position: int
 
 
 class DPSBRBaselinePolicy(InsertionPolicy):
@@ -15,6 +22,9 @@ class DPSBRBaselinePolicy(InsertionPolicy):
         self.rng = rng or random.Random()
 
     def apply(self, session: Sequence[int], target_item: int) -> list[int]:
+        return self.apply_with_metadata(session, target_item).session
+
+    def apply_with_metadata(self, session: Sequence[int], target_item: int) -> DPSBRBaselineResult:
         if not session:
             raise ValueError("Session must contain at least one item.")
         length = len(session)
@@ -23,7 +33,7 @@ class DPSBRBaselinePolicy(InsertionPolicy):
         replace_index = self.rng.randint(0, max_index)
         updated = list(session)
         updated[replace_index] = int(target_item)
-        return updated
+        return DPSBRBaselineResult(session=updated, position=int(replace_index))
 
 
-__all__ = ["DPSBRBaselinePolicy"]
+__all__ = ["DPSBRBaselinePolicy", "DPSBRBaselineResult"]

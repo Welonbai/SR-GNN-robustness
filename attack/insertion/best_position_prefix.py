@@ -24,10 +24,15 @@ class BestPositionPrefixPolicy:
         max_index = min(topk_count, length) - 1
         return range(0, max_index + 1)
 
-    def _score_target_prefix(self, prefix: Sequence[int], target_item: int) -> float:
-        if not prefix:
-            return float("-inf")
-        scores = self.runner.score_session(prefix)
+    def _score_target_prefix(
+        self, prefix: Sequence[int], target_item: int, fallback_item: int | None = None
+    ) -> float:
+        try:
+            scores = self.runner.score_session(prefix)
+        except ValueError:
+            if fallback_item is None:
+                raise
+            scores = self.runner.score_session([fallback_item])
         target_index = int(target_item) - 1
         if target_index < 0 or target_index >= scores.shape[0]:
             raise ValueError("target_item is outside the score vector range.")
@@ -50,7 +55,9 @@ class BestPositionPrefixPolicy:
             candidate = list(session)
             candidate[pos] = int(target_item)
             prefix = candidate[:pos]
-            score = self._score_target_prefix(prefix, target_item)
+            score = self._score_target_prefix(
+                prefix, target_item, fallback_item=candidate[pos]
+            )
             if best_score is None or score > best_score:
                 best_score = score
                 best_pos = pos

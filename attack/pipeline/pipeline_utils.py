@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
 
 from attack.common.artifact_io import (
@@ -96,9 +97,14 @@ def prepare_shared_attack_artifacts(
     *,
     poison_epochs: int,
     require_poison_runner: bool,
+    config_path: str | Path | None = None,
 ) -> SharedAttackArtifacts:
     shared_paths = shared_artifact_paths(config)
     shared_paths["shared_dir"].mkdir(parents=True, exist_ok=True)
+    if config_path:
+        snapshot_path = shared_paths["config_snapshot"]
+        if not snapshot_path.exists():
+            shutil.copyfile(config_path, snapshot_path)
 
     clean_sessions, clean_labels = load_srg_nn_train(config.dataset.train)
     stats = compute_session_stats(clean_sessions)
@@ -132,7 +138,7 @@ def prepare_shared_attack_artifacts(
         )
         fake_count = _fake_session_count(config.attack.size, len(clean_sessions))
         template_sessions = [s.items for s in generator.generate_many(fake_count)]
-        save_fake_sessions(shared_paths["fake_sessions"], template_sessions)
+        save_fake_sessions(template_sessions, shared_paths["fake_sessions"])
     else:
         fake_count = len(template_sessions)
 

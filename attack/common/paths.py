@@ -29,6 +29,7 @@ def shared_artifact_paths(config: Config) -> dict[str, Path]:
     base = shared_dir(config)
     return {
         "shared_dir": base,
+        "config_snapshot": base / "config.yaml",
         "poison_model": base / "poison_model.pt",
         "fake_sessions": base / "fake_sessions.pkl",
         "target_info": base / "target_info.json",
@@ -43,6 +44,7 @@ def run_artifact_paths(config: Config, method_name: str) -> dict[str, Path]:
         "metrics": base / "metrics.json",
         "poisoned_train": base / "poisoned_train.txt",
         "best_position_metadata": base / "best_position_metadata.pkl",
+        "dpsbr_position_metadata": base / "dpsbr_position_metadata.pkl",
     }
 
 

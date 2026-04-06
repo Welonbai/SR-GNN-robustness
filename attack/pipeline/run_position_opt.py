@@ -43,6 +43,7 @@ def run_position_opt(
         config,
         poison_epochs=poison_epochs,
         require_poison_runner=True,
+        config_path=config_path,
     )
 
     target_item = shared.target_item

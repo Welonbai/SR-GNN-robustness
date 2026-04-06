@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import pickle
 import shutil
+from collections import Counter
 from pathlib import Path
 
 from attack.common.config import Config, load_config
@@ -42,11 +44,17 @@ def run_dp_sbr_baseline(
         config,
         poison_epochs=poison_epochs,
         require_poison_runner=False,
+        config_path=config_path,
     )
 
     target_item = shared.target_item
     policy = DPSBRBaselinePolicy(config.attack.replacement_topk_ratio)
-    fake_sessions = [policy.apply(session, target_item) for session in shared.template_sessions]
+    fake_sessions = []
+    position_counts: Counter[int] = Counter()
+    for session in shared.template_sessions:
+        result = policy.apply_with_metadata(session, target_item)
+        fake_sessions.append(result.session)
+        position_counts[int(result.position)] += 1
 
     max_item = max(shared.stats.item_counts)
     if any(max(session) > max_item for session in fake_sessions):
@@ -56,6 +64,20 @@ def run_dp_sbr_baseline(
 
     poisoned_train_path = artifacts["poisoned_train"]
     save_srg_nn_train(poisoned_train_path, poisoned.sessions, poisoned.labels)
+
+    total_positions = sum(position_counts.values())
+    ratios = {
+        str(pos): (count / total_positions if total_positions else 0.0)
+        for pos, count in position_counts.items()
+    }
+    positions_payload = {
+        "total": int(total_positions),
+        "counts": {str(pos): int(count) for pos, count in position_counts.items()},
+        "ratios": ratios,
+    }
+    positions_path = artifacts["dpsbr_position_metadata"]
+    with positions_path.open("wb") as handle:
+        pickle.dump(positions_payload, handle)
 
     attacked_runner = SRGNNRunner(config)
     attacked_runner.build_model(build_default_opt(attack_epochs))
@@ -91,6 +113,7 @@ def run_dp_sbr_baseline(
         "poison_epochs": int(poison_epochs),
         "attack_epochs": int(attack_epochs),
         "poisoned_train_path": str(poisoned_train_path),
+        "dpsbr_position_metadata_path": str(positions_path),
     }
     save_metrics(payload, artifacts["metrics"])
     return payload
