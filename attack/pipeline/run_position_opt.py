@@ -20,10 +20,8 @@ from attack.pipeline.evaluator import (
 from attack.pipeline.pipeline_utils import build_default_opt, prepare_shared_attack_artifacts
 
 
-def _prepare_run_artifacts(
-    config: Config, method_name: str, config_path: str | Path | None
-) -> dict[str, Path]:
-    artifacts = run_artifact_paths(config, method_name)
+def _prepare_run_artifacts(config: Config, config_path: str | Path | None) -> dict[str, Path]:
+    artifacts = run_artifact_paths(config, config.experiment.name)
     run_dir = artifacts["run_dir"]
     run_dir.mkdir(parents=True, exist_ok=True)
     if config_path:
@@ -38,7 +36,7 @@ def run_position_opt(
     attack_epochs: int = 1,
 ) -> dict[str, object]:
     set_seed(config.experiment.seed)
-    artifacts = _prepare_run_artifacts(config, "position_prefix", config_path)
+    artifacts = _prepare_run_artifacts(config, config_path)
     shared = prepare_shared_attack_artifacts(
         config,
         poison_epochs=poison_epochs,

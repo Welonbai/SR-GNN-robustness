@@ -21,8 +21,9 @@ def runs_dir(config: Config) -> Path:
     return output_root(config) / "runs" / dataset_name(config) / f"seed_{config.experiment.seed}"
 
 
-def run_dir(config: Config, method_name: str) -> Path:
-    return runs_dir(config) / method_name
+def run_dir(config: Config, run_name: str | None = None) -> Path:
+    name = run_name or config.experiment.name
+    return runs_dir(config) / name
 
 
 def shared_artifact_paths(config: Config) -> dict[str, Path]:
@@ -36,15 +37,15 @@ def shared_artifact_paths(config: Config) -> dict[str, Path]:
     }
 
 
-def run_artifact_paths(config: Config, method_name: str) -> dict[str, Path]:
-    base = run_dir(config, method_name)
+def run_artifact_paths(config: Config, run_name: str | None = None) -> dict[str, Path]:
+    base = run_dir(config, run_name)
     return {
         "run_dir": base,
         "config_snapshot": base / "config.yaml",
         "metrics": base / "metrics.json",
         "poisoned_train": base / "poisoned_train.txt",
         "best_position_metadata": base / "best_position_metadata.pkl",
-        "dpsbr_position_metadata": base / "dpsbr_position_metadata.pkl",
+        "dpsbr_position_metadata": base / "dpsbr_position_metadata.json",
     }
 
 

@@ -18,10 +18,8 @@ from attack.pipeline.evaluator import (
 from attack.pipeline.pipeline_utils import build_default_opt
 
 
-def _prepare_run_artifacts(
-    config: Config, method_name: str, config_path: str | Path | None
-) -> dict[str, Path]:
-    artifacts = run_artifact_paths(config, method_name)
+def _prepare_run_artifacts(config: Config, config_path: str | Path | None) -> dict[str, Path]:
+    artifacts = run_artifact_paths(config, config.experiment.name)
     run_dir = artifacts["run_dir"]
     run_dir.mkdir(parents=True, exist_ok=True)
     if config_path:
@@ -31,7 +29,7 @@ def _prepare_run_artifacts(
 
 def run_clean(config: Config, config_path: str | Path | None = None, epochs: int = 1) -> dict[str, float]:
     set_seed(config.experiment.seed)
-    artifacts = _prepare_run_artifacts(config, "clean", config_path)
+    artifacts = _prepare_run_artifacts(config, config_path)
 
     runner = SRGNNRunner(config)
     runner.build_model(build_default_opt(epochs))

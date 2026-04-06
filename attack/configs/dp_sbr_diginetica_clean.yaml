@@ -1,5 +1,5 @@
 experiment:
-  name: dp_sbr_diginetica_phase2_clean
+  name: clean_srgnn
   seed: 20260405
 
 paths:

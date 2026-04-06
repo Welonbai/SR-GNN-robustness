@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import pickle
+import json
 import shutil
 from collections import Counter
 from pathlib import Path
@@ -21,10 +21,8 @@ from attack.pipeline.evaluator import (
 from attack.pipeline.pipeline_utils import build_default_opt, prepare_shared_attack_artifacts
 
 
-def _prepare_run_artifacts(
-    config: Config, method_name: str, config_path: str | Path | None
-) -> dict[str, Path]:
-    artifacts = run_artifact_paths(config, method_name)
+def _prepare_run_artifacts(config: Config, config_path: str | Path | None) -> dict[str, Path]:
+    artifacts = run_artifact_paths(config, config.experiment.name)
     run_dir = artifacts["run_dir"]
     run_dir.mkdir(parents=True, exist_ok=True)
     if config_path:
@@ -39,7 +37,7 @@ def run_dp_sbr_baseline(
     attack_epochs: int = 1,
 ) -> dict[str, object]:
     set_seed(config.experiment.seed)
-    artifacts = _prepare_run_artifacts(config, "dpsbr_baseline", config_path)
+    artifacts = _prepare_run_artifacts(config, config_path)
     shared = prepare_shared_attack_artifacts(
         config,
         poison_epochs=poison_epochs,
@@ -76,8 +74,8 @@ def run_dp_sbr_baseline(
         "ratios": ratios,
     }
     positions_path = artifacts["dpsbr_position_metadata"]
-    with positions_path.open("wb") as handle:
-        pickle.dump(positions_payload, handle)
+    with positions_path.open("w", encoding="utf-8") as handle:
+        json.dump(positions_payload, handle, indent=2, sort_keys=True)
 
     attacked_runner = SRGNNRunner(config)
     attacked_runner.build_model(build_default_opt(attack_epochs))

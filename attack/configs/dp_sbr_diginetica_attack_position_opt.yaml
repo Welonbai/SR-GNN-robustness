@@ -1,5 +1,5 @@
 experiment:
-  name: dp_sbr_diginetica_attack_position_opt
+  name: position_opt_pre_scoring
   seed: 20260405
 
 paths:
