@@ -141,6 +141,7 @@ def prepare_shared_attack_artifacts(
         template_sessions = [s.items for s in generator.generate_many(fake_count)]
         save_fake_sessions(template_sessions, shared_paths["fake_sessions"])
     else:
+        print(f"Loaded fake sessions from {shared_paths['fake_sessions']}")
         fake_count = len(template_sessions)
 
     if require_poison_runner and poison_runner is None:

@@ -12,7 +12,7 @@ from attack.common.paths import run_artifact_paths
 from attack.common.seed import set_seed
 from attack.data.dataset_serializer import save_srg_nn_train
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
-from attack.insertion.dpsbr_baseline import DPSBRBaselinePolicy
+from attack.insertion.random_nonzero_when_possible import RandomNonzeroWhenPossiblePolicy
 from attack.models.srgnn_runner import SRGNNRunner
 from attack.pipeline.evaluator import (
     evaluate_runner,
@@ -31,7 +31,7 @@ def _prepare_run_artifacts(config: Config, config_path: str | Path | None) -> di
     return artifacts
 
 
-def run_dp_sbr_baseline(
+def run_random_nonzero(
     config: Config,
     config_path: str | Path | None = None,
     poison_epochs: int = 1,
@@ -48,13 +48,16 @@ def run_dp_sbr_baseline(
 
     target_item = shared.target_item
     rng = random.Random(config.experiment.seed)
-    policy = DPSBRBaselinePolicy(config.attack.replacement_topk_ratio, rng=rng)
+    policy = RandomNonzeroWhenPossiblePolicy(
+        config.attack.replacement_topk_ratio, rng=rng
+    )
     fake_sessions = []
     position_counts: Counter[int] = Counter()
     for session in shared.template_sessions:
-        result = policy.apply_with_metadata(session, target_item)
-        fake_sessions.append(result.session)
-        position_counts[int(result.position)] += 1
+        updated = policy.apply(session, target_item)
+        fake_sessions.append(updated)
+        replace_index = updated.index(target_item)
+        position_counts[int(replace_index)] += 1
 
     max_item = max(shared.stats.item_counts)
     if any(max(session) > max_item for session in fake_sessions):
@@ -75,7 +78,7 @@ def run_dp_sbr_baseline(
         "counts": {str(pos): int(count) for pos, count in position_counts.items()},
         "ratios": ratios,
     }
-    positions_path = artifacts["dpsbr_position_metadata"]
+    positions_path = artifacts["random_nonzero_position_metadata"]
     with positions_path.open("w", encoding="utf-8") as handle:
         json.dump(positions_payload, handle, indent=2, sort_keys=True)
 
@@ -105,7 +108,7 @@ def run_dp_sbr_baseline(
     )
     attack_metrics["targeted_precision_at_k"] = float(targeted)
     payload = {
-        "run_type": "dpsbr_baseline",
+        "run_type": "random_nonzero_when_possible",
         "metrics": attack_metrics,
         "target_item": int(target_item),
         "fake_session_count": int(shared.fake_session_count),
@@ -113,7 +116,7 @@ def run_dp_sbr_baseline(
         "poison_epochs": int(poison_epochs),
         "attack_epochs": int(attack_epochs),
         "poisoned_train_path": str(poisoned_train_path),
-        "dpsbr_position_metadata_path": str(positions_path),
+        "random_nonzero_position_metadata_path": str(positions_path),
     }
     save_metrics(payload, artifacts["metrics"])
     return payload
@@ -123,7 +126,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default="attack/configs/dp_sbr_diginetica_attack.yaml",
+        default="attack/configs/dp_sbr_diginetica_attack_random_nonzero_when_possible.yaml",
         help="Path to YAML config.",
     )
     parser.add_argument("--poison-epochs", type=int, default=1, help="Poison model epochs.")
@@ -131,7 +134,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    run_dp_sbr_baseline(
+    run_random_nonzero(
         config,
         config_path=args.config,
         poison_epochs=args.poison_epochs,

@@ -46,6 +46,7 @@ def run_artifact_paths(config: Config, run_name: str | None = None) -> dict[str,
         "poisoned_train": base / "poisoned_train.txt",
         "best_position_metadata": base / "best_position_metadata.pkl",
         "dpsbr_position_metadata": base / "dpsbr_position_metadata.json",
+        "random_nonzero_position_metadata": base / "random_nonzero_position_metadata.json",
     }
 
 
