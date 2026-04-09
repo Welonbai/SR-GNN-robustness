@@ -1,0 +1,6 @@
+[submodule "third_party/miasrec"]
+	path = third_party/miasrec
+	url = https://github.com/jin530/MiaSRec.git
+[submodule "third_party/tron"]
+	path = third_party/tron
+	url = https://github.com/otto-de/TRON.git

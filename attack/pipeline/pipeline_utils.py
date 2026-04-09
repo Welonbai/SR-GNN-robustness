@@ -13,10 +13,14 @@ from attack.common.artifact_io import (
     save_poison_model,
     save_target_info,
 )
-from attack.common.paths import shared_artifact_paths
+from attack.common.paths import dataset_paths, shared_artifact_paths
 from attack.data.dataset_serializer import load_srg_nn_train
 from attack.data.session_stats import SessionStats, compute_session_stats
-from attack.data.target_selector import sample_one_from_popular, sample_one_from_unpopular
+from attack.data.target_selector import (
+    sample_one_from_all,
+    sample_one_from_popular,
+    sample_one_from_unpopular,
+)
 from attack.generation.fake_session_generator import FakeSessionGenerator
 from attack.generation.fake_session_parameter_sampler import FakeSessionParameterSampler
 from attack.models.srgnn_runner import SRGNNRunner
@@ -47,12 +51,23 @@ def _fake_session_count(ratio: float, clean_count: int) -> int:
 
 
 def _resolve_target_item(stats: SessionStats, config: Config) -> int:
-    mode = config.attack.target_selection_mode
-    if mode == "sample_one_from_popular":
-        return sample_one_from_popular(stats, seed=config.experiment.seed)
-    if mode == "sample_one_from_unpopular":
-        return sample_one_from_unpopular(stats, seed=config.experiment.seed)
-    raise ValueError("Unsupported target_selection_mode.")
+    mode = config.targets.mode
+    if mode == "explicit_list":
+        if len(config.targets.explicit_list) != 1:
+            raise ValueError("Explicit target lists must contain exactly one item.")
+        return int(config.targets.explicit_list[0])
+    if mode == "sampled":
+        if config.targets.count != 1:
+            raise ValueError("targets.count must be 1 for single-target pipeline runs.")
+        seed = config.seeds.target_selection_seed
+        if config.targets.bucket == "popular":
+            return sample_one_from_popular(stats, seed=seed)
+        if config.targets.bucket == "unpopular":
+            return sample_one_from_unpopular(stats, seed=seed)
+        if config.targets.bucket == "all":
+            return sample_one_from_all(stats, seed=seed)
+        raise ValueError("Unsupported targets.bucket.")
+    raise ValueError("Unsupported targets.mode.")
 
 
 def _load_or_train_poison_runner(
@@ -101,23 +116,27 @@ def prepare_shared_attack_artifacts(
     config_path: str | Path | None = None,
 ) -> SharedAttackArtifacts:
     shared_paths = shared_artifact_paths(config)
-    shared_paths["shared_dir"].mkdir(parents=True, exist_ok=True)
+    shared_paths["attack_shared_dir"].mkdir(parents=True, exist_ok=True)
+    shared_paths["target_shared_dir"].mkdir(parents=True, exist_ok=True)
     if config_path:
-        snapshot_path = shared_paths["config_snapshot"]
+        snapshot_path = shared_paths["attack_config_snapshot"]
         if not snapshot_path.exists():
             shutil.copyfile(config_path, snapshot_path)
 
-    clean_sessions, clean_labels = load_srg_nn_train(config.dataset.train)
+    paths = dataset_paths(config)
+    clean_sessions, clean_labels = load_srg_nn_train(paths["train"])
     stats = compute_session_stats(clean_sessions)
 
-    target_info = load_target_info(shared_paths["target_info"])
+    target_info = None
+    if config.targets.reuse_saved_targets:
+        target_info = load_target_info(shared_paths["target_info"])
     if target_info is None:
         target_item = _resolve_target_item(stats, config)
         save_target_info(
             shared_paths["target_info"],
             target_item=target_item,
-            target_selection_mode=config.attack.target_selection_mode,
-            seed=config.experiment.seed,
+            target_selection_mode=config.targets.mode,
+            seed=config.seeds.target_selection_seed,
         )
     else:
         target_item = int(target_info["target_item"])

@@ -6,7 +6,7 @@ import shutil
 from pathlib import Path
 
 from attack.common.config import Config, load_config
-from attack.common.paths import run_artifact_paths
+from attack.common.paths import dataset_paths, run_artifact_paths
 from attack.common.seed import set_seed
 from attack.data.dataset_serializer import save_srg_nn_train
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
@@ -20,8 +20,10 @@ from attack.pipeline.evaluator import (
 from attack.pipeline.pipeline_utils import build_default_opt, prepare_shared_attack_artifacts
 
 
-def _prepare_run_artifacts(config: Config, config_path: str | Path | None) -> dict[str, Path]:
-    artifacts = run_artifact_paths(config, config.experiment.name)
+def _prepare_run_artifacts(
+    config: Config, config_path: str | Path | None, *, target_item: int
+) -> dict[str, Path]:
+    artifacts = run_artifact_paths(config, target_id=target_item)
     run_dir = artifacts["run_dir"]
     run_dir.mkdir(parents=True, exist_ok=True)
     if config_path:
@@ -35,14 +37,14 @@ def run_position_opt(
     poison_epochs: int = 1,
     attack_epochs: int = 1,
 ) -> dict[str, object]:
-    set_seed(config.experiment.seed)
-    artifacts = _prepare_run_artifacts(config, config_path)
+    set_seed(config.seeds.fake_session_seed)
     shared = prepare_shared_attack_artifacts(
         config,
         poison_epochs=poison_epochs,
         require_poison_runner=True,
         config_path=config_path,
     )
+    artifacts = _prepare_run_artifacts(config, config_path, target_item=shared.target_item)
 
     target_item = shared.target_item
     if shared.poison_runner is None:
@@ -75,9 +77,10 @@ def run_position_opt(
 
     attacked_runner = SRGNNRunner(config)
     attacked_runner.build_model(build_default_opt(attack_epochs))
+    paths = dataset_paths(config)
     attacked_train_data, attacked_test_data = attacked_runner.load_dataset(
         train_path=poisoned_train_path,
-        test_path=config.dataset.test,
+        test_path=paths["test"],
     )
     if attack_epochs > 0:
         attacked_runner.train(

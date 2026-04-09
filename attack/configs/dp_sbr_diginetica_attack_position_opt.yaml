@@ -1,21 +1,37 @@
 experiment:
   name: position_opt_pre_scoring
-  seed: 20260405
 
-paths:
-  dataset:
-    train: datasets/diginetica/train.txt
-    test: datasets/diginetica/test.txt
-    all_train_seq: datasets/diginetica/all_train_seq.txt
-  output:
-    root: outputs
-    run_dir: runs
+data:
+  dataset_name: diginetica
+  split_protocol: unified
+  poison_train_only: true
+
+seeds:
+  fake_session_seed: 20260405
+  target_selection_seed: 20260405
 
 attack:
   size: 0.01
-  target_selection_mode: sample_one_from_popular
   fake_session_generation_topk: 100
   replacement_topk_ratio: 0.2
+  poison_model:
+    name: srgnn
+
+targets:
+  mode: sampled
+  explicit_list: []
+  bucket: popular
+  count: 1
+  reuse_saved_targets: true
+
+victims:
+  enabled: [srgnn]
 
 evaluation:
   topk: 25
+  metrics: [targeted_precision, targeted_mrr]
+
+artifacts:
+  root: outputs
+  shared_dir: shared
+  runs_dir: runs

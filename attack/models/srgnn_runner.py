@@ -8,6 +8,7 @@ import numpy as np
 import torch
 
 from attack.common.config import Config
+from attack.common.paths import dataset_paths
 from pytorch_code.model import SessionGraph, train_test, trans_to_cpu, trans_to_cuda, forward as srg_forward
 from pytorch_code.utils import Data
 
@@ -25,7 +26,7 @@ class SRGNNRunner:
     def __init__(self, config: Config, base_dir: str | Path | None = None, n_node: int | None = None) -> None:
         self.config = config
         self.base_dir = Path(base_dir) if base_dir is not None else Path.cwd()
-        self.n_node = n_node or _infer_n_node(self._resolve_path(config.dataset.train))
+        self.n_node = n_node or _infer_n_node(self._resolve_path(dataset_paths(config)["train"]))
         self.model: SessionGraph | None = None
         self.opt = None
 
@@ -44,8 +45,9 @@ class SRGNNRunner:
         test_path: str | Path | None = None,
         shuffle_train: bool = True,
     ) -> tuple[Data, Data]:
-        train_path = self._resolve_path(train_path or self.config.dataset.train)
-        test_path = self._resolve_path(test_path or self.config.dataset.test)
+        paths = dataset_paths(self.config)
+        train_path = self._resolve_path(train_path or paths["train"])
+        test_path = self._resolve_path(test_path or paths["test"])
         train_data = pickle.load(train_path.open("rb"))
         test_data = pickle.load(test_path.open("rb"))
         return Data(train_data, shuffle=shuffle_train), Data(test_data, shuffle=False)
