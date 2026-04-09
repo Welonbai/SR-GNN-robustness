@@ -80,6 +80,22 @@ def target_selection_dir(config: Config) -> Path:
     return shared_root(config) / "targets" / _target_selection_key(config)
 
 
+def canonical_split_dir(config: Config, *, split_key: str) -> Path:
+    return shared_root(config) / "canonical" / split_key
+
+
+def canonical_split_paths(config: Config, *, split_key: str) -> dict[str, Path]:
+    base = canonical_split_dir(config, split_key=split_key)
+    return {
+        "canonical_dir": base,
+        "metadata": base / "metadata.json",
+        "item_map": base / "item_map.pkl",
+        "train_sub": base / "train_sub.pkl",
+        "valid": base / "valid.pkl",
+        "test": base / "test.pkl",
+    }
+
+
 def _run_config_key(config: Config) -> str:
     victim_token = _hash_token(",".join(sorted(config.victims.enabled)))
     metrics_token = _hash_token(",".join(sorted(config.evaluation.metrics)))
@@ -161,6 +177,8 @@ __all__ = [
     "shared_root",
     "shared_attack_dir",
     "target_selection_dir",
+    "canonical_split_dir",
+    "canonical_split_paths",
     "runs_root",
     "run_config_dir",
     "target_dir",
