@@ -331,6 +331,22 @@ These artifacts include at least:
 
 Target selection changes should **not** force these artifacts to move or regenerate.
 
+Important separation:
+
+Fake-session / poison-model artifacts must not depend on target selection.
+
+Changing:
+- target_selection_seed
+- target bucket
+- target count
+- explicit target list
+
+must NOT invalidate:
+- poison_model.pt
+- fake_sessions.pkl
+
+Only target_info.json should depend on target selection.
+
 #### B. Target-selection artifacts
 These should be keyed primarily by:
 
@@ -406,9 +422,6 @@ data:
   split_protocol: unified
   poison_train_only: true
 
-auditifacts:
-  # final naming does not need to match exactly; example only
-
 seeds:
   fake_session_seed: 42
   target_selection_seed: 123
@@ -468,34 +481,53 @@ Success condition:
 
 - new config/path foundation exists and matches the new architecture.
 
-### Batch 2 — Canonical dataset and unified split
+### Batch 2 — Legacy pipeline alignment with new schema
+
+This batch aligns the existing SRGNN-centric pipeline with the new config schema and path helpers.
+
+Scope:
+
+1. update pipeline to read the new config schema
+2. update run scripts to use dataset_paths and new seed fields
+3. align SRGNN runner with dataset_paths
+4. ensure shared artifact paths follow the new structure
+5. do NOT implement canonical split yet
+
+Important:
+
+This batch does not introduce the new canonical dataset layer.
+It only aligns the existing pipeline with the new schema to prepare for later migration.
+
+### Batch 3 — Canonical dataset and unified split
 Focus only on the shared dataset layer.
 
 Scope:
 
 1. implement shared preprocessing / canonical split,
-2. introduce `train_sub / valid / test`,
-3. freeze canonical split for reuse,
-4. do not integrate exporters or runners yet.
+2. introduce canonical `train_sub / valid / test`,
+3. apply one common filtering pipeline before splitting,
+4. apply one common time-based split rule,
+5. derive `valid` from the original training portion,
+6. freeze and save the canonical split for reuse,
+7. make this canonical split the future single source of truth for all exporters and victim models,
+8. do not implement target loop yet,
+9. do not implement victim loop yet,
+10. do not integrate exporters or runners yet.
+
+Important:
+
+This batch introduces the real unified benchmark dataset layer.
+
+It should replace the current temporary situation where the new config/path schema exists but the canonical split has not yet been truly constructed.
+
+The result of this batch should be a shared, frozen, model-agnostic dataset representation that all later exporters will consume.
 
 Success condition:
 
-- canonical split exists as the future single source of truth.
-
-### Batch 3 — Target abstraction
-Focus on decoupling target selection from fake session generation.
-
-Scope:
-
-1. add `fake_session_seed` and `target_selection_seed`,
-2. add target modes: `explicit_list` and `sampled`,
-3. save and reuse `target_info.json`,
-4. support target metadata cleanly,
-5. do not implement target loop yet.
-
-Success condition:
-
-- target selection is decoupled and reusable.
+- canonical `train_sub / valid / test` exists,
+- the unified split is frozen and reusable,
+- the framework now has a true shared dataset layer,
+- later batches can build exporters and new pipeline execution on top of this layer.
 
 ### Batch 4 — Poison/victim abstraction
 Focus on refactoring the model layer.
