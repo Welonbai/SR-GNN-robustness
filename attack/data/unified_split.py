@@ -5,7 +5,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 import csv
-import time
 
 from attack.common.config import Config
 from attack.common.paths import canonical_split_paths
@@ -15,6 +14,7 @@ from attack.data.canonical_dataset import (
     load_canonical_dataset,
     save_canonical_dataset,
 )
+from attack.data.dataset_specs import resolve_dataset_spec
 
 
 _SECONDS_PER_DAY = 86400
@@ -39,51 +39,20 @@ def _split_key(split_config: SplitConfig) -> str:
     )
 
 
-def _raw_dataset_path(dataset_name: str, base_dir: Path) -> Path:
-    name = dataset_name.lower()
-    if name == "diginetica":
-        return base_dir / "train-item-views.csv"
-    if name == "sample":
-        return base_dir / "sample_train-item-views.csv"
-    if name.startswith("yoochoose"):
-        return base_dir / "yoochoose-clicks.dat"
-    return base_dir / f"{dataset_name}.csv"
-
-
-def _dataset_delimiter(dataset_name: str) -> str:
-    return "," if dataset_name.lower().startswith("yoochoose") else ";"
-
-
-def _parse_event_date(dataset_name: str, row: dict[str, str]) -> float:
-    if dataset_name.lower().startswith("yoochoose"):
-        return time.mktime(time.strptime(row["timestamp"][:19], "%Y-%m-%dT%H:%M:%S"))
-    return time.mktime(time.strptime(row["eventdate"], "%Y-%m-%d"))
-
-
-def _extract_session_item(dataset_name: str, row: dict[str, str]) -> tuple[str, str, int]:
-    if dataset_name.lower().startswith("yoochoose"):
-        session_id = row["session_id"]
-        item_id = row["item_id"]
-        sort_key = int(time.mktime(time.strptime(row["timestamp"][:19], "%Y-%m-%dT%H:%M:%S")))
-        return session_id, item_id, sort_key
-    session_id = row.get("sessionId", row.get("session_id"))
-    item_id = row.get("itemId", row.get("item_id"))
-    sort_key = int(row.get("timeframe", "0"))
-    return str(session_id), str(item_id), sort_key
-
-
-def _load_raw_sessions(dataset_name: str, raw_path: Path) -> tuple[dict[str, list[tuple[str, int]]], dict[str, float]]:
+def _load_raw_sessions(
+    spec,
+) -> tuple[dict[str, list[tuple[str, int]]], dict[str, float]]:
+    raw_path = spec.raw_path
     if not raw_path.exists():
         raise FileNotFoundError(f"Raw dataset file not found: {raw_path}")
 
     sess_clicks: dict[str, list[tuple[str, int]]] = {}
     sess_date: dict[str, float] = {}
-    delimiter = _dataset_delimiter(dataset_name)
     with raw_path.open("r", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle, delimiter=delimiter)
+        reader = csv.DictReader(handle, delimiter=spec.delimiter)
         for row in reader:
-            session_id, item_id, sort_key = _extract_session_item(dataset_name, row)
-            event_date = _parse_event_date(dataset_name, row)
+            session_id, item_id, sort_key = spec.extract_session_item(row)
+            event_date = spec.parse_event_date(row)
             sess_clicks.setdefault(session_id, []).append((item_id, sort_key))
             current_date = sess_date.get(session_id, 0.0)
             if event_date > current_date:
@@ -196,9 +165,10 @@ def build_canonical_dataset(
 ) -> CanonicalDataset:
     split_config = split_config or default_split_config(config.data.dataset_name)
     dataset_root = dataset_root or Path("datasets")
-    raw_path = _raw_dataset_path(config.data.dataset_name, dataset_root)
+    spec = resolve_dataset_spec(config.data.dataset_name, dataset_root)
+    raw_path = spec.raw_path
 
-    sessions, session_dates = _load_raw_sessions(config.data.dataset_name, raw_path)
+    sessions, session_dates = _load_raw_sessions(spec)
     sessions, session_dates = _filter_sessions(
         sessions,
         session_dates,
