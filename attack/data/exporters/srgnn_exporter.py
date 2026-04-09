@@ -65,5 +65,19 @@ class SRGNNExporter(BaseExporter):
             },
         )
 
+    def export_train_pairs(
+        self,
+        sessions: Sequence[Sequence[int]],
+        labels: Sequence[int],
+        output_path: str | Path,
+    ) -> Path:
+        output_path = Path(output_path)
+        save_srg_nn_train(output_path, sessions, labels)
+        return output_path
 
-__all__ = ["SRGNNExporter", "load_srg_nn_train", "save_srg_nn_train"]
+
+__all__ = [
+    "SRGNNExporter",
+    "load_srg_nn_train",
+    "save_srg_nn_train",
+]

@@ -41,6 +41,9 @@ def save_target_info(
     target_item: int,
     target_selection_mode: str,
     seed: int,
+    bucket: str | None = None,
+    count: int | None = None,
+    explicit_list: list[int] | None = None,
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -48,6 +51,9 @@ def save_target_info(
         "target_item": int(target_item),
         "target_selection_mode": target_selection_mode,
         "seed": int(seed),
+        "bucket": bucket,
+        "count": int(count) if count is not None else None,
+        "explicit_list": [int(item) for item in (explicit_list or [])],
     }
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)

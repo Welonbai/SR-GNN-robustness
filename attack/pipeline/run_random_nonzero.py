@@ -8,18 +8,23 @@ from collections import Counter
 from pathlib import Path
 
 from attack.common.config import Config, load_config
-from attack.common.paths import dataset_paths, run_artifact_paths
+from attack.common.paths import run_artifact_paths
 from attack.common.seed import set_seed
-from attack.data.dataset_serializer import save_srg_nn_train
+from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.insertion.random_nonzero_when_possible import RandomNonzeroWhenPossiblePolicy
-from attack.models.srgnn_runner import SRGNNRunner
+from attack.models.victim import srgnn_runner as _srgnn_runner
+from attack.models.victim.registry import get_victim_runner
 from attack.pipeline.evaluator import (
     evaluate_runner,
     evaluate_targeted_precision_at_k,
     save_metrics,
 )
-from attack.pipeline.pipeline_utils import build_default_opt, prepare_shared_attack_artifacts
+from attack.pipeline.pipeline_utils import (
+    build_default_opt,
+    prepare_shared_attack_artifacts,
+    resolve_target_item,
+)
 
 
 def _prepare_run_artifacts(
@@ -39,6 +44,10 @@ def run_random_nonzero(
     poison_epochs: int = 1,
     attack_epochs: int = 1,
 ) -> dict[str, object]:
+    if not config.data.poison_train_only:
+        raise ValueError("Batch 6 expects data.poison_train_only to be true.")
+    if tuple(config.victims.enabled) != ("srgnn",):
+        raise ValueError("Batch 6 supports only victims.enabled == ['srgnn'].")
     set_seed(config.seeds.fake_session_seed)
     shared = prepare_shared_attack_artifacts(
         config,
@@ -46,9 +55,9 @@ def run_random_nonzero(
         require_poison_runner=False,
         config_path=config_path,
     )
-    artifacts = _prepare_run_artifacts(config, config_path, target_item=shared.target_item)
+    target_item = resolve_target_item(shared.stats, config, shared_paths=shared.shared_paths)
+    artifacts = _prepare_run_artifacts(config, config_path, target_item=target_item)
 
-    target_item = shared.target_item
     rng = random.Random(config.seeds.fake_session_seed)
     policy = RandomNonzeroWhenPossiblePolicy(
         config.attack.replacement_topk_ratio, rng=rng
@@ -67,8 +76,10 @@ def run_random_nonzero(
 
     poisoned = build_poisoned_dataset(shared.clean_sessions, shared.clean_labels, fake_sessions)
 
-    poisoned_train_path = artifacts["poisoned_train"]
-    save_srg_nn_train(poisoned_train_path, poisoned.sessions, poisoned.labels)
+    exporter = SRGNNExporter()
+    poisoned_train_path = exporter.export_train_pairs(
+        poisoned.sessions, poisoned.labels, artifacts["poisoned_train"]
+    )
 
     total_positions = sum(position_counts.values())
     ratios = {
@@ -84,22 +95,28 @@ def run_random_nonzero(
     with positions_path.open("w", encoding="utf-8") as handle:
         json.dump(positions_payload, handle, indent=2, sort_keys=True)
 
-    attacked_runner = SRGNNRunner(config)
+    victim_name = config.victims.enabled[0]
+    victim_cls = get_victim_runner(victim_name)
+    attacked_runner = victim_cls(config)
     attacked_runner.build_model(build_default_opt(attack_epochs))
-    paths = dataset_paths(config)
-    attacked_train_data, attacked_test_data = attacked_runner.load_dataset(
+    attacked_train_data, attacked_valid_data = attacked_runner.load_dataset(
         train_path=poisoned_train_path,
-        test_path=paths["test"],
+        test_path=shared.export_paths["valid"],
     )
     if attack_epochs > 0:
         attacked_runner.train(
             attacked_train_data,
-            attacked_test_data,
+            attacked_valid_data,
             attack_epochs,
             target_item=target_item,
             topk=config.evaluation.topk,
         )
 
+    _, attacked_test_data = attacked_runner.load_dataset(
+        train_path=poisoned_train_path,
+        test_path=shared.export_paths["test"],
+        shuffle_train=False,
+    )
     attack_metrics = evaluate_runner(
         attacked_runner, attacked_test_data, topk=config.evaluation.topk
     )

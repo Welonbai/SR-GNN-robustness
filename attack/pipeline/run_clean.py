@@ -5,21 +5,19 @@ import shutil
 from pathlib import Path
 
 from attack.common.config import Config, load_config
-from attack.common.paths import dataset_paths, run_artifact_paths
+from attack.common.paths import run_artifact_paths, shared_artifact_paths
 from attack.common.seed import set_seed
-from attack.data.session_stats import compute_session_stats, load_train_sessions
-from attack.data.target_selector import (
-    sample_one_from_all,
-    sample_one_from_popular,
-    sample_one_from_unpopular,
-)
-from attack.models.srgnn_runner import SRGNNRunner
+from attack.data.exporters.srgnn_exporter import SRGNNExporter
+from attack.data.session_stats import compute_session_stats
+from attack.data.unified_split import ensure_canonical_dataset
+from attack.models.victim import srgnn_runner as _srgnn_runner
+from attack.models.victim.registry import get_victim_runner
 from attack.pipeline.evaluator import (
     evaluate_runner,
     evaluate_targeted_precision_at_k,
     save_metrics,
 )
-from attack.pipeline.pipeline_utils import build_default_opt
+from attack.pipeline.pipeline_utils import build_default_opt, resolve_target_item
 
 
 def _prepare_run_artifacts(
@@ -33,44 +31,48 @@ def _prepare_run_artifacts(
     return artifacts
 
 
-def run_clean(config: Config, config_path: str | Path | None = None, epochs: int = 1) -> dict[str, float]:
+def run_clean(
+    config: Config,
+    config_path: str | Path | None = None,
+    epochs: int = 1,
+) -> dict[str, float]:
+    if tuple(config.victims.enabled) != ("srgnn",):
+        raise ValueError("Batch 6 supports only victims.enabled == ['srgnn'].")
     set_seed(config.seeds.fake_session_seed)
 
-    runner = SRGNNRunner(config)
-    runner.build_model(build_default_opt(epochs))
-    train_data, test_data = runner.load_dataset()
+    canonical_dataset = ensure_canonical_dataset(config)
+    stats = compute_session_stats(canonical_dataset.train_sub)
+    shared_paths = shared_artifact_paths(config)
+    shared_paths["target_shared_dir"].mkdir(parents=True, exist_ok=True)
+    target_item = resolve_target_item(stats, config, shared_paths=shared_paths)
 
-    paths = dataset_paths(config)
-    clean_sessions = load_train_sessions(paths["train"])
-    stats = compute_session_stats(clean_sessions)
-    if config.targets.mode == "explicit_list":
-        if len(config.targets.explicit_list) != 1:
-            raise ValueError("Explicit target lists must contain exactly one item.")
-        target_item = int(config.targets.explicit_list[0])
-    elif config.targets.mode == "sampled":
-        if config.targets.count != 1:
-            raise ValueError("targets.count must be 1 for single-target pipeline runs.")
-        seed = config.seeds.target_selection_seed
-        if config.targets.bucket == "popular":
-            target_item = sample_one_from_popular(stats, seed=seed)
-        elif config.targets.bucket == "unpopular":
-            target_item = sample_one_from_unpopular(stats, seed=seed)
-        elif config.targets.bucket == "all":
-            target_item = sample_one_from_all(stats, seed=seed)
-        else:
-            raise ValueError("Unsupported targets.bucket.")
-    else:
-        raise ValueError("Unsupported targets.mode.")
     artifacts = _prepare_run_artifacts(config, config_path, target_item=target_item)
+
+    export_dir = artifacts["run_dir"] / "export"
+    export_result = SRGNNExporter().export(canonical_dataset, export_dir)
+
+    victim_name = config.victims.enabled[0]
+    victim_cls = get_victim_runner(victim_name)
+    runner = victim_cls(config)
+    runner.build_model(build_default_opt(epochs))
+    train_data, valid_data = runner.load_dataset(
+        train_path=export_result.files["train"],
+        test_path=export_result.files["valid"],
+    )
     if epochs > 0:
         runner.train(
             train_data,
-            test_data,
+            valid_data,
             epochs,
             target_item=target_item,
             topk=config.evaluation.topk,
         )
 
+    _, test_data = runner.load_dataset(
+        train_path=export_result.files["train"],
+        test_path=export_result.files["test"],
+        shuffle_train=False,
+    )
     metrics = evaluate_runner(runner, test_data, topk=config.evaluation.topk)
     targeted = evaluate_targeted_precision_at_k(
         runner, test_data, target_item=target_item, topk=config.evaluation.topk
