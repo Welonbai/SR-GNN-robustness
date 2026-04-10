@@ -12,12 +12,12 @@ from attack.data.session_stats import compute_session_stats
 from attack.data.unified_split import ensure_canonical_dataset
 from attack.models.victim import srgnn_runner as _srgnn_runner
 from attack.models.victim.registry import get_victim_runner
-from attack.pipeline.evaluator import (
+from attack.pipeline.core.evaluator import (
     evaluate_runner,
     evaluate_targeted_precision_at_k,
     save_metrics,
 )
-from attack.pipeline.pipeline_utils import build_default_opt, resolve_target_item
+from attack.pipeline.core.pipeline_utils import build_default_opt, resolve_target_item
 
 
 def _prepare_run_artifacts(
