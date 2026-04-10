@@ -126,6 +126,7 @@ class MiaSRecRunner(VictimRunnerBase):
             str(checkpoint_dir.resolve()),
         ]
 
+        print(f"[miasrec] Starting subprocess. Log: {log_path}")
         with log_path.open("w", encoding="utf-8") as handle:
             result = subprocess.run(
                 cmd,
@@ -153,6 +154,7 @@ class MiaSRecRunner(VictimRunnerBase):
                 f"Missing: {export_topk_path}"
             )
 
+        print(f"[miasrec] Completed. Predictions: {export_topk_path}")
         return {
             "returncode": int(result.returncode),
             "log_path": str(log_path),

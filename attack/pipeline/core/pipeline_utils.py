@@ -143,6 +143,7 @@ def _load_or_train_poison_runner(
         print(f"Loaded poison model checkpoint from {shared_paths['poison_model']}")
         return runner
 
+    print(f"No poison model checkpoint found. Training new poison model for {poison_epochs} epochs.")
     train_data, test_data = runner.load_dataset(
         train_path=export_paths["train"],
         test_path=export_paths["valid"],
@@ -155,6 +156,7 @@ def _load_or_train_poison_runner(
             topk=config.evaluation.topk,
         )
     save_poison_model(runner, shared_paths["poison_model"])
+    print(f"Saved poison model checkpoint to {shared_paths['poison_model']}")
     return runner
 
 
@@ -198,6 +200,7 @@ def prepare_shared_attack_artifacts(
     template_sessions = load_fake_sessions(shared_paths["fake_sessions"])
     poison_runner = None
     if template_sessions is None:
+        print("No fake sessions found. Generating new fake sessions.")
         poison_runner = _load_or_train_poison_runner(
             config,
             poison_epochs=poison_epochs,
@@ -213,6 +216,7 @@ def prepare_shared_attack_artifacts(
         fake_count = _fake_session_count(config.attack.size, len(clean_sessions))
         template_sessions = [s.items for s in generator.generate_many(fake_count)]
         save_fake_sessions(template_sessions, shared_paths["fake_sessions"])
+        print(f"Saved fake sessions to {shared_paths['fake_sessions']}")
     else:
         print(f"Loaded fake sessions from {shared_paths['fake_sessions']}")
         fake_count = len(template_sessions)

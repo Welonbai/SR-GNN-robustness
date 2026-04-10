@@ -228,14 +228,17 @@ def ensure_canonical_dataset(
     split_key = _split_key(split_config)
     paths = canonical_split_paths(config, split_key=split_key)
     if not force_rebuild and canonical_dataset_exists(paths):
+        print(f"[split] Found canonical dataset at {paths['canonical_dir']}")
         return load_canonical_dataset(paths)
 
+    print(f"[split] Building canonical dataset for {config.data.dataset_name}")
     dataset = build_canonical_dataset(
         config,
         split_config=split_config,
         dataset_root=dataset_root,
     )
     save_canonical_dataset(dataset, paths)
+    print(f"[split] Saved canonical dataset to {paths['canonical_dir']}")
     return dataset
 
 

@@ -127,6 +127,7 @@ class TRONRunner(VictimRunnerBase):
         env = os.environ.copy()
         env["PYTHONPATH"] = _prepend_pythonpath(env.get("PYTHONPATH"), tron_root)
 
+        print(f"[tron] Starting subprocess. Log: {log_path}")
         with log_path.open("w", encoding="utf-8") as handle:
             result = subprocess.run(
                 cmd,
@@ -150,6 +151,7 @@ class TRONRunner(VictimRunnerBase):
                 f"Missing: {export_topk_path}"
             )
 
+        print(f"[tron] Completed. Predictions: {export_topk_path}")
         return {
             "returncode": int(result.returncode),
             "log_path": str(log_path),

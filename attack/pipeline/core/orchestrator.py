@@ -54,6 +54,17 @@ def run_targets_and_victims(
     attack_epochs: int,
     build_poisoned: Callable[[int], TargetPoisonOutput],
 ) -> dict[str, object]:
+    run_root = run_config_dir(config)
+    summary_path = run_root / f"summary_{run_type}.json"
+    if summary_path.exists():
+        print(f"[run] Existing summary found at {summary_path}. Aborting to avoid overwrite.")
+        raise RuntimeError("Run output already exists for this config/run_type.")
+    if run_root.exists():
+        existing_metrics = list(run_root.rglob("metrics.json"))
+        if existing_metrics:
+            print(f"[run] Existing outputs found under {run_root}. Aborting to avoid overwrite.")
+            raise RuntimeError("Run output already exists for this config/run_type.")
+
     target_items = resolve_target_items(
         context.stats,
         config,
@@ -142,7 +153,7 @@ def run_targets_and_victims(
 
         summary["targets"][str(target_item)] = target_summary
 
-    summary_path = run_config_dir(config) / f"summary_{run_type}.json"
+    summary_path = run_root / f"summary_{run_type}.json"
     save_metrics(summary, summary_path)
     return summary
 
