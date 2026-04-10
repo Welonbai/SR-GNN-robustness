@@ -27,6 +27,7 @@ from attack.data.target_selector import (
 from attack.generation.fake_session_generator import FakeSessionGenerator
 from attack.generation.fake_session_parameter_sampler import FakeSessionParameterSampler
 from attack.models.poison.srgnn_poison_runner import SRGNNPoisonRunner
+from attack.pipeline.core.train_history import save_train_history
 
 from attack.common.config import Config
 
@@ -157,6 +158,16 @@ def _load_or_train_poison_runner(
         )
     save_poison_model(runner, shared_paths["poison_model"])
     print(f"Saved poison model checkpoint to {shared_paths['poison_model']}")
+    if runner.train_loss_history:
+        save_train_history(
+            shared_paths["poison_train_history"],
+            role="poison",
+            model="srgnn",
+            epochs=len(runner.train_loss_history),
+            train_loss=runner.train_loss_history,
+            valid_loss=[None] * len(runner.train_loss_history),
+            notes="valid_loss not available for SRGNN poison training.",
+        )
     return runner
 
 

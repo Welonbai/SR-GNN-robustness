@@ -29,6 +29,7 @@ class SRGNNBaseRunner:
         self.n_node = n_node or _infer_n_node(self._resolve_path(dataset_paths(config)["train"]))
         self.model: SessionGraph | None = None
         self.opt = None
+        self.train_loss_history: list[float] = []
 
     def _resolve_path(self, path: str | Path) -> Path:
         path = Path(path)
@@ -63,11 +64,13 @@ class SRGNNBaseRunner:
         if self.model is None:
             raise RuntimeError("Model is not initialized. Call build_model() first.")
         history: list[tuple[float, float]] = []
+        train_losses: list[float] = []
         if target_item is not None:
             from attack.pipeline.core.evaluator import evaluate_targeted_metrics
         for epoch in range(epochs):
             print(f"epoch {epoch + 1}/{epochs}")
-            hit, mrr = train_test(self.model, train_data, test_data)
+            hit, mrr, avg_loss = train_test(self.model, train_data, test_data)
+            train_losses.append(float(avg_loss))
             if target_item is not None:
                 rankings = self.predict_topk(test_data, topk=topk)
                 metrics, _ = evaluate_targeted_metrics(
@@ -80,6 +83,7 @@ class SRGNNBaseRunner:
                 print(f"epoch {epoch + 1}/{epochs} targeted_p@{topk}={targeted:.4f}")
             print(f"epoch {epoch + 1}/{epochs} metrics: hit={hit:.4f} mrr={mrr:.4f}")
             history.append((hit, mrr))
+        self.train_loss_history = train_losses
         return history
 
     def evaluate(self, test_data: Data, topk: int = 20) -> tuple[float, float]:

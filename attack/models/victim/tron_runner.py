@@ -101,6 +101,7 @@ class TRONRunner(VictimRunnerBase):
         config["dataset"] = dataset_name
         config["export_topk_path"] = str(export_topk_path.resolve())
         config["export_topk_k"] = int(topk)
+        config["log_dir"] = str((run_dir / "tron_logs").resolve())
         if max_epochs is not None:
             config["max_epochs"] = int(max_epochs)
 
@@ -157,6 +158,7 @@ class TRONRunner(VictimRunnerBase):
             "log_path": str(log_path),
             "export_topk_path": str(export_topk_path),
             "config_path": str(config_path),
+            "log_dir": config["log_dir"],
         }
 
 
