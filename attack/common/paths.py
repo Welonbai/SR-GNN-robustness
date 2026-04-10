@@ -162,6 +162,7 @@ def run_artifact_paths(
         "run_dir": base,
         "config_snapshot": base / "config.yaml",
         "metrics": base / "metrics.json",
+        "predictions": base / "predictions.json",
         "poisoned_train": base / "poisoned_train.txt",
         "best_position_metadata": base / "best_position_metadata.pkl",
         "dpsbr_position_metadata": base / "dpsbr_position_metadata.json",

@@ -27,6 +27,10 @@ class VictimRunnerBase(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def predict_topk(self, *args, **kwargs):
+        raise NotImplementedError
+
+    @abstractmethod
     def load_model(self, *args, **kwargs):
         raise NotImplementedError
 

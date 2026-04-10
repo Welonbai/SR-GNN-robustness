@@ -38,7 +38,7 @@ def load_fake_sessions(path: str | Path) -> list[list[int]] | None:
 def save_target_info(
     path: str | Path,
     *,
-    target_item: int,
+    target_items: list[int],
     target_selection_mode: str,
     seed: int,
     bucket: str | None = None,
@@ -47,14 +47,17 @@ def save_target_info(
 ) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    target_items = [int(item) for item in target_items]
     payload = {
-        "target_item": int(target_item),
+        "target_items": target_items,
         "target_selection_mode": target_selection_mode,
         "seed": int(seed),
         "bucket": bucket,
         "count": int(count) if count is not None else None,
         "explicit_list": [int(item) for item in (explicit_list or [])],
     }
+    if target_items:
+        payload["target_item"] = int(target_items[0])
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
 

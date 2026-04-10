@@ -64,14 +64,13 @@ class SRGNNBaseRunner:
             raise RuntimeError("Model is not initialized. Call build_model() first.")
         history: list[tuple[float, float]] = []
         if target_item is not None:
-            from attack.pipeline.core.evaluator import evaluate_targeted_precision_at_k
+            from attack.pipeline.core.evaluator import compute_targeted_precision
         for epoch in range(epochs):
             print(f"epoch {epoch + 1}/{epochs}")
             hit, mrr = train_test(self.model, train_data, test_data)
             if target_item is not None:
-                targeted = evaluate_targeted_precision_at_k(
-                    self, test_data, target_item=target_item, topk=topk
-                )
+                rankings = self.predict_topk(test_data, topk=topk)
+                targeted = compute_targeted_precision(rankings, target_item)
                 print(
                     f"epoch {epoch + 1}/{epochs} targeted_p@{topk}={targeted:.4f}"
                 )
@@ -97,6 +96,24 @@ class SRGNNBaseRunner:
                     else:
                         mrr.append(1 / (np.where(score == target - 1)[0][0] + 1))
         return float(np.mean(hit) * 100), float(np.mean(mrr) * 100)
+
+    def predict_topk(self, test_data: Data, topk: int = 20) -> list[list[int]]:
+        if self.model is None:
+            raise RuntimeError("Model is not initialized. Call build_model() first.")
+        if topk <= 0:
+            raise ValueError("topk must be positive.")
+        self.model.eval()
+        rankings: list[list[int]] = []
+        slices = test_data.generate_batch(self.model.batch_size)
+        with torch.no_grad():
+            for i in slices:
+                _, scores = srg_forward(self.model, i, test_data)
+                k = min(topk, scores.shape[1])
+                topk_indices = scores.topk(k)[1]
+                topk_indices = trans_to_cpu(topk_indices).detach().numpy()
+                for row in topk_indices:
+                    rankings.append([int(item) + 1 for item in row.tolist()])
+        return rankings
 
     def score_session(self, session: Sequence[int]) -> torch.Tensor:
         if self.model is None:

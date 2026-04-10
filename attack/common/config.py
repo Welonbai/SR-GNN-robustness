@@ -227,7 +227,7 @@ def load_config(path: str | Path) -> Config:
     )
     if not victims_cfg.enabled:
         raise ValueError("victims.enabled must include at least one victim model.")
-    allowed_victims = {"srgnn", "miasrec"}
+    allowed_victims = {"srgnn", "miasrec", "tron"}
     if not set(victims_cfg.enabled).issubset(allowed_victims):
         raise ValueError(
             f"victims.enabled must be subset of {sorted(allowed_victims)}, "

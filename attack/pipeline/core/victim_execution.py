@@ -8,14 +8,16 @@ from attack.common.config import Config
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
+from attack.data.exporters.tron_exporter import TRONExporter
 from attack.models.victim.registry import get_victim_runner
-from attack.pipeline.core.evaluator import evaluate_runner, evaluate_targeted_precision_at_k
+from attack.pipeline.core.evaluator import save_predictions
 from attack.pipeline.core.pipeline_utils import build_default_opt
 
 
 @dataclass(frozen=True)
 class VictimExecutionResult:
-    metrics: dict[str, object] | None
+    predictions: list[list[int]] | None
+    predictions_path: Path | None
     extra: dict[str, object]
     poisoned_train_path: Path | None
 
@@ -33,6 +35,7 @@ def execute_single_victim(
     attack_epochs: int,
     eval_topk: int,
     srg_nn_export_paths: dict[str, Path] | None = None,
+    predictions_path: Path | None = None,
 ) -> VictimExecutionResult:
     if victim_name == "srgnn":
         if srg_nn_export_paths is None:
@@ -65,16 +68,18 @@ def execute_single_victim(
             test_path=srg_nn_export_paths["test"],
             shuffle_train=False,
         )
-        metrics = evaluate_runner(attacked_runner, attacked_test_data, topk=eval_topk)
-        targeted = evaluate_targeted_precision_at_k(
-            attacked_runner,
-            attacked_test_data,
-            target_item=target_item,
-            topk=eval_topk,
-        )
-        metrics["targeted_precision_at_k"] = float(targeted)
+        rankings = attacked_runner.predict_topk(attacked_test_data, topk=eval_topk)
+        if predictions_path is not None:
+            save_predictions(
+                predictions_path,
+                topk=eval_topk,
+                rankings=rankings,
+                victim=victim_name,
+                target_item=target_item,
+            )
         return VictimExecutionResult(
-            metrics=metrics,
+            predictions=rankings,
+            predictions_path=predictions_path,
             extra={},
             poisoned_train_path=poisoned_train_path,
         )
@@ -90,16 +95,68 @@ def execute_single_victim(
             dataset_name=config.data.dataset_name,
         )
         runner = get_victim_runner(victim_name)(config)
+        raw_predictions_path = run_dir / "miasrec_topk_raw.json"
         run_info = runner.run(
             export_root=export_root,
             dataset_name=config.data.dataset_name,
             run_dir=run_dir,
+            export_topk_path=raw_predictions_path,
+            topk=eval_topk,
         )
+        rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=eval_topk)
+        if predictions_path is not None:
+            save_predictions(
+                predictions_path,
+                topk=eval_topk,
+                rankings=rankings,
+                victim=victim_name,
+                target_item=target_item,
+            )
         return VictimExecutionResult(
-            metrics=None,
+            predictions=rankings,
+            predictions_path=predictions_path,
             extra={
                 "miasrec": run_info,
                 "miasrec_export": {key: str(path) for key, path in export_result.files.items()},
+            },
+            poisoned_train_path=None,
+        )
+
+    if victim_name == "tron":
+        export_root = run_dir / "export" / "tron"
+        tron_export = TRONExporter()
+        export_result = tron_export.export_with_poisoned_train(
+            canonical_dataset,
+            poisoned_sessions=poisoned_sessions,
+            poisoned_labels=poisoned_labels,
+            output_dir=export_root,
+            dataset_name=config.data.dataset_name,
+        )
+        runner = get_victim_runner(victim_name)(config)
+        raw_predictions_path = run_dir / "tron_topk_raw.json"
+        run_info = runner.run(
+            export_root=export_root,
+            dataset_name=config.data.dataset_name,
+            run_dir=run_dir,
+            export_topk_path=raw_predictions_path,
+            topk=eval_topk,
+            max_epochs=attack_epochs,
+        )
+        rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=eval_topk)
+        if predictions_path is not None:
+            save_predictions(
+                predictions_path,
+                topk=eval_topk,
+                rankings=rankings,
+                victim=victim_name,
+                target_item=target_item,
+            )
+        return VictimExecutionResult(
+            predictions=rankings,
+            predictions_path=predictions_path,
+            extra={
+                "tron": run_info,
+                "tron_export": {key: str(path) for key, path in export_result.files.items()},
             },
             poisoned_train_path=None,
         )

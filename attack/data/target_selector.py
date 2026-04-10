@@ -21,6 +21,14 @@ def sample_one_from_popular(stats: SessionStats, seed: int) -> int:
     return int(rng.choice(pool))
 
 
+def sample_many_from_popular(stats: SessionStats, seed: int, count: int) -> list[int]:
+    rng = random.Random(seed)
+    pool = _popular_pool(stats)
+    if count > len(pool):
+        raise ValueError("Requested more targets than available popular items.")
+    return [int(item) for item in rng.sample(pool, count)]
+
+
 def _unpopular_pool(stats: SessionStats, threshold: int = 10) -> list[int]:
     if not stats.item_counts:
         raise ValueError("item_counts is empty; cannot select a target item.")
@@ -36,6 +44,16 @@ def sample_one_from_unpopular(stats: SessionStats, seed: int, threshold: int = 1
     return int(rng.choice(pool))
 
 
+def sample_many_from_unpopular(
+    stats: SessionStats, seed: int, count: int, threshold: int = 10
+) -> list[int]:
+    rng = random.Random(seed)
+    pool = _unpopular_pool(stats, threshold=threshold)
+    if count > len(pool):
+        raise ValueError("Requested more targets than available unpopular items.")
+    return [int(item) for item in rng.sample(pool, count)]
+
+
 def sample_one_from_all(stats: SessionStats, seed: int) -> int:
     if not stats.item_counts:
         raise ValueError("item_counts is empty; cannot select a target item.")
@@ -43,5 +61,21 @@ def sample_one_from_all(stats: SessionStats, seed: int) -> int:
     pool = list(stats.item_counts.keys())
     return int(rng.choice(pool))
 
+def sample_many_from_all(stats: SessionStats, seed: int, count: int) -> list[int]:
+    if not stats.item_counts:
+        raise ValueError("item_counts is empty; cannot select a target item.")
+    rng = random.Random(seed)
+    pool = list(stats.item_counts.keys())
+    if count > len(pool):
+        raise ValueError("Requested more targets than available items.")
+    return [int(item) for item in rng.sample(pool, count)]
 
-__all__ = ["sample_one_from_popular", "sample_one_from_unpopular", "sample_one_from_all"]
+
+__all__ = [
+    "sample_one_from_popular",
+    "sample_one_from_unpopular",
+    "sample_one_from_all",
+    "sample_many_from_popular",
+    "sample_many_from_unpopular",
+    "sample_many_from_all",
+]

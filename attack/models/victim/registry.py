@@ -10,6 +10,7 @@ _REGISTRY: Dict[str, Type[VictimRunnerBase]] = {}
 _DEFAULT_VICTIM_MODULES = (
     "attack.models.victim.srgnn_runner",
     "attack.models.victim.miasrec_runner",
+    "attack.models.victim.tron_runner",
 )
 _DEFAULTS_LOADED = False
 

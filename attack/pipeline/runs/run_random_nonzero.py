@@ -3,39 +3,20 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import shutil
 from collections import Counter
 from pathlib import Path
 
 from attack.common.config import Config, load_config
-from attack.common.paths import run_artifact_paths
+from attack.common.paths import target_dir
 from attack.common.seed import set_seed
-from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.insertion.random_nonzero_when_possible import RandomNonzeroWhenPossiblePolicy
-from attack.models.victim import srgnn_runner as _srgnn_runner
-from attack.models.victim.registry import get_victim_runner
-from attack.pipeline.core.evaluator import (
-    evaluate_runner,
-    evaluate_targeted_precision_at_k,
-    save_metrics,
+from attack.pipeline.core.orchestrator import (
+    RunContext,
+    TargetPoisonOutput,
+    run_targets_and_victims,
 )
-from attack.pipeline.core.pipeline_utils import (
-    build_default_opt,
-    prepare_shared_attack_artifacts,
-    resolve_target_item,
-)
-
-
-def _prepare_run_artifacts(
-    config: Config, config_path: str | Path | None, *, target_item: int
-) -> dict[str, Path]:
-    artifacts = run_artifact_paths(config, target_id=target_item)
-    run_dir = artifacts["run_dir"]
-    run_dir.mkdir(parents=True, exist_ok=True)
-    if config_path:
-        shutil.copyfile(config_path, artifacts["config_snapshot"])
-    return artifacts
+from attack.pipeline.core.pipeline_utils import prepare_shared_attack_artifacts
 
 
 def run_random_nonzero(
@@ -46,8 +27,6 @@ def run_random_nonzero(
 ) -> dict[str, object]:
     if not config.data.poison_train_only:
         raise ValueError("Batch 6 expects data.poison_train_only to be true.")
-    if tuple(config.victims.enabled) != ("srgnn",):
-        raise ValueError("Batch 6 supports only victims.enabled == ['srgnn'].")
     set_seed(config.seeds.fake_session_seed)
     shared = prepare_shared_attack_artifacts(
         config,
@@ -55,91 +34,62 @@ def run_random_nonzero(
         require_poison_runner=False,
         config_path=config_path,
     )
-    target_item = resolve_target_item(shared.stats, config, shared_paths=shared.shared_paths)
-    artifacts = _prepare_run_artifacts(config, config_path, target_item=target_item)
 
-    rng = random.Random(config.seeds.fake_session_seed)
-    policy = RandomNonzeroWhenPossiblePolicy(
-        config.attack.replacement_topk_ratio, rng=rng
-    )
-    fake_sessions = []
-    position_counts: Counter[int] = Counter()
-    for session in shared.template_sessions:
-        updated = policy.apply(session, target_item)
-        fake_sessions.append(updated)
-        replace_index = updated.index(target_item)
-        position_counts[int(replace_index)] += 1
+    context = RunContext.from_shared(shared)
 
-    max_item = max(shared.stats.item_counts)
-    if any(max(session) > max_item for session in fake_sessions):
-        raise ValueError("Generated fake sessions contain invalid item IDs.")
+    def build_poisoned(target_item: int) -> TargetPoisonOutput:
+        rng = random.Random(config.seeds.fake_session_seed)
+        policy = RandomNonzeroWhenPossiblePolicy(
+            config.attack.replacement_topk_ratio, rng=rng
+        )
+        fake_sessions = []
+        position_counts: Counter[int] = Counter()
+        for session in shared.template_sessions:
+            updated = policy.apply(session, target_item)
+            fake_sessions.append(updated)
+            replace_index = updated.index(target_item)
+            position_counts[int(replace_index)] += 1
 
-    poisoned = build_poisoned_dataset(shared.clean_sessions, shared.clean_labels, fake_sessions)
+        max_item = max(shared.stats.item_counts)
+        if any(max(session) > max_item for session in fake_sessions):
+            raise ValueError("Generated fake sessions contain invalid item IDs.")
 
-    exporter = SRGNNExporter()
-    poisoned_train_path = exporter.export_train_pairs(
-        poisoned.sessions, poisoned.labels, artifacts["poisoned_train"]
-    )
-
-    total_positions = sum(position_counts.values())
-    ratios = {
-        str(pos): (count / total_positions if total_positions else 0.0)
-        for pos, count in position_counts.items()
-    }
-    positions_payload = {
-        "total": int(total_positions),
-        "counts": {str(pos): int(count) for pos, count in position_counts.items()},
-        "ratios": ratios,
-    }
-    positions_path = artifacts["random_nonzero_position_metadata"]
-    with positions_path.open("w", encoding="utf-8") as handle:
-        json.dump(positions_payload, handle, indent=2, sort_keys=True)
-
-    victim_name = config.victims.enabled[0]
-    victim_cls = get_victim_runner(victim_name)
-    attacked_runner = victim_cls(config)
-    attacked_runner.build_model(build_default_opt(attack_epochs))
-    attacked_train_data, attacked_valid_data = attacked_runner.load_dataset(
-        train_path=poisoned_train_path,
-        test_path=shared.export_paths["valid"],
-    )
-    if attack_epochs > 0:
-        attacked_runner.train(
-            attacked_train_data,
-            attacked_valid_data,
-            attack_epochs,
-            target_item=target_item,
-            topk=config.evaluation.topk,
+        poisoned = build_poisoned_dataset(
+            shared.clean_sessions, shared.clean_labels, fake_sessions
         )
 
-    _, attacked_test_data = attacked_runner.load_dataset(
-        train_path=poisoned_train_path,
-        test_path=shared.export_paths["test"],
-        shuffle_train=False,
+        total_positions = sum(position_counts.values())
+        ratios = {
+            str(pos): (count / total_positions if total_positions else 0.0)
+            for pos, count in position_counts.items()
+        }
+        positions_payload = {
+            "total": int(total_positions),
+            "counts": {str(pos): int(count) for pos, count in position_counts.items()},
+            "ratios": ratios,
+        }
+        target_root = target_dir(config, target_item)
+        target_root.mkdir(parents=True, exist_ok=True)
+        positions_path = target_root / "random_nonzero_position_metadata.json"
+        with positions_path.open("w", encoding="utf-8") as handle:
+            json.dump(positions_payload, handle, indent=2, sort_keys=True)
+
+        return TargetPoisonOutput(
+            poisoned=poisoned,
+            metadata={
+                "random_nonzero_position_metadata_path": str(positions_path),
+            },
+        )
+
+    return run_targets_and_victims(
+        config,
+        config_path=config_path,
+        context=context,
+        run_type="random_nonzero_when_possible",
+        poison_epochs=poison_epochs,
+        attack_epochs=attack_epochs,
+        build_poisoned=build_poisoned,
     )
-    attack_metrics = evaluate_runner(
-        attacked_runner, attacked_test_data, topk=config.evaluation.topk
-    )
-    targeted = evaluate_targeted_precision_at_k(
-        attacked_runner,
-        attacked_test_data,
-        target_item=target_item,
-        topk=config.evaluation.topk,
-    )
-    attack_metrics["targeted_precision_at_k"] = float(targeted)
-    payload = {
-        "run_type": "random_nonzero_when_possible",
-        "metrics": attack_metrics,
-        "target_item": int(target_item),
-        "fake_session_count": int(shared.fake_session_count),
-        "clean_session_count": int(len(shared.clean_sessions)),
-        "poison_epochs": int(poison_epochs),
-        "attack_epochs": int(attack_epochs),
-        "poisoned_train_path": str(poisoned_train_path),
-        "random_nonzero_position_metadata_path": str(positions_path),
-    }
-    save_metrics(payload, artifacts["metrics"])
-    return payload
 
 
 def main() -> None:

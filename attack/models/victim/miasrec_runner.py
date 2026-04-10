@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import shutil
 import subprocess
 import sys
@@ -27,12 +28,24 @@ class MiaSRecRunner(VictimRunnerBase):
         export_root = kwargs.get("export_root")
         dataset_name = kwargs.get("dataset_name")
         run_dir = kwargs.get("run_dir")
-        if export_root is None or dataset_name is None or run_dir is None:
-            raise ValueError("train() requires export_root, dataset_name, and run_dir.")
+        export_topk_path = kwargs.get("export_topk_path")
+        topk = kwargs.get("topk")
+        if (
+            export_root is None
+            or dataset_name is None
+            or run_dir is None
+            or export_topk_path is None
+            or topk is None
+        ):
+            raise ValueError(
+                "train() requires export_root, dataset_name, run_dir, export_topk_path, and topk."
+            )
         return self.run(
             export_root=Path(export_root),
             dataset_name=str(dataset_name),
             run_dir=Path(run_dir),
+            export_topk_path=Path(export_topk_path),
+            topk=int(topk),
         )
 
     def evaluate(self, *args, **kwargs):
@@ -40,6 +53,21 @@ class MiaSRecRunner(VictimRunnerBase):
 
     def score_session(self, *args, **kwargs):
         raise NotImplementedError("MiaSRec does not expose per-session scoring.")
+
+    def predict_topk(self, *, predictions_path: Path, topk: int | None = None) -> list[list[int]]:
+        predictions_path = Path(predictions_path)
+        if not predictions_path.exists():
+            raise FileNotFoundError(f"MiaSRec predictions not found: {predictions_path}")
+        with predictions_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        rankings = payload.get("rankings")
+        if rankings is None:
+            raise ValueError("MiaSRec predictions file missing rankings.")
+        if topk is not None:
+            rankings = [list(map(int, row[:topk])) for row in rankings]
+        else:
+            rankings = [list(map(int, row)) for row in rankings]
+        return rankings
 
     def load_model(self, *args, **kwargs):
         raise NotImplementedError("MiaSRec model loading is not supported.")
@@ -53,6 +81,8 @@ class MiaSRecRunner(VictimRunnerBase):
         export_root: Path,
         dataset_name: str,
         run_dir: Path,
+        export_topk_path: Path,
+        topk: int,
     ) -> dict[str, str | int]:
         miasrec_root = self.repo_root / "third_party" / "miasrec"
         if not miasrec_root.exists():
@@ -75,6 +105,12 @@ class MiaSRecRunner(VictimRunnerBase):
         tb_snapshot = _snapshot_files(tensorboard_root)
         saved_snapshot = _snapshot_files(saved_root)
 
+        override_path = run_dir / "miasrec_override.yaml"
+        override_path.parent.mkdir(parents=True, exist_ok=True)
+        with override_path.open("w", encoding="utf-8") as handle:
+            handle.write(f"topk: [{int(topk)}]\n")
+            handle.write(f"export_topk_path: {json.dumps(str(export_topk_path.resolve()))}\n")
+
         cmd = [
             sys.executable,
             "main.py",
@@ -82,6 +118,8 @@ class MiaSRecRunner(VictimRunnerBase):
             "miasrec",
             "--dataset",
             dataset_name,
+            "--config2",
+            str(override_path.resolve()),
             "--data_path",
             str(export_root.resolve()),
             "--checkpoint_dir",
@@ -109,10 +147,16 @@ class MiaSRecRunner(VictimRunnerBase):
                 f"MiaSRec subprocess failed with code {result.returncode}. "
                 f"See log: {log_path}"
             )
+        if not export_topk_path.exists():
+            raise RuntimeError(
+                "MiaSRec did not export top-k predictions. "
+                f"Missing: {export_topk_path}"
+            )
 
         return {
             "returncode": int(result.returncode),
             "log_path": str(log_path),
+            "export_topk_path": str(export_topk_path),
         }
 
 
