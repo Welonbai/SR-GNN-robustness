@@ -1,5 +1,5 @@
 experiment:
-  name: dpsbr_baseline
+  name: attack_dpsbr
 
 data:
   dataset_name: diginetica
@@ -21,7 +21,7 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 1
+  count: 5
   reuse_saved_targets: true
 
 victims:

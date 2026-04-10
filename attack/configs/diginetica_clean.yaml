@@ -1,5 +1,5 @@
 experiment:
-  name: clean_srgnn
+  name: clean_run_no_attack
 
 data:
   dataset_name: diginetica
@@ -21,7 +21,7 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 1
+  count: 5
   reuse_saved_targets: true
 
 victims:
