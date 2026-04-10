@@ -33,10 +33,11 @@ def execute_single_victim(
     poisoned_train_path: Path,
     target_item: int,
     attack_epochs: int,
-    eval_topk: int,
+    eval_topk: Sequence[int],
     srg_nn_export_paths: dict[str, Path] | None = None,
     predictions_path: Path | None = None,
 ) -> VictimExecutionResult:
+    max_topk = max(eval_topk)
     if victim_name == "srgnn":
         if srg_nn_export_paths is None:
             raise ValueError("SRGNN execution requires clean export paths for valid/test.")
@@ -60,7 +61,7 @@ def execute_single_victim(
                 attacked_valid_data,
                 attack_epochs,
                 target_item=target_item,
-                topk=eval_topk,
+                topk=max_topk,
             )
 
         _, attacked_test_data = attacked_runner.load_dataset(
@@ -68,11 +69,11 @@ def execute_single_victim(
             test_path=srg_nn_export_paths["test"],
             shuffle_train=False,
         )
-        rankings = attacked_runner.predict_topk(attacked_test_data, topk=eval_topk)
+        rankings = attacked_runner.predict_topk(attacked_test_data, topk=max_topk)
         if predictions_path is not None:
             save_predictions(
                 predictions_path,
-                topk=eval_topk,
+                topk=max_topk,
                 rankings=rankings,
                 victim=victim_name,
                 target_item=target_item,
@@ -103,14 +104,14 @@ def execute_single_victim(
             dataset_name=config.data.dataset_name,
             run_dir=run_dir,
             export_topk_path=raw_predictions_path,
-            topk=eval_topk,
+            topk=max_topk,
         )
-        rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=eval_topk)
+        rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=max_topk)
         print(f"[victim:miasrec] Completed. Predictions: {raw_predictions_path}")
         if predictions_path is not None:
             save_predictions(
                 predictions_path,
-                topk=eval_topk,
+                topk=max_topk,
                 rankings=rankings,
                 victim=victim_name,
                 target_item=target_item,
@@ -144,15 +145,15 @@ def execute_single_victim(
             dataset_name=config.data.dataset_name,
             run_dir=run_dir,
             export_topk_path=raw_predictions_path,
-            topk=eval_topk,
+            topk=max_topk,
             max_epochs=attack_epochs,
         )
-        rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=eval_topk)
+        rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=max_topk)
         print(f"[victim:tron] Completed. Predictions: {raw_predictions_path}")
         if predictions_path is not None:
             save_predictions(
                 predictions_path,
-                topk=eval_topk,
+                topk=max_topk,
                 rankings=rankings,
                 victim=victim_name,
                 target_item=target_item,

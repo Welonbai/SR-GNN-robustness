@@ -98,7 +98,6 @@ def canonical_split_paths(config: Config, *, split_key: str) -> dict[str, Path]:
 
 def _run_config_key(config: Config) -> str:
     victim_token = _hash_token(",".join(sorted(config.victims.enabled)))
-    metrics_token = _hash_token(",".join(sorted(config.evaluation.metrics)))
     tokens = [
         f"split_{config.data.split_protocol}",
         f"poison_train_only_{int(config.data.poison_train_only)}",
@@ -110,7 +109,6 @@ def _run_config_key(config: Config) -> str:
         f"ts_{config.seeds.target_selection_seed}",
         f"targets_{_target_config_token(config)}",
         f"victims_{victim_token}",
-        f"eval_{config.evaluation.topk}_{metrics_token}",
     ]
     payload = json.dumps(tokens)
     return f"run_{_hash_token(payload)}"

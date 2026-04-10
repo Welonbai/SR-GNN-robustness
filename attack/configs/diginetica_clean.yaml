@@ -1,5 +1,5 @@
 experiment:
-  name: dpsbr_attack_pos0
+  name: clean_srgnn
 
 data:
   dataset_name: diginetica
@@ -25,11 +25,11 @@ targets:
   reuse_saved_targets: true
 
 victims:
-  enabled: [srgnn]
+  enabled: [srgnn, miasrec, tron]
 
 evaluation:
-  topk: 25
-  metrics: [targeted_precision, targeted_mrr]
+  topk: [5, 10, 15, 20, 25, 30, 40, 50]
+  metrics: [targeted_precision, targeted_recall, targeted_mrr, targeted_ndcg]
 
 artifacts:
   root: outputs

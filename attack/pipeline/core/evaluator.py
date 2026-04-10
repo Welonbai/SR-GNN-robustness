@@ -1,37 +1,9 @@
 from __future__ import annotations
 
 import json
+from math import log2
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
-
-import numpy as np
-
-
-def compute_targeted_precision(rankings: Iterable[Iterable[int]], target_item: int) -> float:
-    """Compute mean hit rate for the target item over top-k rankings.
-
-    Rankings must use 1-based item ids to match target_item.
-    """
-    target_id = int(target_item)
-    hits = [1.0 if target_id in ranking else 0.0 for ranking in rankings]
-    return float(np.mean(hits)) if hits else 0.0
-
-
-def compute_targeted_mrr(rankings: Iterable[Iterable[int]], target_item: int) -> float:
-    """Compute mean reciprocal rank for the target item over top-k rankings.
-
-    Rankings must use 1-based item ids to match target_item.
-    """
-    target_id = int(target_item)
-    scores: list[float] = []
-    for ranking in rankings:
-        try:
-            idx = list(ranking).index(target_id)
-        except ValueError:
-            scores.append(0.0)
-        else:
-            scores.append(1.0 / float(idx + 1))
-    return float(np.mean(scores)) if scores else 0.0
+from typing import Any, Mapping, Sequence
 
 
 def evaluate_targeted_metrics(
@@ -39,25 +11,43 @@ def evaluate_targeted_metrics(
     *,
     target_item: int,
     metrics: Sequence[str],
-    topk: int,
+    topk: Sequence[int],
 ) -> tuple[dict[str, float | None], bool]:
     """Compute requested targeted metrics from standardized top-k rankings."""
+    topk_values = list(topk)
     if rankings is None:
         result: dict[str, float | None] = {}
         for metric in metrics:
-            key = f"{metric}_at_k"
-            result[key] = None
-        result["topk"] = int(topk)
+            for k in topk_values:
+                result[f"{metric}@{k}"] = None
         return result, False
 
-    computed: dict[str, float | None] = {"topk": int(topk)}
+    ranks = _compute_ranks(rankings, target_item)
+    computed: dict[str, float | None] = {}
+    sample_count = len(ranks)
     for metric in metrics:
-        if metric == "targeted_precision":
-            computed["targeted_precision_at_k"] = compute_targeted_precision(rankings, target_item)
-        elif metric == "targeted_mrr":
-            computed["targeted_mrr_at_k"] = compute_targeted_mrr(rankings, target_item)
-        else:
-            raise ValueError(f"Unsupported metric: {metric}")
+        for k in topk_values:
+            if metric == "targeted_precision":
+                hits = sum(1 for r in ranks if 0 < r <= k)
+                value = (hits / (sample_count * k)) if sample_count else 0.0
+            elif metric == "targeted_recall":
+                hits = sum(1 for r in ranks if 0 < r <= k)
+                value = (hits / sample_count) if sample_count else 0.0
+            elif metric == "targeted_mrr":
+                value = (
+                    sum((1.0 / r) for r in ranks if 0 < r <= k) / sample_count
+                    if sample_count
+                    else 0.0
+                )
+            elif metric == "targeted_ndcg":
+                value = (
+                    sum((1.0 / log2(r + 1)) for r in ranks if 0 < r <= k) / sample_count
+                    if sample_count
+                    else 0.0
+                )
+            else:
+                raise ValueError(f"Unsupported metric: {metric}")
+            computed[f"{metric}@{k}"] = float(value)
     return computed, True
 
 
@@ -99,9 +89,20 @@ def save_predictions(
         json.dump(payload, handle, indent=2, sort_keys=True)
 
 
+def _compute_ranks(rankings: Sequence[Sequence[int]], target_item: int) -> list[int]:
+    target_id = int(target_item)
+    ranks: list[int] = []
+    for ranking in rankings:
+        try:
+            idx = list(ranking).index(target_id)
+        except ValueError:
+            ranks.append(0)
+        else:
+            ranks.append(int(idx + 1))
+    return ranks
+
+
 __all__ = [
-    "compute_targeted_precision",
-    "compute_targeted_mrr",
     "evaluate_targeted_metrics",
     "evaluate_runner",
     "save_metrics",

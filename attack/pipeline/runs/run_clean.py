@@ -65,7 +65,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default="attack/configs/dp_sbr_diginetica_clean.yaml",
+        default="attack/configs/diginetica_clean.yaml",
         help="Path to YAML config.",
     )
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs.")

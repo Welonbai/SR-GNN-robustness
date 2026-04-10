@@ -52,7 +52,7 @@ class VictimsConfig:
 
 @dataclass(frozen=True)
 class EvaluationConfig:
-    topk: int
+    topk: tuple[int, ...]
     metrics: tuple[str, ...]
 
 
@@ -234,15 +234,30 @@ def load_config(path: str | Path) -> Config:
             f"got {victims_cfg.enabled}"
         )
 
+    raw_topk = _as_int_list(_require(evaluation, "topk", "evaluation"), "evaluation.topk")
+    if not raw_topk:
+        raise ValueError("evaluation.topk must include at least one K value.")
+    if any(k <= 0 for k in raw_topk):
+        raise ValueError("evaluation.topk values must be positive integers.")
+    normalized_topk = tuple(sorted(set(raw_topk)))
+
     evaluation_cfg = EvaluationConfig(
-        topk=_as_int(_require(evaluation, "topk", "evaluation"), "evaluation.topk"),
+        topk=normalized_topk,
         metrics=_as_str_list(_require(evaluation, "metrics", "evaluation"), "evaluation.metrics"),
     )
     if not evaluation_cfg.metrics:
         raise ValueError("evaluation.metrics must include at least one metric.")
-    allowed_metrics = {"targeted_precision", "targeted_mrr"}
+    allowed_metrics = {
+        "targeted_precision",
+        "targeted_recall",
+        "targeted_mrr",
+        "targeted_ndcg",
+    }
     if not set(evaluation_cfg.metrics).issubset(allowed_metrics):
-        raise ValueError("evaluation.metrics must be a subset of: targeted_precision, targeted_mrr.")
+        raise ValueError(
+            "evaluation.metrics must be a subset of: "
+            "targeted_precision, targeted_recall, targeted_mrr, targeted_ndcg."
+        )
 
     artifacts_cfg = ArtifactsConfig(
         root=_as_str(_require(artifacts, "root", "artifacts"), "artifacts.root"),

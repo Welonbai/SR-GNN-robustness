@@ -153,7 +153,7 @@ def _load_or_train_poison_runner(
             train_data,
             test_data,
             poison_epochs,
-            topk=config.evaluation.topk,
+            topk=max(config.evaluation.topk),
         )
     save_poison_model(runner, shared_paths["poison_model"])
     print(f"Saved poison model checkpoint to {shared_paths['poison_model']}")

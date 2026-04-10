@@ -64,16 +64,20 @@ class SRGNNBaseRunner:
             raise RuntimeError("Model is not initialized. Call build_model() first.")
         history: list[tuple[float, float]] = []
         if target_item is not None:
-            from attack.pipeline.core.evaluator import compute_targeted_precision
+            from attack.pipeline.core.evaluator import evaluate_targeted_metrics
         for epoch in range(epochs):
             print(f"epoch {epoch + 1}/{epochs}")
             hit, mrr = train_test(self.model, train_data, test_data)
             if target_item is not None:
                 rankings = self.predict_topk(test_data, topk=topk)
-                targeted = compute_targeted_precision(rankings, target_item)
-                print(
-                    f"epoch {epoch + 1}/{epochs} targeted_p@{topk}={targeted:.4f}"
+                metrics, _ = evaluate_targeted_metrics(
+                    rankings,
+                    target_item=target_item,
+                    metrics=["targeted_precision"],
+                    topk=[topk],
                 )
+                targeted = metrics.get(f"targeted_precision@{topk}", 0.0)
+                print(f"epoch {epoch + 1}/{epochs} targeted_p@{topk}={targeted:.4f}")
             print(f"epoch {epoch + 1}/{epochs} metrics: hit={hit:.4f} mrr={mrr:.4f}")
             history.append((hit, mrr))
         return history
