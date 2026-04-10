@@ -10,7 +10,7 @@ from attack.common.paths import run_artifact_paths
 from attack.common.seed import set_seed
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
-from attack.insertion.best_position_prefix import BestPositionPrefixPolicy
+from attack.insertion.prefix_scoring import BestPositionPrefixPolicy
 from attack.models.victim import srgnn_runner as _srgnn_runner
 from attack.models.victim.registry import get_victim_runner
 from attack.pipeline.core.evaluator import (
@@ -36,7 +36,7 @@ def _prepare_run_artifacts(
     return artifacts
 
 
-def run_position_opt(
+def run_prefix_scoring(
     config: Config,
     config_path: str | Path | None = None,
     poison_epochs: int = 1,
@@ -145,7 +145,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = load_config(args.config)
-    run_position_opt(
+    run_prefix_scoring(
         config,
         config_path=args.config,
         poison_epochs=args.poison_epochs,
