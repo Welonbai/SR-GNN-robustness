@@ -137,7 +137,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default="attack/configs/dp_sbr_diginetica_attack_position_opt.yaml",
+        default="attack/configs/dp_sbr_diginetica_attack_dpsbr.yaml",
         help="Path to YAML config.",
     )
     parser.add_argument("--poison-epochs", type=int, default=1, help="Poison model epochs.")
