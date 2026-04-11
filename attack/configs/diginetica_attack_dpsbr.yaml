@@ -26,6 +26,15 @@ targets:
 
 victims:
   enabled: [srgnn, miasrec, tron]
+  runtime:
+    miasrec:
+      python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"
+      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
+      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
+    tron:
+      python_executable: "C:\\Users\\User\\anaconda3\\envs\\tron-gpu\\python.exe"
+      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
+      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
 
 evaluation:
   topk: [5, 10, 15, 20, 25, 30, 40, 50]

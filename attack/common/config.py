@@ -48,6 +48,7 @@ class TargetsConfig:
 @dataclass(frozen=True)
 class VictimsConfig:
     enabled: tuple[str, ...]
+    runtime: dict[str, dict[str, str]] | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,39 @@ def _as_int_list(value: Any, context: str) -> tuple[int, ...]:
             raise TypeError(f"Expected {context} to contain only ints.")
         result.append(int(item))
     return tuple(result)
+
+
+def _as_str_dict(value: Any, context: str) -> dict[str, str]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"Expected {context} to be a mapping of strings.")
+    result: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            raise TypeError(f"Expected {context} keys to be strings.")
+        result[key] = _as_str(item, f"{context}.{key}")
+    return result
+
+
+def _parse_victim_runtime(
+    value: Any,
+    *,
+    allowed_victims: set[str],
+) -> dict[str, dict[str, str]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise TypeError("Expected victims.runtime to be a mapping.")
+    runtime: dict[str, dict[str, str]] = {}
+    for victim_name, victim_runtime in value.items():
+        if not isinstance(victim_name, str):
+            raise TypeError("Expected victims.runtime keys to be victim names.")
+        if victim_name not in allowed_victims:
+            raise ValueError(
+                f"victims.runtime keys must be subset of {sorted(allowed_victims)}, "
+                f"got {victim_name!r}"
+            )
+        runtime[victim_name] = _as_str_dict(victim_runtime, f"victims.runtime.{victim_name}")
+    return runtime
 
 
 def _load_yaml(path: Path) -> Mapping[str, Any]:
@@ -222,12 +256,13 @@ def load_config(path: str | Path) -> Config:
         reuse_saved_targets=reuse_saved_targets,
     )
 
+    allowed_victims = {"srgnn", "miasrec", "tron"}
     victims_cfg = VictimsConfig(
-        enabled=_as_str_list(_require(victims, "enabled", "victims"), "victims.enabled")
+        enabled=_as_str_list(_require(victims, "enabled", "victims"), "victims.enabled"),
+        runtime=_parse_victim_runtime(victims.get("runtime"), allowed_victims=allowed_victims),
     )
     if not victims_cfg.enabled:
         raise ValueError("victims.enabled must include at least one victim model.")
-    allowed_victims = {"srgnn", "miasrec", "tron"}
     if not set(victims_cfg.enabled).issubset(allowed_victims):
         raise ValueError(
             f"victims.enabled must be subset of {sorted(allowed_victims)}, "

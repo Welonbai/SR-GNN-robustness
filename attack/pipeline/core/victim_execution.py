@@ -116,6 +116,7 @@ def execute_single_victim(
             run_dir=run_dir,
             export_topk_path=raw_predictions_path,
             topk=max_topk,
+            max_epochs=attack_epochs,
         )
         _save_miasrec_history(run_dir, Path(run_info["log_path"]))
         rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=max_topk)

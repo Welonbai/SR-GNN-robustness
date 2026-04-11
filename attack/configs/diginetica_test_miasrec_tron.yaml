@@ -1,5 +1,5 @@
 experiment:
-  name: attack_random_nonzero_when_possible
+  name: test_miasrec_tron
 
 data:
   dataset_name: diginetica
@@ -21,8 +21,8 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 5
-  reuse_saved_targets: true
+  count: 1
+  reuse_saved_targets: false
 
 victims:
   enabled: [srgnn, miasrec, tron]
@@ -37,7 +37,7 @@ victims:
       working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
 
 evaluation:
-  topk: [5, 10, 15, 20, 25, 30, 40, 50]
+  topk: [5]
   metrics: [targeted_precision, targeted_recall, targeted_mrr, targeted_ndcg]
 
 artifacts:

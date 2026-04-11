@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import json
 import shutil
 import subprocess
-import sys
 
 from attack.common.config import Config
 from attack.models.victim.base_runner import VictimRunnerBase
 from attack.models.victim.registry import register_victim
+
+DEFAULT_MIASREC_TRAIN_BATCH_SIZE = 512
+DEFAULT_MIASREC_EVAL_BATCH_SIZE = 256
 
 
 class MiaSRecRunner(VictimRunnerBase):
@@ -16,7 +19,10 @@ class MiaSRecRunner(VictimRunnerBase):
 
     def __init__(self, config: Config, repo_root: str | Path | None = None) -> None:
         self.config = config
-        self.repo_root = Path(repo_root) if repo_root is not None else Path.cwd()
+        runtime = _require_runtime_config(config, self.name)
+        self.python_executable = runtime["python_executable"]
+        self.repo_root = Path(repo_root) if repo_root is not None else Path(runtime["repo_root"])
+        self.working_dir = Path(runtime["working_dir"])
 
     def build_model(self, opt=None):
         return None
@@ -30,6 +36,7 @@ class MiaSRecRunner(VictimRunnerBase):
         run_dir = kwargs.get("run_dir")
         export_topk_path = kwargs.get("export_topk_path")
         topk = kwargs.get("topk")
+        max_epochs = kwargs.get("max_epochs")
         if (
             export_root is None
             or dataset_name is None
@@ -46,6 +53,7 @@ class MiaSRecRunner(VictimRunnerBase):
             run_dir=Path(run_dir),
             export_topk_path=Path(export_topk_path),
             topk=int(topk),
+            max_epochs=int(max_epochs) if max_epochs is not None else None,
         )
 
     def evaluate(self, *args, **kwargs):
@@ -83,14 +91,18 @@ class MiaSRecRunner(VictimRunnerBase):
         run_dir: Path,
         export_topk_path: Path,
         topk: int,
+        max_epochs: int | None = None,
     ) -> dict[str, str | int]:
-        miasrec_root = self.repo_root / "third_party" / "miasrec"
-        if not miasrec_root.exists():
-            raise FileNotFoundError(f"MiaSRec repository not found: {miasrec_root}")
-        main_path = miasrec_root / "main.py"
+        if not self.repo_root.exists():
+            raise FileNotFoundError(f"MiaSRec repository not found: {self.repo_root}")
+        if not self.working_dir.exists():
+            raise FileNotFoundError(f"MiaSRec working directory not found: {self.working_dir}")
+        main_path = self.repo_root / "main.py"
         if not main_path.exists():
             raise FileNotFoundError(f"MiaSRec entrypoint missing: {main_path}")
 
+        if not export_root.exists():
+            raise FileNotFoundError(f"MiaSRec export root missing: {export_root}")
         dataset_dir = export_root / dataset_name
         if not dataset_dir.exists():
             raise FileNotFoundError(f"MiaSRec dataset directory missing: {dataset_dir}")
@@ -98,22 +110,28 @@ class MiaSRecRunner(VictimRunnerBase):
         run_dir.mkdir(parents=True, exist_ok=True)
         log_path = run_dir / "miasrec_stdout.log"
         checkpoint_dir = run_dir / "miasrec_checkpoints"
-        log_root = miasrec_root / "log"
-        tensorboard_root = miasrec_root / "log_tensorboard"
-        saved_root = miasrec_root / "saved"
+        log_root = self.repo_root / "log"
+        tensorboard_root = self.repo_root / "log_tensorboard"
+        saved_root = self.repo_root / "saved"
         log_snapshot = _snapshot_files(log_root)
         tb_snapshot = _snapshot_files(tensorboard_root)
         saved_snapshot = _snapshot_files(saved_root)
+        requested_gpu_id = _resolve_requested_gpu_id()
 
         override_path = run_dir / "miasrec_override.yaml"
         override_path.parent.mkdir(parents=True, exist_ok=True)
         with override_path.open("w", encoding="utf-8") as handle:
-            handle.write(f"topk: [{int(topk)}]\n")
+            if max_epochs is not None:
+                handle.write(f"epochs: {int(max_epochs)}\n")
+            handle.write("use_gpu: true\n")
+            handle.write(f"gpu_id: {json.dumps(requested_gpu_id)}\n")
+            handle.write(f"train_batch_size: {DEFAULT_MIASREC_TRAIN_BATCH_SIZE}\n")
+            handle.write(f"eval_batch_size: {DEFAULT_MIASREC_EVAL_BATCH_SIZE}\n")
             handle.write(f"export_topk_path: {json.dumps(str(export_topk_path.resolve()))}\n")
 
         cmd = [
-            sys.executable,
-            "main.py",
+            self.python_executable,
+            str(main_path.resolve()),
             "--model",
             "miasrec",
             "--dataset",
@@ -121,16 +139,20 @@ class MiaSRecRunner(VictimRunnerBase):
             "--config2",
             str(override_path.resolve()),
             "--data_path",
-            str(export_root.resolve()),
+            str(dataset_dir.resolve()),
             "--checkpoint_dir",
             str(checkpoint_dir.resolve()),
         ]
 
+        print(f"[VictimRunner] launching {self.name}")
+        print(f"python_executable={self.python_executable}")
+        print(f"repo_root={self.repo_root}")
+        print(f"working_dir={self.working_dir}")
         print(f"[miasrec] Starting subprocess. Log: {log_path}")
         with log_path.open("w", encoding="utf-8") as handle:
             result = subprocess.run(
                 cmd,
-                cwd=miasrec_root,
+                cwd=self.working_dir,
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 check=False,
@@ -160,6 +182,24 @@ class MiaSRecRunner(VictimRunnerBase):
             "log_path": str(log_path),
             "export_topk_path": str(export_topk_path),
         }
+
+
+def _require_runtime_config(config: Config, victim_name: str) -> dict[str, str]:
+    runtime = (config.victims.runtime or {}).get(victim_name)
+    if runtime is None:
+        raise ValueError(f"Missing victims.runtime.{victim_name} configuration.")
+    missing = [key for key in ("python_executable", "repo_root", "working_dir") if not runtime.get(key)]
+    if missing:
+        joined = ", ".join(f"victims.runtime.{victim_name}.{key}" for key in missing)
+        raise ValueError(f"Missing required runtime configuration: {joined}")
+    return runtime
+
+
+def _resolve_requested_gpu_id() -> str:
+    gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if gpu_id is None:
+        return "0"
+    return gpu_id.strip()
 
 
 def _snapshot_files(root: Path) -> set[Path]:

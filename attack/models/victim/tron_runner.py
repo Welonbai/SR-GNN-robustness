@@ -4,7 +4,6 @@ from pathlib import Path
 import json
 import os
 import subprocess
-import sys
 
 from attack.common.config import Config
 from attack.models.victim.base_runner import VictimRunnerBase
@@ -16,7 +15,10 @@ class TRONRunner(VictimRunnerBase):
 
     def __init__(self, config: Config, repo_root: str | Path | None = None) -> None:
         self.config = config
-        self.repo_root = Path(repo_root) if repo_root is not None else Path.cwd()
+        runtime = _require_runtime_config(config, self.name)
+        self.python_executable = runtime["python_executable"]
+        self.repo_root = Path(repo_root) if repo_root is not None else Path(runtime["repo_root"])
+        self.working_dir = Path(runtime["working_dir"])
 
     def build_model(self, opt=None):
         return None
@@ -87,14 +89,15 @@ class TRONRunner(VictimRunnerBase):
         topk: int,
         max_epochs: int | None = None,
     ) -> dict[str, str | int]:
-        tron_root = self.repo_root / "third_party" / "tron"
-        if not tron_root.exists():
-            raise FileNotFoundError(f"TRON repository not found: {tron_root}")
+        if not self.repo_root.exists():
+            raise FileNotFoundError(f"TRON repository not found: {self.repo_root}")
+        if not self.working_dir.exists():
+            raise FileNotFoundError(f"TRON working directory not found: {self.working_dir}")
         dataset_dir = export_root / dataset_name
         if not dataset_dir.exists():
             raise FileNotFoundError(f"TRON dataset directory missing: {dataset_dir}")
 
-        base_config = _resolve_base_config(tron_root, dataset_name)
+        base_config = _resolve_base_config(self.repo_root, dataset_name)
         with base_config.open("r", encoding="utf-8") as handle:
             config = json.load(handle)
 
@@ -113,7 +116,7 @@ class TRONRunner(VictimRunnerBase):
             json.dump(config, handle, indent=2, sort_keys=True)
 
         cmd = [
-            sys.executable,
+            self.python_executable,
             "-m",
             "src",
             "--config-filename",
@@ -126,8 +129,12 @@ class TRONRunner(VictimRunnerBase):
 
         log_path = run_dir / "tron_stdout.log"
         env = os.environ.copy()
-        env["PYTHONPATH"] = _prepend_pythonpath(env.get("PYTHONPATH"), tron_root)
+        env["PYTHONPATH"] = _prepend_pythonpath(env.get("PYTHONPATH"), self.repo_root)
 
+        print(f"[VictimRunner] launching {self.name}")
+        print(f"python_executable={self.python_executable}")
+        print(f"repo_root={self.repo_root}")
+        print(f"working_dir={self.working_dir}")
         print(f"[tron] Starting subprocess. Log: {log_path}")
         with log_path.open("w", encoding="utf-8") as handle:
             result = subprocess.run(
@@ -160,6 +167,17 @@ class TRONRunner(VictimRunnerBase):
             "config_path": str(config_path),
             "log_dir": config["log_dir"],
         }
+
+
+def _require_runtime_config(config: Config, victim_name: str) -> dict[str, str]:
+    runtime = (config.victims.runtime or {}).get(victim_name)
+    if runtime is None:
+        raise ValueError(f"Missing victims.runtime.{victim_name} configuration.")
+    missing = [key for key in ("python_executable", "repo_root", "working_dir") if not runtime.get(key)]
+    if missing:
+        joined = ", ".join(f"victims.runtime.{victim_name}.{key}" for key in missing)
+        raise ValueError(f"Missing required runtime configuration: {joined}")
+    return runtime
 
 
 def _resolve_base_config(tron_root: Path, dataset_name: str) -> Path:
