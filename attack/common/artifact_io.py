@@ -6,6 +6,21 @@ from pathlib import Path
 from typing import Any
 
 
+def save_json(payload: Any, path: str | Path) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+
+
+def load_json(path: str | Path) -> Any | None:
+    path = Path(path)
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
 def save_poison_model(runner, path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -45,8 +60,6 @@ def save_target_info(
     count: int | None = None,
     explicit_list: list[int] | None = None,
 ) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
     target_items = [int(item) for item in target_items]
     payload = {
         "target_items": target_items,
@@ -58,23 +71,58 @@ def save_target_info(
     }
     if target_items:
         payload["target_item"] = int(target_items[0])
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+    save_json(payload, path)
 
 
 def load_target_info(path: str | Path) -> dict[str, Any] | None:
-    path = Path(path)
-    if not path.exists():
+    payload = load_json(path)
+    if payload is None:
         return None
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError("target_info.json must contain a JSON object.")
+    return payload
+
+
+def save_selected_targets(path: str | Path, target_items: list[int]) -> None:
+    save_json({"target_items": [int(item) for item in target_items]}, path)
+
+
+def load_selected_targets(path: str | Path) -> list[int] | None:
+    payload = load_json(path)
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise ValueError("selected_targets.json must contain a JSON object.")
+    target_items = payload.get("target_items")
+    if not isinstance(target_items, list):
+        raise ValueError("selected_targets.json is missing target_items.")
+    return [int(item) for item in target_items]
+
+
+def save_target_selection_meta(path: str | Path, payload: dict[str, Any]) -> None:
+    save_json(payload, path)
+
+
+def load_target_selection_meta(path: str | Path) -> dict[str, Any] | None:
+    payload = load_json(path)
+    if payload is None:
+        return None
+    if not isinstance(payload, dict):
+        raise ValueError("target_selection_meta.json must contain a JSON object.")
+    return payload
 
 
 __all__ = [
+    "save_json",
+    "load_json",
     "save_poison_model",
     "load_poison_model",
     "save_fake_sessions",
     "load_fake_sessions",
     "save_target_info",
     "load_target_info",
+    "save_selected_targets",
+    "load_selected_targets",
+    "save_target_selection_meta",
+    "load_target_selection_meta",
 ]

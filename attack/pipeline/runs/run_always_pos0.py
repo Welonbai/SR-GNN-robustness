@@ -18,15 +18,13 @@ from attack.pipeline.core.pipeline_utils import prepare_shared_attack_artifacts
 def run_always_pos0(
     config: Config,
     config_path: str | Path | None = None,
-    poison_epochs: int = 1,
-    attack_epochs: int = 1,
 ) -> dict[str, object]:
     if not config.data.poison_train_only:
         raise ValueError("Batch 6 expects data.poison_train_only to be true.")
     set_seed(config.seeds.fake_session_seed)
     shared = prepare_shared_attack_artifacts(
         config,
-        poison_epochs=poison_epochs,
+        run_type="always_pos0",
         require_poison_runner=False,
         config_path=config_path,
     )
@@ -54,8 +52,6 @@ def run_always_pos0(
         config_path=config_path,
         context=context,
         run_type="always_pos0",
-        poison_epochs=poison_epochs,
-        attack_epochs=attack_epochs,
         build_poisoned=build_poisoned,
     )
 
@@ -67,16 +63,12 @@ def main() -> None:
         default="attack/configs/diginetica_attack_allpos0.yaml",
         help="Path to YAML config.",
     )
-    parser.add_argument("--poison-epochs", type=int, default=1, help="Poison model epochs.")
-    parser.add_argument("--attack-epochs", type=int, default=1, help="Attack model epochs.")
     args = parser.parse_args()
 
     config = load_config(args.config)
     run_always_pos0(
         config,
         config_path=args.config,
-        poison_epochs=args.poison_epochs,
-        attack_epochs=args.attack_epochs,
     )
 
 

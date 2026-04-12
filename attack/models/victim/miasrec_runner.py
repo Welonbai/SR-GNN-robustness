@@ -5,13 +5,11 @@ from pathlib import Path
 import json
 import shutil
 import subprocess
+from typing import Any
 
 from attack.common.config import Config
 from attack.models.victim.base_runner import VictimRunnerBase
 from attack.models.victim.registry import register_victim
-
-DEFAULT_MIASREC_TRAIN_BATCH_SIZE = 512
-DEFAULT_MIASREC_EVAL_BATCH_SIZE = 256
 
 
 class MiaSRecRunner(VictimRunnerBase):
@@ -20,9 +18,13 @@ class MiaSRecRunner(VictimRunnerBase):
     def __init__(self, config: Config, repo_root: str | Path | None = None) -> None:
         self.config = config
         runtime = _require_runtime_config(config, self.name)
+        train_config = _require_train_config(config, self.name)
         self.python_executable = runtime["python_executable"]
         self.repo_root = Path(repo_root) if repo_root is not None else Path(runtime["repo_root"])
         self.working_dir = Path(runtime["working_dir"])
+        self.train_config = train_config
+        self.device_config = dict(runtime["device"])
+        self.logging_config = dict(runtime["logging"])
 
     def build_model(self, opt=None):
         return None
@@ -116,18 +118,24 @@ class MiaSRecRunner(VictimRunnerBase):
         log_snapshot = _snapshot_files(log_root)
         tb_snapshot = _snapshot_files(tensorboard_root)
         saved_snapshot = _snapshot_files(saved_root)
-        requested_gpu_id = _resolve_requested_gpu_id()
+        effective_epochs = int(max_epochs) if max_epochs is not None else int(self.train_config["epochs"])
+        requested_gpu_id = _resolve_requested_gpu_id(self.device_config)
 
         override_path = run_dir / "miasrec_override.yaml"
         override_path.parent.mkdir(parents=True, exist_ok=True)
         with override_path.open("w", encoding="utf-8") as handle:
-            if max_epochs is not None:
-                handle.write(f"epochs: {int(max_epochs)}\n")
-            handle.write("use_gpu: true\n")
+            handle.write(f"epochs: {effective_epochs}\n")
+            handle.write(f"use_gpu: {json.dumps(bool(self.device_config['use_gpu']))}\n")
             handle.write(f"gpu_id: {json.dumps(requested_gpu_id)}\n")
-            handle.write("show_progress: false\n")
-            handle.write(f"train_batch_size: {DEFAULT_MIASREC_TRAIN_BATCH_SIZE}\n")
-            handle.write(f"eval_batch_size: {DEFAULT_MIASREC_EVAL_BATCH_SIZE}\n")
+            handle.write(
+                f"show_progress: {json.dumps(bool(self.logging_config['show_progress']))}\n"
+            )
+            handle.write(
+                f"train_batch_size: {int(self.train_config['train_batch_size'])}\n"
+            )
+            handle.write(
+                f"eval_batch_size: {int(self.train_config['eval_batch_size'])}\n"
+            )
             handle.write(f"export_topk_k: {int(topk)}\n")
             handle.write(f"export_topk_path: {json.dumps(str(export_topk_path.resolve()))}\n")
 
@@ -145,6 +153,11 @@ class MiaSRecRunner(VictimRunnerBase):
             "--checkpoint_dir",
             str(checkpoint_dir.resolve()),
         ]
+        env = os.environ.copy()
+        if bool(self.device_config["use_gpu"]):
+            env["CUDA_VISIBLE_DEVICES"] = requested_gpu_id
+        else:
+            env.pop("CUDA_VISIBLE_DEVICES", None)
 
         print(f"[VictimRunner] launching {self.name}")
         print(f"python_executable={self.python_executable}")
@@ -155,6 +168,7 @@ class MiaSRecRunner(VictimRunnerBase):
             result = subprocess.run(
                 cmd,
                 cwd=self.working_dir,
+                env=env,
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 check=False,
@@ -182,11 +196,13 @@ class MiaSRecRunner(VictimRunnerBase):
         return {
             "returncode": int(result.returncode),
             "log_path": str(log_path),
+            "config_path": str(override_path),
+            "checkpoint_dir": str(checkpoint_dir),
             "export_topk_path": str(export_topk_path),
         }
 
 
-def _require_runtime_config(config: Config, victim_name: str) -> dict[str, str]:
+def _require_runtime_config(config: Config, victim_name: str) -> dict[str, Any]:
     runtime = (config.victims.runtime or {}).get(victim_name)
     if runtime is None:
         raise ValueError(f"Missing victims.runtime.{victim_name} configuration.")
@@ -194,14 +210,23 @@ def _require_runtime_config(config: Config, victim_name: str) -> dict[str, str]:
     if missing:
         joined = ", ".join(f"victims.runtime.{victim_name}.{key}" for key in missing)
         raise ValueError(f"Missing required runtime configuration: {joined}")
-    return runtime
+    return dict(runtime)
 
 
-def _resolve_requested_gpu_id() -> str:
-    gpu_id = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if gpu_id is None:
-        return "0"
-    return gpu_id.strip()
+def _require_train_config(config: Config, victim_name: str) -> dict[str, Any]:
+    params = config.victims.params.get(victim_name)
+    if params is None:
+        raise ValueError(f"Missing victims.params.{victim_name} configuration.")
+    train = params.get("train")
+    if not isinstance(train, dict):
+        raise ValueError(f"Missing victims.params.{victim_name}.train configuration.")
+    return dict(train)
+
+
+def _resolve_requested_gpu_id(device_config: dict[str, Any]) -> str:
+    if not bool(device_config.get("use_gpu", False)):
+        return ""
+    return str(device_config["gpu_id"]).strip()
 
 
 def _snapshot_files(root: Path) -> set[Path]:

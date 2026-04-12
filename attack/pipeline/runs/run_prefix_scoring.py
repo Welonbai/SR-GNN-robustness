@@ -20,15 +20,13 @@ from attack.pipeline.core.pipeline_utils import prepare_shared_attack_artifacts
 def run_prefix_scoring(
     config: Config,
     config_path: str | Path | None = None,
-    poison_epochs: int = 1,
-    attack_epochs: int = 1,
 ) -> dict[str, object]:
     if not config.data.poison_train_only:
         raise ValueError("Batch 6 expects data.poison_train_only to be true.")
     set_seed(config.seeds.fake_session_seed)
     shared = prepare_shared_attack_artifacts(
         config,
-        poison_epochs=poison_epochs,
+        run_type="position_prefix",
         require_poison_runner=True,
         config_path=config_path,
     )
@@ -59,7 +57,7 @@ def run_prefix_scoring(
             shared.clean_sessions, shared.clean_labels, fake_sessions
         )
 
-        target_root = target_dir(config, target_item)
+        target_root = target_dir(config, target_item, run_type="position_prefix")
         target_root.mkdir(parents=True, exist_ok=True)
         positions_path = target_root / "best_position_metadata.pkl"
         with positions_path.open("wb") as handle:
@@ -77,8 +75,6 @@ def run_prefix_scoring(
         config_path=config_path,
         context=context,
         run_type="position_prefix",
-        poison_epochs=poison_epochs,
-        attack_epochs=attack_epochs,
         build_poisoned=build_poisoned,
     )
 
@@ -90,16 +86,12 @@ def main() -> None:
         default="attack/configs/diginetica_attack_dpsbr.yaml",
         help="Path to YAML config.",
     )
-    parser.add_argument("--poison-epochs", type=int, default=1, help="Poison model epochs.")
-    parser.add_argument("--attack-epochs", type=int, default=1, help="Attack model epochs.")
     args = parser.parse_args()
 
     config = load_config(args.config)
     run_prefix_scoring(
         config,
         config_path=args.config,
-        poison_epochs=args.poison_epochs,
-        attack_epochs=args.attack_epochs,
     )
 
 

@@ -4,12 +4,11 @@ from pathlib import Path
 import json
 import os
 import subprocess
+from typing import Any
 
 from attack.common.config import Config
 from attack.models.victim.base_runner import VictimRunnerBase
 from attack.models.victim.registry import register_victim
-
-DEFAULT_TRON_NUM_WORKERS = 2
 
 
 class TRONRunner(VictimRunnerBase):
@@ -18,9 +17,13 @@ class TRONRunner(VictimRunnerBase):
     def __init__(self, config: Config, repo_root: str | Path | None = None) -> None:
         self.config = config
         runtime = _require_runtime_config(config, self.name)
+        train_config = _require_train_config(config, self.name)
         self.python_executable = runtime["python_executable"]
         self.repo_root = Path(repo_root) if repo_root is not None else Path(runtime["repo_root"])
         self.working_dir = Path(runtime["working_dir"])
+        self.train_config = train_config
+        self.device_config = dict(runtime["device"])
+        self.dataloader_config = dict(runtime["dataloader"])
 
     def build_model(self, opt=None):
         return None
@@ -107,9 +110,11 @@ class TRONRunner(VictimRunnerBase):
         config["export_topk_path"] = str(export_topk_path.resolve())
         config["export_topk_k"] = int(topk)
         config["log_dir"] = str((run_dir / "tron_logs").resolve())
-        config["num_workers"] = DEFAULT_TRON_NUM_WORKERS
-        if max_epochs is not None:
-            config["max_epochs"] = int(max_epochs)
+        config["num_workers"] = int(self.dataloader_config["num_workers"])
+        config["max_epochs"] = (
+            int(max_epochs) if max_epochs is not None else int(self.train_config["max_epochs"])
+        )
+        config["accelerator"] = "gpu" if bool(self.device_config["use_gpu"]) else "cpu"
 
         run_dir.mkdir(parents=True, exist_ok=True)
         config_dir = run_dir / "tron_config"
@@ -133,6 +138,10 @@ class TRONRunner(VictimRunnerBase):
         log_path = run_dir / "tron_stdout.log"
         env = os.environ.copy()
         env["PYTHONPATH"] = _prepend_pythonpath(env.get("PYTHONPATH"), self.repo_root)
+        if bool(self.device_config["use_gpu"]):
+            env["CUDA_VISIBLE_DEVICES"] = str(self.device_config["gpu_id"]).strip()
+        else:
+            env.pop("CUDA_VISIBLE_DEVICES", None)
 
         print(f"[VictimRunner] launching {self.name}")
         print(f"python_executable={self.python_executable}")
@@ -172,7 +181,7 @@ class TRONRunner(VictimRunnerBase):
         }
 
 
-def _require_runtime_config(config: Config, victim_name: str) -> dict[str, str]:
+def _require_runtime_config(config: Config, victim_name: str) -> dict[str, Any]:
     runtime = (config.victims.runtime or {}).get(victim_name)
     if runtime is None:
         raise ValueError(f"Missing victims.runtime.{victim_name} configuration.")
@@ -180,7 +189,17 @@ def _require_runtime_config(config: Config, victim_name: str) -> dict[str, str]:
     if missing:
         joined = ", ".join(f"victims.runtime.{victim_name}.{key}" for key in missing)
         raise ValueError(f"Missing required runtime configuration: {joined}")
-    return runtime
+    return dict(runtime)
+
+
+def _require_train_config(config: Config, victim_name: str) -> dict[str, Any]:
+    params = config.victims.params.get(victim_name)
+    if params is None:
+        raise ValueError(f"Missing victims.params.{victim_name} configuration.")
+    train = params.get("train")
+    if not isinstance(train, dict):
+        raise ValueError(f"Missing victims.params.{victim_name}.train configuration.")
+    return dict(train)
 
 
 def _resolve_base_config(tron_root: Path, dataset_name: str) -> Path:

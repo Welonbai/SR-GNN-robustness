@@ -22,15 +22,13 @@ from attack.pipeline.core.pipeline_utils import prepare_shared_attack_artifacts
 def run_random_nonzero(
     config: Config,
     config_path: str | Path | None = None,
-    poison_epochs: int = 1,
-    attack_epochs: int = 1,
 ) -> dict[str, object]:
     if not config.data.poison_train_only:
         raise ValueError("Batch 6 expects data.poison_train_only to be true.")
     set_seed(config.seeds.fake_session_seed)
     shared = prepare_shared_attack_artifacts(
         config,
-        poison_epochs=poison_epochs,
+        run_type="random_nonzero_when_possible",
         require_poison_runner=False,
         config_path=config_path,
     )
@@ -68,7 +66,11 @@ def run_random_nonzero(
             "counts": {str(pos): int(count) for pos, count in position_counts.items()},
             "ratios": ratios,
         }
-        target_root = target_dir(config, target_item)
+        target_root = target_dir(
+            config,
+            target_item,
+            run_type="random_nonzero_when_possible",
+        )
         target_root.mkdir(parents=True, exist_ok=True)
         positions_path = target_root / "random_nonzero_position_metadata.json"
         with positions_path.open("w", encoding="utf-8") as handle:
@@ -86,8 +88,6 @@ def run_random_nonzero(
         config_path=config_path,
         context=context,
         run_type="random_nonzero_when_possible",
-        poison_epochs=poison_epochs,
-        attack_epochs=attack_epochs,
         build_poisoned=build_poisoned,
     )
 
@@ -99,16 +99,12 @@ def main() -> None:
         default="attack/configs/diginetica_attack_random_nonzero_when_possible.yaml",
         help="Path to YAML config.",
     )
-    parser.add_argument("--poison-epochs", type=int, default=1, help="Poison model epochs.")
-    parser.add_argument("--attack-epochs", type=int, default=1, help="Attack model epochs.")
     args = parser.parse_args()
 
     config = load_config(args.config)
     run_random_nonzero(
         config,
         config_path=args.config,
-        poison_epochs=args.poison_epochs,
-        attack_epochs=args.attack_epochs,
     )
 
 

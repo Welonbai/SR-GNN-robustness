@@ -7,7 +7,7 @@ from typing import Any
 import csv
 
 from attack.common.config import Config
-from attack.common.paths import canonical_split_paths
+from attack.common.paths import canonical_split_paths, split_key as canonical_paths_split_key
 from attack.data.canonical_dataset import (
     CanonicalDataset,
     canonical_dataset_exists,
@@ -28,11 +28,16 @@ class SplitConfig:
     test_days: int = 7
 
 
-def _split_key(split_config: SplitConfig) -> str:
+def _split_key(config: Config, split_config: SplitConfig) -> str:
+    if split_config == split_config_from_config(config):
+        return canonical_paths_split_key(config)
     ratio_token = f"{split_config.valid_ratio:.4f}".rstrip("0").rstrip(".")
     ratio_token = ratio_token.replace(".", "p")
     return (
-        f"unified_minitems{split_config.min_item_count}"
+        f"split_{config.data.dataset_name.lower()}"
+        f"_{config.data.split_protocol}"
+        f"_trainonly{int(bool(config.data.poison_train_only))}"
+        f"_minitems{split_config.min_item_count}"
         f"_minsess{split_config.min_session_len}"
         f"_testdays{split_config.test_days}"
         f"_valid{ratio_token}"
@@ -190,7 +195,7 @@ def build_canonical_dataset(
     metadata: dict[str, Any] = {
         "dataset_name": config.data.dataset_name,
         "split_protocol": config.data.split_protocol,
-        "split_key": _split_key(split_config),
+        "split_key": _split_key(config, split_config),
         "created_at": datetime.utcnow().isoformat() + "Z",
         "filtering": {
             "min_item_count": split_config.min_item_count,
@@ -228,7 +233,7 @@ def ensure_canonical_dataset(
     force_rebuild: bool = False,
 ) -> CanonicalDataset:
     split_config = split_config or split_config_from_config(config)
-    split_key = _split_key(split_config)
+    split_key = _split_key(config, split_config)
     paths = canonical_split_paths(config, split_key=split_key)
     if not force_rebuild and canonical_dataset_exists(paths):
         print(f"[split] Found canonical dataset at {paths['canonical_dir']}")

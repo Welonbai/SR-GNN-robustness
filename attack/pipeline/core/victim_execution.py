@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from attack.common.artifact_io import save_json
 from attack.common.config import Config
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
@@ -11,7 +12,7 @@ from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.exporters.tron_exporter import TRONExporter
 from attack.models.victim.registry import get_victim_runner
 from attack.pipeline.core.evaluator import save_predictions
-from attack.pipeline.core.pipeline_utils import build_default_opt
+from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
 from attack.pipeline.core.train_history import save_train_history
 
 
@@ -33,13 +34,14 @@ def execute_single_victim(
     run_dir: Path,
     poisoned_train_path: Path,
     target_item: int,
-    attack_epochs: int,
     eval_topk: Sequence[int],
     srg_nn_export_paths: dict[str, Path] | None = None,
     predictions_path: Path | None = None,
 ) -> VictimExecutionResult:
     max_topk = max(eval_topk)
     if victim_name == "srgnn":
+        victim_train_config = _require_victim_train_config(config, victim_name)
+        victim_epochs = int(victim_train_config["epochs"])
         if srg_nn_export_paths is None:
             raise ValueError("SRGNN execution requires clean export paths for valid/test.")
         exporter = SRGNNExporter()
@@ -48,19 +50,30 @@ def execute_single_victim(
             poisoned_labels,
             poisoned_train_path,
         )
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected={
+                "export_topk_k": int(max_topk),
+                "predictions_path": predictions_path,
+                "poisoned_train_path": poisoned_train_path,
+                "run_dir": run_dir,
+            },
+        )
 
         victim_cls = get_victim_runner(victim_name)
         attacked_runner = victim_cls(config)
-        attacked_runner.build_model(build_default_opt(attack_epochs))
+        attacked_runner.build_model(build_srgnn_opt_from_train_config(victim_train_config))
         attacked_train_data, attacked_valid_data = attacked_runner.load_dataset(
             train_path=poisoned_train_path,
             test_path=srg_nn_export_paths["valid"],
         )
-        if attack_epochs > 0:
+        if victim_epochs > 0:
             attacked_runner.train(
                 attacked_train_data,
                 attacked_valid_data,
-                attack_epochs,
+                victim_epochs,
                 target_item=target_item,
                 topk=max_topk,
             )
@@ -110,13 +123,34 @@ def execute_single_victim(
         runner = get_victim_runner(victim_name)(config)
         raw_predictions_path = run_dir / "miasrec_topk_raw.json"
         print(f"[victim:miasrec] Running MiaSRec, log at {run_dir / 'miasrec_stdout.log'}")
+        victim_train_config = _require_victim_train_config(config, victim_name)
+        pipeline_injected = {
+            "export_root": export_root,
+            "export_topk_k": int(max_topk),
+            "export_topk_path": raw_predictions_path,
+            "run_dir": run_dir,
+            "checkpoint_dir": run_dir / "miasrec_checkpoints",
+            "log_path": run_dir / "miasrec_stdout.log",
+        }
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected=pipeline_injected,
+        )
         run_info = runner.run(
             export_root=export_root,
             dataset_name=config.data.dataset_name,
             run_dir=run_dir,
             export_topk_path=raw_predictions_path,
             topk=max_topk,
-            max_epochs=attack_epochs,
+            max_epochs=int(victim_train_config["epochs"]),
+        )
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected={**pipeline_injected, **run_info},
         )
         _save_miasrec_history(run_dir, Path(run_info["log_path"]))
         rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=max_topk)
@@ -153,13 +187,35 @@ def execute_single_victim(
         runner = get_victim_runner(victim_name)(config)
         raw_predictions_path = run_dir / "tron_topk_raw.json"
         print(f"[victim:tron] Running TRON, log at {run_dir / 'tron_stdout.log'}")
+        victim_train_config = _require_victim_train_config(config, victim_name)
+        pipeline_injected = {
+            "export_root": export_root,
+            "export_topk_k": int(max_topk),
+            "export_topk_path": raw_predictions_path,
+            "run_dir": run_dir,
+            "config_dir": run_dir / "tron_config",
+            "log_path": run_dir / "tron_stdout.log",
+            "log_dir": run_dir / "tron_logs",
+        }
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected=pipeline_injected,
+        )
         run_info = runner.run(
             export_root=export_root,
             dataset_name=config.data.dataset_name,
             run_dir=run_dir,
             export_topk_path=raw_predictions_path,
             topk=max_topk,
-            max_epochs=attack_epochs,
+            max_epochs=int(victim_train_config["max_epochs"]),
+        )
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected={**pipeline_injected, **run_info},
         )
         _save_tron_history(run_dir, Path(run_info["log_dir"]))
         rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=max_topk)
@@ -183,6 +239,43 @@ def execute_single_victim(
         )
 
     raise ValueError(f"Unsupported victim model: {victim_name}")
+
+
+def _require_victim_train_config(config: Config, victim_name: str) -> dict[str, object]:
+    params = config.victims.params.get(victim_name)
+    if params is None:
+        raise ValueError(f"Missing victims.params.{victim_name} configuration.")
+    train = params.get("train")
+    if not isinstance(train, dict):
+        raise ValueError(f"Missing victims.params.{victim_name}.train configuration.")
+    return dict(train)
+
+
+def _write_victim_resolved_config(
+    config: Config,
+    victim_name: str,
+    run_dir: Path,
+    *,
+    pipeline_injected: dict[str, object],
+) -> None:
+    runtime = (config.victims.runtime or {}).get(victim_name, {})
+    payload = {
+        "victim_name": victim_name,
+        "params": _primitive_value(config.victims.params.get(victim_name, {})),
+        "runtime": _primitive_value(runtime),
+        "pipeline_injected": _primitive_value(pipeline_injected),
+    }
+    save_json(payload, run_dir / "resolved_config.json")
+
+
+def _primitive_value(value: object) -> object:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _primitive_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_primitive_value(item) for item in value]
+    return value
 
 
 def _save_miasrec_history(run_dir: Path, log_path: Path) -> None:
