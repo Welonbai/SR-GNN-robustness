@@ -125,6 +125,7 @@ class MiaSRecRunner(VictimRunnerBase):
                 handle.write(f"epochs: {int(max_epochs)}\n")
             handle.write("use_gpu: true\n")
             handle.write(f"gpu_id: {json.dumps(requested_gpu_id)}\n")
+            handle.write("show_progress: false\n")
             handle.write(f"train_batch_size: {DEFAULT_MIASREC_TRAIN_BATCH_SIZE}\n")
             handle.write(f"eval_batch_size: {DEFAULT_MIASREC_EVAL_BATCH_SIZE}\n")
             handle.write(f"export_topk_k: {int(topk)}\n")

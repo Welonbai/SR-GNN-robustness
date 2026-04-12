@@ -9,6 +9,8 @@ from attack.common.config import Config
 from attack.models.victim.base_runner import VictimRunnerBase
 from attack.models.victim.registry import register_victim
 
+DEFAULT_TRON_NUM_WORKERS = 2
+
 
 class TRONRunner(VictimRunnerBase):
     name = "tron"
@@ -105,6 +107,7 @@ class TRONRunner(VictimRunnerBase):
         config["export_topk_path"] = str(export_topk_path.resolve())
         config["export_topk_k"] = int(topk)
         config["log_dir"] = str((run_dir / "tron_logs").resolve())
+        config["num_workers"] = DEFAULT_TRON_NUM_WORKERS
         if max_epochs is not None:
             config["max_epochs"] = int(max_epochs)
 

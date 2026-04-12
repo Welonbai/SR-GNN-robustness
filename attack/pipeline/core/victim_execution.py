@@ -231,7 +231,7 @@ def _extract_loss_from_log(log_path: Path) -> dict[str, object]:
     valid_loss: list[float] = []
     if not log_path.exists():
         return {"epochs": 0, "train_loss": [], "valid_loss": [], "notes": "log not found"}
-    with log_path.open("r", encoding="utf-8") as handle:
+    with log_path.open("r", encoding="utf-8", errors="replace") as handle:
         for line in handle:
             match = train_pattern.search(line)
             if match:

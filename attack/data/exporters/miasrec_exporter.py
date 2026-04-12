@@ -58,9 +58,25 @@ class MiaSRecExporter(BaseExporter):
         valid_path = dataset_dir / f"{dataset_name}.valid.inter"
         test_path = dataset_dir / f"{dataset_name}.test.inter"
 
-        _write_inter_file(train_path, train_sessions, train_labels)
-        _write_inter_file(valid_path, valid_sessions, valid_labels)
-        _write_inter_file(test_path, test_sessions, test_labels)
+        next_session_id = 1
+        next_session_id = _write_inter_file(
+            train_path,
+            train_sessions,
+            train_labels,
+            start_index=next_session_id,
+        )
+        next_session_id = _write_inter_file(
+            valid_path,
+            valid_sessions,
+            valid_labels,
+            start_index=next_session_id,
+        )
+        _write_inter_file(
+            test_path,
+            test_sessions,
+            test_labels,
+            start_index=next_session_id,
+        )
 
         return ExportResult(
             output_dir=dataset_dir,
@@ -90,17 +106,22 @@ def _write_inter_file(
     path: Path,
     sessions: Sequence[Sequence[int]],
     labels: Sequence[int],
-) -> None:
+    *,
+    start_index: int = 1,
+) -> int:
     if len(sessions) != len(labels):
         raise ValueError("sessions and labels must be the same length.")
     path.parent.mkdir(parents=True, exist_ok=True)
+    next_index = int(start_index)
     with path.open("w", encoding="utf-8") as handle:
         handle.write("session_id:token\titem_id_list:token_seq\titem_id:token\n")
-        for idx, (session, label) in enumerate(zip(sessions, labels), start=1):
+        for session, label in zip(sessions, labels):
             if not session:
                 continue
             item_list = " ".join(str(item) for item in session)
-            handle.write(f"{idx}\t{item_list}\t{int(label)}\n")
+            handle.write(f"{next_index}\t{item_list}\t{int(label)}\n")
+            next_index += 1
+    return next_index
 
 
 __all__ = ["MiaSRecExporter"]
