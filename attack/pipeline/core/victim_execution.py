@@ -222,9 +222,9 @@ def _extract_loss_from_log(log_path: Path) -> dict[str, object]:
     import re
 
     number = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
-    train_pattern = re.compile(rf"\\btrain[_ ]loss\\b\\s*[:=]\\s*({number})", re.IGNORECASE)
+    train_pattern = re.compile(rf"\btrain[_ ]loss\b\s*[:=]\s*({number})", re.IGNORECASE)
     valid_pattern = re.compile(
-        rf"\\b(?:valid|validation|val|eval|test)[_ ]loss\\b\\s*[:=]\\s*({number})",
+        rf"\b(?:valid|validation|val|eval|test)[_ ]loss\b\s*[:=]\s*({number})",
         re.IGNORECASE,
     )
     train_loss: list[float] = []

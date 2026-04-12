@@ -150,11 +150,14 @@ def _split_train_valid(
     return train_sub, valid
 
 
-def default_split_config(dataset_name: str) -> SplitConfig:
-    name = dataset_name.lower()
-    if name.startswith("yoochoose"):
-        return SplitConfig(test_days=1)
-    return SplitConfig(test_days=7)
+def split_config_from_config(config: Config) -> SplitConfig:
+    canonical_split = config.data.canonical_split
+    return SplitConfig(
+        min_item_count=int(canonical_split.min_item_count),
+        min_session_len=int(canonical_split.min_session_len),
+        valid_ratio=float(canonical_split.valid_ratio),
+        test_days=int(canonical_split.test_days),
+    )
 
 
 def build_canonical_dataset(
@@ -163,7 +166,7 @@ def build_canonical_dataset(
     split_config: SplitConfig | None = None,
     dataset_root: Path | None = None,
 ) -> CanonicalDataset:
-    split_config = split_config or default_split_config(config.data.dataset_name)
+    split_config = split_config or split_config_from_config(config)
     dataset_root = dataset_root or Path("datasets")
     spec = resolve_dataset_spec(config.data.dataset_name, dataset_root)
     raw_path = spec.raw_path
@@ -224,7 +227,7 @@ def ensure_canonical_dataset(
     dataset_root: Path | None = None,
     force_rebuild: bool = False,
 ) -> CanonicalDataset:
-    split_config = split_config or default_split_config(config.data.dataset_name)
+    split_config = split_config or split_config_from_config(config)
     split_key = _split_key(split_config)
     paths = canonical_split_paths(config, split_key=split_key)
     if not force_rebuild and canonical_dataset_exists(paths):
@@ -244,7 +247,7 @@ def ensure_canonical_dataset(
 
 __all__ = [
     "SplitConfig",
-    "default_split_config",
+    "split_config_from_config",
     "build_canonical_dataset",
     "ensure_canonical_dataset",
 ]
