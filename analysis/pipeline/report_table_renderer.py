@@ -21,7 +21,7 @@ import pandas as pd
 import yaml
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_ROOT = REPO_ROOT / "results"
 SUPPORTED_OUTPUT_FORMATS = {"png"}
 ALLOWED_ALIGNMENTS = {"left", "center", "right"}

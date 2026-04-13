@@ -1,0 +1,21 @@
+input: results\comparisons\dpsbr_vs_random_nonzero_when_possible_diginetica_popular_0.1size\merged_long_table.csv
+output: results\comparisons\dpsbr_vs_random_nonzero_when_possible_diginetica_popular_0.1size\attack_vs_victim_metrics_
+
+filters:
+  target_item: 
+  poison_model: srgnn
+  target_type: popular
+  attack_size: 0.01
+  metric: [precision, recall, mrr, ndcg]
+  k: [5, 10, 15, 20, 25, 30, 40, 50]
+
+rows:
+  - attack_method
+
+cols:
+  - victim_model
+  - metric
+  - k
+
+value_col: value
+agg: mean

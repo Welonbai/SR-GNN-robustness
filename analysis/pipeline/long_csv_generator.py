@@ -15,8 +15,15 @@ from typing import Any
 
 import pandas as pd
 
+if __package__ is None or __package__ == "":
+    import sys
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from analysis.utils.inventory_utils import build_inventory
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTPUTS_ROOT = REPO_ROOT / "outputs"
 RESULTS_ROOT = REPO_ROOT / "results"
 CANONICAL_COLUMNS = [
@@ -106,11 +113,13 @@ def main() -> None:
 
         outdir.mkdir(parents=True, exist_ok=True)
         long_table_path = outdir / "long_table.csv"
+        inventory_path = outdir / "inventory.json"
         source_resolved_config_path = outdir / "source_resolved_config.json"
         manifest_path = outdir / "manifest.json"
 
         dataframe = sort_long_table(pd.DataFrame(rows, columns=CANONICAL_COLUMNS))
         dataframe.to_csv(long_table_path, index=False)
+        write_json(inventory_path, build_inventory(dataframe))
         shutil.copyfile(resolved_config_path, source_resolved_config_path)
 
         manifest = {
@@ -120,6 +129,7 @@ def main() -> None:
             "source_resolved_config_path": to_repo_relative(resolved_config_path),
             "output_dir": to_repo_relative(outdir),
             "generated_files": [
+                "inventory.json",
                 "long_table.csv",
                 "manifest.json",
                 "source_resolved_config.json",

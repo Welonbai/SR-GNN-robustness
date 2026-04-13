@@ -15,7 +15,7 @@ import pandas as pd
 import yaml
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_ROOT = REPO_ROOT / "results"
 ALLOWED_AGGREGATIONS = {
     "mean",
@@ -38,9 +38,8 @@ class AnalysisError(ValueError):
 class ViewSpec:
     """Validated view spec content."""
 
-    name: str
     input_csv: Path
-    output_dir: Path
+    output_bundle_dir: Path
     filters: dict[str, Any]
     rows: list[str]
     cols: list[str]
@@ -89,7 +88,7 @@ def main() -> None:
             )
 
         report_dataframe = build_report_table(filtered_dataframe, spec)
-        bundle_dir = spec.output_dir / spec.name
+        bundle_dir = spec.output_bundle_dir
         bundle_dir.mkdir(parents=True, exist_ok=True)
 
         table_path = bundle_dir / "table.csv"
@@ -114,7 +113,7 @@ def main() -> None:
 
         print(
             f"Wrote report bundle '{bundle_dir}' from '{spec.input_csv}' "
-            f"using view '{spec.name}'."
+            f"using view output '{bundle_dir.name}'."
         )
     except AnalysisError as exc:
         raise SystemExit(f"Error: {exc}") from exc
@@ -122,15 +121,14 @@ def main() -> None:
 
 def parse_view_spec(payload: Mapping[str, Any]) -> ViewSpec:
     """Validate and normalize a view YAML spec."""
-    name = require_nonempty_string(payload.get("name"), label="name")
     input_csv = resolve_existing_path(
         require_nonempty_string(payload.get("input"), label="input"),
         label="view input CSV",
     )
     ensure_path_within(input_csv, RESULTS_ROOT, label="view input CSV")
 
-    output_dir = resolve_repo_path(require_nonempty_string(payload.get("output_dir"), label="output_dir"))
-    ensure_path_within(output_dir, RESULTS_ROOT, label="view output_dir")
+    output_bundle_dir = resolve_output_bundle_dir(payload)
+    ensure_path_within(output_bundle_dir, RESULTS_ROOT, label="view output")
 
     filters = normalize_filters(payload.get("filters", {}))
     rows = require_string_list(payload.get("rows"), label="rows")
@@ -143,15 +141,31 @@ def parse_view_spec(payload: Mapping[str, Any]) -> ViewSpec:
         )
 
     return ViewSpec(
-        name=name,
         input_csv=input_csv,
-        output_dir=output_dir,
+        output_bundle_dir=output_bundle_dir,
         filters=filters,
         rows=rows,
         cols=cols,
         value_col=value_col,
         agg=agg,
     )
+
+
+def resolve_output_bundle_dir(payload: Mapping[str, Any]) -> Path:
+    """Resolve the final view bundle directory from one config mapping."""
+    output_value = payload.get("output")
+    if output_value is not None:
+        output_bundle_dir = resolve_repo_path(require_nonempty_string(output_value, label="output"))
+        return output_bundle_dir
+
+    legacy_name = payload.get("name")
+    legacy_output_dir = payload.get("output_dir")
+    if legacy_name is None or legacy_output_dir is None:
+        raise AnalysisError("The view config must contain 'output'.")
+
+    output_dir = resolve_repo_path(require_nonempty_string(legacy_output_dir, label="output_dir"))
+    name = require_nonempty_string(legacy_name, label="name")
+    return output_dir / name
 
 
 def apply_filters(dataframe: pd.DataFrame, filters: Mapping[str, Any]) -> pd.DataFrame:
@@ -279,6 +293,8 @@ def normalize_filters(value: Any) -> dict[str, Any]:
     normalized: dict[str, Any] = {}
     for raw_key, raw_value in value.items():
         key = require_nonempty_string(raw_key, label="filters key")
+        if raw_value is None:
+            continue
         if isinstance(raw_value, list):
             normalized[key] = [normalize_scalar(item) for item in raw_value]
         else:

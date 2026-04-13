@@ -14,8 +14,15 @@ from typing import Any
 import pandas as pd
 import yaml
 
+if __package__ is None or __package__ == "":
+    import sys
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from analysis.utils.inventory_utils import build_inventory
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_ROOT = REPO_ROOT / "results"
 RUNS_ROOT = RESULTS_ROOT / "runs"
 COMPARISONS_ROOT = RESULTS_ROOT / "comparisons"
@@ -100,9 +107,11 @@ def main() -> None:
 
         spec.output_dir.mkdir(parents=True, exist_ok=True)
         merged_csv_path = spec.output_dir / "merged_long_table.csv"
+        inventory_path = spec.output_dir / "inventory.json"
         manifest_path = spec.output_dir / "manifest.json"
 
         merged_dataframe.to_csv(merged_csv_path, index=False)
+        write_json(inventory_path, build_inventory(merged_dataframe))
         manifest = {
             "comparison_id": spec.comparison_id,
             "source_run_ids": spec.run_ids,
@@ -110,6 +119,7 @@ def main() -> None:
             "source_row_counts": source_row_counts,
             "output_dir": to_repo_relative(spec.output_dir),
             "generated_files": [
+                "inventory.json",
                 "merged_long_table.csv",
                 "manifest.json",
             ],
@@ -131,8 +141,19 @@ def parse_comparison_spec(payload: Mapping[str, Any]) -> ComparisonSpec:
     """Validate and normalize a comparison YAML spec."""
     comparison_id = require_nonempty_string(payload.get("comparison_id"), label="comparison_id")
     run_ids = require_string_list(payload.get("runs"), label="runs")
-    output_dir = resolve_repo_path(require_nonempty_string(payload.get("output_dir"), label="output_dir"))
-    ensure_path_within(output_dir, COMPARISONS_ROOT, label="comparison output_dir")
+    output_dir = COMPARISONS_ROOT / comparison_id
+
+    legacy_output_dir = payload.get("output_dir")
+    if legacy_output_dir is not None:
+        legacy_output_dir_path = resolve_repo_path(
+            require_nonempty_string(legacy_output_dir, label="output_dir")
+        )
+        ensure_path_within(legacy_output_dir_path, COMPARISONS_ROOT, label="comparison output_dir")
+        if legacy_output_dir_path != output_dir.resolve():
+            raise AnalysisError(
+                "The comparison config no longer needs 'output_dir'. "
+                f"It is derived as 'results/comparisons/{comparison_id}'."
+            )
 
     return ComparisonSpec(
         comparison_id=comparison_id,
