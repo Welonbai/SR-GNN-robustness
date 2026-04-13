@@ -1,0 +1,19 @@
+name: attack_vs_victim_metrics
+
+input: results/comparisons/diginetica_attack_compare/merged_long_table.csv
+output_dir: results/comparisons/diginetica_attack_compare
+
+filters:
+  metric: [precision, recall, mrr, ndcg]
+  k: [10, 20, 25]
+
+rows:
+  - attack_method
+
+cols:
+  - victim_model
+  - metric
+  - k
+
+value_col: value
+agg: mean

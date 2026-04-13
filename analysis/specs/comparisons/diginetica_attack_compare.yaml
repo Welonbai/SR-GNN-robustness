@@ -1,0 +1,7 @@
+comparison_id: diginetica_attack_compare
+
+runs:
+  - diginetica__attack_dpsbr__eval_ea7308a8e0__summary_dpsbr_baseline
+  - diginetica__attack_random_nonzero_when_possible__eval_1b8a0c10c9__summary_random_nonzero_when_possible
+
+output_dir: results/comparisons/diginetica_attack_compare
