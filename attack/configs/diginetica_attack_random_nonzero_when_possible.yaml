@@ -38,7 +38,7 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 5
+  count: 3
   reuse_saved_targets: true
 
 victims:
@@ -58,7 +58,7 @@ victims:
         nonhybrid: false
     miasrec:
       train:
-        epochs: 8
+        epochs: 4
         train_batch_size: 512
         eval_batch_size: 256
     tron:

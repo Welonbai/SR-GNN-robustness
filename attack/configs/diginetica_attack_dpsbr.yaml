@@ -58,7 +58,7 @@ victims:
         nonhybrid: false
     miasrec:
       train:
-        epochs: 8
+        epochs: 4
         train_batch_size: 512
         eval_batch_size: 256
     tron:

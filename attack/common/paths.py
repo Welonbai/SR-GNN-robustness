@@ -269,6 +269,7 @@ def run_metadata_paths(config: Config, *, run_type: str) -> dict[str, Path]:
         "resolved_config": run_root / "resolved_config.json",
         "key_payloads": run_root / "key_payloads.json",
         "artifact_manifest": run_root / "artifact_manifest.json",
+        "progress": run_root / "progress.json",
         "summary": run_root / f"summary_{run_type}.json",
     }
 

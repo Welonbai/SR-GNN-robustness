@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
+import time
 from typing import Callable
 
 from attack.common.artifact_io import load_json, save_json
@@ -96,12 +98,22 @@ def run_targets_and_victims(
     save_json(resolved_payload, metadata_paths["resolved_config"])
     save_json(key_payloads, metadata_paths["key_payloads"])
     save_json(artifact_manifest, metadata_paths["artifact_manifest"])
+    run_started_monotonic = time.monotonic()
+    progress_payload = _initial_progress_payload(config, run_type=run_type)
+    save_json(progress_payload, metadata_paths["progress"])
 
     target_items = resolve_target_items(
         context.stats,
         config,
         shared_paths=context.shared_paths,
     )
+    _populate_progress_plan(
+        progress_payload,
+        target_items=[int(item) for item in target_items],
+        victim_names=list(config.victims.enabled),
+        elapsed_seconds=time.monotonic() - run_started_monotonic,
+    )
+    save_json(progress_payload, metadata_paths["progress"])
     summary: dict[str, object] = {
         "run_type": run_type,
         "target_items": [int(item) for item in target_items],
@@ -114,90 +126,139 @@ def run_targets_and_victims(
     if "srgnn" in config.victims.enabled and context.export_paths is None:
         raise ValueError("SRGNN victim execution requires export paths for valid/test.")
 
-    for target_item in target_items:
-        target_payload = build_poisoned(int(target_item))
-        target_summary = {
-            "target_item": int(target_item),
-            "victims": {},
-        }
-        if target_payload.metadata:
-            target_summary["metadata"] = dict(target_payload.metadata)
-        for victim_name in config.victims.enabled:
-            artifacts = run_artifact_paths(
-                config,
-                run_type=run_type,
-                target_id=target_item,
-                victim_name=victim_name,
-            )
-            run_dir = artifacts["run_dir"]
-            run_dir.mkdir(parents=True, exist_ok=True)
-            if config_path:
-                shutil.copyfile(config_path, artifacts["config_snapshot"])
-
-            victim_result, reused = _maybe_reuse_or_execute_victim(
-                config,
-                victim_name=victim_name,
-                canonical_dataset=context.canonical_dataset,
-                poisoned_sessions=target_payload.poisoned.sessions,
-                poisoned_labels=target_payload.poisoned.labels,
-                run_dir=run_dir,
-                poisoned_train_path=artifacts["poisoned_train"],
-                target_item=int(target_item),
-                eval_topk=config.evaluation.topk,
-                srg_nn_export_paths=context.export_paths,
-                predictions_path=artifacts["predictions"],
-                artifacts=artifacts,
-            )
-
-            metrics, available = evaluate_targeted_metrics(
-                victim_result.predictions,
-                target_item=int(target_item),
-                metrics=config.evaluation.metrics,
-                topk=config.evaluation.topk,
-            )
-
-            payload: dict[str, object] = {
-                "run_type": run_type,
-                "victim": victim_name,
+    current_run: dict[str, object] | None = None
+    victim_names = list(config.victims.enabled)
+    try:
+        for target_index, target_item in enumerate(target_items, start=1):
+            current_run = {
+                "target_index": int(target_index),
                 "target_item": int(target_item),
-                "fake_session_count": int(context.fake_session_count),
-                "clean_session_count": int(len(context.clean_sessions)),
-                "training": _victim_training_summary(config, victim_name),
-                "metrics_available": bool(available),
-                "metrics": metrics,
-                "predictions_path": str(artifacts["predictions"]),
+                "victim_index": None,
+                "victim_name": None,
+                "overall_index": None,
             }
-            if victim_result.poisoned_train_path is not None:
-                payload["poisoned_train_path"] = str(victim_result.poisoned_train_path)
+            target_payload = build_poisoned(int(target_item))
+            target_summary = {
+                "target_item": int(target_item),
+                "victims": {},
+            }
             if target_payload.metadata:
-                payload.update(target_payload.metadata)
-            if victim_result.extra:
-                payload.update(victim_result.extra)
-            save_metrics(payload, artifacts["metrics"])
+                target_summary["metadata"] = dict(target_payload.metadata)
+            for victim_index, victim_name in enumerate(victim_names, start=1):
+                overall_index = ((target_index - 1) * len(victim_names)) + victim_index
+                current_run = {
+                    "target_index": int(target_index),
+                    "target_item": int(target_item),
+                    "victim_index": int(victim_index),
+                    "victim_name": victim_name,
+                    "overall_index": int(overall_index),
+                }
+                _mark_progress_run_started(
+                    progress_payload,
+                    current_run=current_run,
+                    elapsed_seconds=time.monotonic() - run_started_monotonic,
+                )
+                save_json(progress_payload, metadata_paths["progress"])
 
-            target_summary["victims"][victim_name] = {
-                "metrics_path": str(artifacts["metrics"]),
-                "predictions_path": str(artifacts["predictions"]),
-                "metrics": metrics,
-                "metrics_available": bool(available),
-                "reused_predictions": bool(reused),
-            }
-            _update_artifact_manifest(
-                artifact_manifest,
-                target_item=int(target_item),
-                victim_name=victim_name,
-                artifacts=artifacts,
-                victim_result=victim_result,
-                reused=reused,
-            )
-            save_json(artifact_manifest, metadata_paths["artifact_manifest"])
+                artifacts = run_artifact_paths(
+                    config,
+                    run_type=run_type,
+                    target_id=target_item,
+                    victim_name=victim_name,
+                )
+                run_dir = artifacts["run_dir"]
+                run_dir.mkdir(parents=True, exist_ok=True)
+                if config_path:
+                    shutil.copyfile(config_path, artifacts["config_snapshot"])
 
-        summary["targets"][str(target_item)] = target_summary
+                victim_result, reused = _maybe_reuse_or_execute_victim(
+                    config,
+                    victim_name=victim_name,
+                    canonical_dataset=context.canonical_dataset,
+                    poisoned_sessions=target_payload.poisoned.sessions,
+                    poisoned_labels=target_payload.poisoned.labels,
+                    run_dir=run_dir,
+                    poisoned_train_path=artifacts["poisoned_train"],
+                    target_item=int(target_item),
+                    eval_topk=config.evaluation.topk,
+                    srg_nn_export_paths=context.export_paths,
+                    predictions_path=artifacts["predictions"],
+                    artifacts=artifacts,
+                )
 
-    save_metrics(summary, summary_path)
-    artifact_manifest["output_files"]["summary"] = str(summary_path)
-    save_json(artifact_manifest, metadata_paths["artifact_manifest"])
-    return summary
+                metrics, available = evaluate_targeted_metrics(
+                    victim_result.predictions,
+                    target_item=int(target_item),
+                    metrics=config.evaluation.metrics,
+                    topk=config.evaluation.topk,
+                )
+
+                payload: dict[str, object] = {
+                    "run_type": run_type,
+                    "victim": victim_name,
+                    "target_item": int(target_item),
+                    "fake_session_count": int(context.fake_session_count),
+                    "clean_session_count": int(len(context.clean_sessions)),
+                    "training": _victim_training_summary(config, victim_name),
+                    "metrics_available": bool(available),
+                    "metrics": metrics,
+                    "predictions_path": str(artifacts["predictions"]),
+                }
+                if victim_result.poisoned_train_path is not None:
+                    payload["poisoned_train_path"] = str(victim_result.poisoned_train_path)
+                if target_payload.metadata:
+                    payload.update(target_payload.metadata)
+                if victim_result.extra:
+                    payload.update(victim_result.extra)
+                save_metrics(payload, artifacts["metrics"])
+
+                target_summary["victims"][victim_name] = {
+                    "metrics_path": str(artifacts["metrics"]),
+                    "predictions_path": str(artifacts["predictions"]),
+                    "metrics": metrics,
+                    "metrics_available": bool(available),
+                    "reused_predictions": bool(reused),
+                }
+                _update_artifact_manifest(
+                    artifact_manifest,
+                    target_item=int(target_item),
+                    victim_name=victim_name,
+                    artifacts=artifacts,
+                    victim_result=victim_result,
+                    reused=reused,
+                )
+                save_json(artifact_manifest, metadata_paths["artifact_manifest"])
+                _mark_progress_run_completed(
+                    progress_payload,
+                    current_run=current_run,
+                    reused=reused,
+                    elapsed_seconds=time.monotonic() - run_started_monotonic,
+                )
+                save_json(progress_payload, metadata_paths["progress"])
+
+            summary["targets"][str(target_item)] = target_summary
+            current_run = None
+
+        save_metrics(summary, summary_path)
+        artifact_manifest["output_files"]["summary"] = str(summary_path)
+        save_json(artifact_manifest, metadata_paths["artifact_manifest"])
+        _mark_progress_finished(
+            progress_payload,
+            status="completed",
+            elapsed_seconds=time.monotonic() - run_started_monotonic,
+        )
+        save_json(progress_payload, metadata_paths["progress"])
+        return summary
+    except Exception as exc:
+        _mark_progress_finished(
+            progress_payload,
+            status="failed",
+            current_run=current_run,
+            error=str(exc),
+            elapsed_seconds=time.monotonic() - run_started_monotonic,
+        )
+        save_json(progress_payload, metadata_paths["progress"])
+        raise
 
 
 def _resolved_config_payload(config: Config, *, run_type: str) -> dict[str, object]:
@@ -267,9 +328,177 @@ def _initial_artifact_manifest(
             "resolved_config": str(metadata_paths["resolved_config"]),
             "key_payloads": str(metadata_paths["key_payloads"]),
             "artifact_manifest": str(metadata_paths["artifact_manifest"]),
+            "progress": str(metadata_paths["progress"]),
             "summary": str(metadata_paths["summary"]),
         },
     }
+
+
+def _initial_progress_payload(config: Config, *, run_type: str) -> dict[str, object]:
+    timestamp = _utc_timestamp()
+    return {
+        "run_type": run_type,
+        "status": "initializing",
+        "started_at": timestamp,
+        "updated_at": timestamp,
+        "completed_at": None,
+        "elapsed_seconds": 0.0,
+        "total_targets": 0,
+        "total_victims": int(len(config.victims.enabled)),
+        "total_runs": 0,
+        "completed_runs": 0,
+        "target_items": [],
+        "current": None,
+        "runs": [],
+    }
+
+
+def _populate_progress_plan(
+    progress_payload: dict[str, object],
+    *,
+    target_items: list[int],
+    victim_names: list[str],
+    elapsed_seconds: float,
+) -> None:
+    timestamp = _utc_timestamp()
+    runs: list[dict[str, object]] = []
+    overall_index = 1
+    for target_index, target_item in enumerate(target_items, start=1):
+        for victim_index, victim_name in enumerate(victim_names, start=1):
+            runs.append(
+                {
+                    "overall_index": int(overall_index),
+                    "target_index": int(target_index),
+                    "target_item": int(target_item),
+                    "victim_index": int(victim_index),
+                    "victim_name": victim_name,
+                    "status": "pending",
+                    "started_at": None,
+                    "completed_at": None,
+                    "reused_predictions": None,
+                }
+            )
+            overall_index += 1
+    progress_payload["status"] = "running"
+    progress_payload["updated_at"] = timestamp
+    progress_payload["elapsed_seconds"] = round(float(elapsed_seconds), 3)
+    progress_payload["total_targets"] = int(len(target_items))
+    progress_payload["total_victims"] = int(len(victim_names))
+    progress_payload["total_runs"] = int(len(runs))
+    progress_payload["completed_runs"] = 0
+    progress_payload["target_items"] = [int(item) for item in target_items]
+    progress_payload["current"] = None
+    progress_payload["runs"] = runs
+
+
+def _mark_progress_run_started(
+    progress_payload: dict[str, object],
+    *,
+    current_run: dict[str, object],
+    elapsed_seconds: float,
+) -> None:
+    timestamp = _utc_timestamp()
+    progress_payload["status"] = "running"
+    progress_payload["updated_at"] = timestamp
+    progress_payload["elapsed_seconds"] = round(float(elapsed_seconds), 3)
+    progress_payload["current"] = dict(current_run)
+    entry = _progress_run_entry(progress_payload, current_run)
+    if entry is None:
+        return
+    entry["status"] = "running"
+    if entry.get("started_at") is None:
+        entry["started_at"] = timestamp
+    entry["completed_at"] = None
+    entry["reused_predictions"] = None
+
+
+def _mark_progress_run_completed(
+    progress_payload: dict[str, object],
+    *,
+    current_run: dict[str, object],
+    reused: bool,
+    elapsed_seconds: float,
+) -> None:
+    timestamp = _utc_timestamp()
+    progress_payload["status"] = "running"
+    progress_payload["updated_at"] = timestamp
+    progress_payload["elapsed_seconds"] = round(float(elapsed_seconds), 3)
+    progress_payload["current"] = None
+    entry = _progress_run_entry(progress_payload, current_run)
+    if entry is not None:
+        if entry.get("started_at") is None:
+            entry["started_at"] = timestamp
+        entry["status"] = "completed"
+        entry["completed_at"] = timestamp
+        entry["reused_predictions"] = bool(reused)
+    progress_payload["completed_runs"] = _completed_run_count(progress_payload)
+
+
+def _mark_progress_finished(
+    progress_payload: dict[str, object],
+    *,
+    status: str,
+    elapsed_seconds: float,
+    current_run: dict[str, object] | None = None,
+    error: str | None = None,
+) -> None:
+    timestamp = _utc_timestamp()
+    progress_payload["status"] = status
+    progress_payload["updated_at"] = timestamp
+    progress_payload["completed_at"] = timestamp
+    progress_payload["elapsed_seconds"] = round(float(elapsed_seconds), 3)
+    progress_payload["current"] = dict(current_run) if current_run is not None else None
+    if error:
+        progress_payload["error"] = error
+    entry = _progress_run_entry(progress_payload, current_run)
+    if status == "failed" and entry is not None and entry.get("status") != "completed":
+        if entry.get("started_at") is None:
+            entry["started_at"] = timestamp
+        entry["status"] = "failed"
+        entry["completed_at"] = timestamp
+    if status == "completed":
+        progress_payload["completed_runs"] = int(progress_payload.get("total_runs", 0))
+        progress_payload["current"] = None
+    else:
+        progress_payload["completed_runs"] = _completed_run_count(progress_payload)
+
+
+def _progress_run_entry(
+    progress_payload: dict[str, object],
+    current_run: dict[str, object] | None,
+) -> dict[str, object] | None:
+    if current_run is None:
+        return None
+    overall_index = current_run.get("overall_index")
+    if overall_index is None:
+        return None
+    runs = progress_payload.get("runs")
+    if not isinstance(runs, list):
+        return None
+    index = int(overall_index) - 1
+    if 0 <= index < len(runs):
+        entry = runs[index]
+        if isinstance(entry, dict) and int(entry.get("overall_index", -1)) == int(overall_index):
+            return entry
+    for entry in runs:
+        if isinstance(entry, dict) and int(entry.get("overall_index", -1)) == int(overall_index):
+            return entry
+    return None
+
+
+def _completed_run_count(progress_payload: dict[str, object]) -> int:
+    runs = progress_payload.get("runs")
+    if not isinstance(runs, list):
+        return 0
+    return sum(
+        1
+        for entry in runs
+        if isinstance(entry, dict) and entry.get("status") == "completed"
+    )
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _maybe_reuse_or_execute_victim(
