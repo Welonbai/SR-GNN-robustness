@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 import shutil
 import time
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from attack.common.artifact_io import load_json, save_json
 from attack.common.config import Config
@@ -30,6 +31,10 @@ from attack.data.session_stats import SessionStats
 from attack.pipeline.core.evaluator import evaluate_targeted_metrics, save_metrics
 from attack.pipeline.core.pipeline_utils import SharedAttackArtifacts, resolve_target_items
 from attack.pipeline.core.victim_execution import VictimExecutionResult, execute_single_victim
+
+
+PROGRESS_TIMEZONE = "Asia/Taipei"
+_PROGRESS_ZONE = ZoneInfo(PROGRESS_TIMEZONE)
 
 
 @dataclass(frozen=True)
@@ -335,9 +340,10 @@ def _initial_artifact_manifest(
 
 
 def _initial_progress_payload(config: Config, *, run_type: str) -> dict[str, object]:
-    timestamp = _utc_timestamp()
+    timestamp = _progress_timestamp()
     return {
         "run_type": run_type,
+        "timezone": PROGRESS_TIMEZONE,
         "status": "initializing",
         "started_at": timestamp,
         "updated_at": timestamp,
@@ -360,7 +366,7 @@ def _populate_progress_plan(
     victim_names: list[str],
     elapsed_seconds: float,
 ) -> None:
-    timestamp = _utc_timestamp()
+    timestamp = _progress_timestamp()
     runs: list[dict[str, object]] = []
     overall_index = 1
     for target_index, target_item in enumerate(target_items, start=1):
@@ -397,7 +403,7 @@ def _mark_progress_run_started(
     current_run: dict[str, object],
     elapsed_seconds: float,
 ) -> None:
-    timestamp = _utc_timestamp()
+    timestamp = _progress_timestamp()
     progress_payload["status"] = "running"
     progress_payload["updated_at"] = timestamp
     progress_payload["elapsed_seconds"] = round(float(elapsed_seconds), 3)
@@ -419,7 +425,7 @@ def _mark_progress_run_completed(
     reused: bool,
     elapsed_seconds: float,
 ) -> None:
-    timestamp = _utc_timestamp()
+    timestamp = _progress_timestamp()
     progress_payload["status"] = "running"
     progress_payload["updated_at"] = timestamp
     progress_payload["elapsed_seconds"] = round(float(elapsed_seconds), 3)
@@ -442,7 +448,7 @@ def _mark_progress_finished(
     current_run: dict[str, object] | None = None,
     error: str | None = None,
 ) -> None:
-    timestamp = _utc_timestamp()
+    timestamp = _progress_timestamp()
     progress_payload["status"] = status
     progress_payload["updated_at"] = timestamp
     progress_payload["completed_at"] = timestamp
@@ -497,8 +503,8 @@ def _completed_run_count(progress_payload: dict[str, object]) -> int:
     )
 
 
-def _utc_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+def _progress_timestamp() -> str:
+    return datetime.now(_PROGRESS_ZONE).isoformat()
 
 
 def _maybe_reuse_or_execute_victim(

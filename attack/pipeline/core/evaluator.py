@@ -60,7 +60,7 @@ def save_metrics(metrics: Mapping[str, Any], path: str | Path) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
-        json.dump(metrics, handle, indent=2, sort_keys=True)
+        json.dump(metrics, handle, indent=2)
 
 
 def save_predictions(
