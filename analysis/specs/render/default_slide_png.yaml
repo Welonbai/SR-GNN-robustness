@@ -1,0 +1,24 @@
+style_name: default_slide_png
+
+output_format: png
+
+title:
+  template: "Attack Comparison Across Victim Models on {dataset}"
+  align: center
+  font_size: 18
+  color: black
+
+figure:
+  width: 14
+  height: 6
+  dpi: 220
+  background_color: white
+
+table:
+  font_size: 12
+  round_digits: 6
+  text_color: black
+  show_grid: true
+  auto_shrink: false
+  wrap_text: false
+  cell_align: center
