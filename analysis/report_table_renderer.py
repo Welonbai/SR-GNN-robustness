@@ -81,14 +81,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Render one report-table bundle into a PNG image.",
     )
     parser.add_argument(
-        "--bundle-dir",
+        "--input-dir",
         required=True,
         help="Path to one view bundle directory containing table.csv and meta.json.",
     )
     parser.add_argument(
-        "--spec",
+        "--bundle-dir",
+        dest="input_dir",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--config",
         required=True,
-        help="Path to one render YAML spec.",
+        help="Path to one render YAML config.",
+    )
+    parser.add_argument(
+        "--spec",
+        dest="config",
+        help=argparse.SUPPRESS,
     )
     return parser
 
@@ -99,14 +109,14 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        bundle_dir = resolve_existing_directory(args.bundle_dir, label="bundle directory")
+        bundle_dir = resolve_existing_directory(args.input_dir, label="input directory")
         ensure_path_within(bundle_dir, RESULTS_ROOT, label="bundle directory")
 
         table_path = require_file(bundle_dir / "table.csv", label="bundle table")
         meta_path = require_file(bundle_dir / "meta.json", label="bundle metadata")
-        spec_path = resolve_existing_file(args.spec, label="render spec")
+        config_path = resolve_existing_file(args.config, label="render config")
 
-        render_spec = parse_render_spec(load_yaml_mapping(spec_path, label="render spec"))
+        render_spec = parse_render_spec(load_yaml_mapping(config_path, label="render config"))
         table_dataframe = load_table_csv(table_path)
         meta_payload = load_json_mapping(meta_path, label="bundle metadata")
         identifier_columns = extract_identifier_columns(meta_payload=meta_payload, dataframe=table_dataframe)

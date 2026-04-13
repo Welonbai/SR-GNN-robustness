@@ -54,9 +54,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Build one pivoted report-table bundle from a long-table CSV.",
     )
     parser.add_argument(
-        "--spec",
+        "--config",
         required=True,
-        help="Path to a view YAML spec.",
+        help="Path to a view YAML config.",
+    )
+    parser.add_argument(
+        "--spec",
+        dest="config",
+        help=argparse.SUPPRESS,
     )
     return parser
 
@@ -67,8 +72,8 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        spec_path = resolve_existing_path(args.spec, label="view spec")
-        spec = parse_view_spec(load_yaml_mapping(spec_path, label="view spec"))
+        config_path = resolve_existing_path(args.config, label="view config")
+        spec = parse_view_spec(load_yaml_mapping(config_path, label="view config"))
 
         dataframe = pd.read_csv(spec.input_csv)
         validate_required_columns(
@@ -80,7 +85,7 @@ def main() -> None:
         filtered_dataframe = apply_filters(dataframe, spec.filters)
         if filtered_dataframe.empty:
             raise AnalysisError(
-                f"The filters in '{spec_path}' produced an empty table from '{spec.input_csv}'."
+                f"The filters in '{config_path}' produced an empty table from '{spec.input_csv}'."
             )
 
         report_dataframe = build_report_table(filtered_dataframe, spec)

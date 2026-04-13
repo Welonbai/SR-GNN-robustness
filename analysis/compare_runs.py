@@ -55,9 +55,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Merge multiple per-run long_table.csv files into one comparison bundle.",
     )
     parser.add_argument(
-        "--spec",
+        "--config",
         required=True,
-        help="Path to a comparison YAML spec.",
+        help="Path to a comparison YAML config.",
+    )
+    parser.add_argument(
+        "--spec",
+        dest="config",
+        help=argparse.SUPPRESS,
     )
     return parser
 
@@ -68,8 +73,8 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        spec_path = resolve_existing_path(args.spec, label="comparison spec")
-        spec = parse_comparison_spec(load_yaml_mapping(spec_path, label="comparison spec"))
+        config_path = resolve_existing_path(args.config, label="comparison config")
+        spec = parse_comparison_spec(load_yaml_mapping(config_path, label="comparison config"))
 
         frames: list[pd.DataFrame] = []
         source_csvs: list[str] = []

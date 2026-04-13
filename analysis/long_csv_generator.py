@@ -7,7 +7,6 @@ import argparse
 import json
 import re
 import shutil
-import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -69,13 +68,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to one summary JSON under outputs/.",
     )
     parser.add_argument(
-        "--outdir",
-        required=True,
-        help="Output directory under results/ for this run bundle.",
-    )
-    parser.add_argument(
-        "--run-id",
-        help="Optional readable analysis identifier. If omitted, it is derived from the summary path.",
+        "--output-name",
+        "--name",
+        dest="output_name",
+        help=(
+            "Optional output folder name under results/runs/. "
+            "If omitted, it is derived from the summary path."
+        ),
     )
     return parser
 
@@ -87,9 +86,7 @@ def main() -> None:
 
     try:
         summary_path = resolve_existing_path(args.summary, label="summary JSON")
-        outdir = resolve_output_path(args.outdir)
         ensure_path_within(summary_path, OUTPUTS_ROOT, label="summary JSON")
-        ensure_path_within(outdir, RESULTS_ROOT, label="output directory")
 
         resolved_config_path = summary_path.parent / "resolved_config.json"
         if not resolved_config_path.is_file():
@@ -100,10 +97,10 @@ def main() -> None:
         summary_payload = load_json_mapping(summary_path, label="summary JSON")
         resolved_config_payload = load_json_mapping(resolved_config_path, label="resolved_config JSON")
 
-        run_id = normalize_run_id(args.run_id) if args.run_id else derive_run_id(summary_path)
-        warn_on_run_id_outdir_mismatch(run_id=run_id, outdir=outdir)
+        output_name = resolve_output_name(args.output_name, summary_path=summary_path)
+        outdir = RESULTS_ROOT / "runs" / output_name
         metadata = extract_run_metadata(summary_payload, resolved_config_payload)
-        rows = extract_rows(summary_payload, metadata=metadata, run_id=run_id)
+        rows = extract_rows(summary_payload, metadata=metadata, run_id=output_name)
         if not rows:
             raise AnalysisError(f"No metric rows were extracted from '{summary_path}'.")
 
@@ -118,7 +115,7 @@ def main() -> None:
 
         manifest = {
             "canonical_columns": CANONICAL_COLUMNS,
-            "run_id": run_id,
+            "run_id": output_name,
             "source_summary_path": to_repo_relative(summary_path),
             "source_resolved_config_path": to_repo_relative(resolved_config_path),
             "output_dir": to_repo_relative(outdir),
@@ -134,7 +131,7 @@ def main() -> None:
 
         print(
             f"Wrote {len(rows)} canonical rows to '{long_table_path}' "
-            f"for run_id '{run_id}'."
+            f"for output folder '{output_name}'."
         )
     except AnalysisError as exc:
         raise SystemExit(f"Error: {exc}") from exc
@@ -148,11 +145,6 @@ def resolve_existing_path(raw_path: str, *, label: str) -> Path:
     if not path.is_file():
         raise AnalysisError(f"The {label} path is not a file: '{path}'.")
     return path
-
-
-def resolve_output_path(raw_path: str) -> Path:
-    """Resolve an output directory path provided on the CLI."""
-    return Path(raw_path).expanduser().resolve()
 
 
 def ensure_path_within(path: Path, root: Path, *, label: str) -> None:
@@ -192,37 +184,28 @@ def to_repo_relative(path: Path) -> str:
     return path.resolve().relative_to(REPO_ROOT).as_posix()
 
 
-def normalize_run_id(raw_run_id: str) -> str:
-    """Normalize a user-provided run identifier into a safe deterministic form."""
-    candidate = raw_run_id.strip()
-    if not candidate:
-        raise AnalysisError("The provided --run-id is empty.")
+def resolve_output_name(raw_output_name: str | None, *, summary_path: Path) -> str:
+    """Resolve the final output folder name under results/runs/."""
+    if raw_output_name is None:
+        return derive_output_name(summary_path)
 
-    pieces = [sanitize_component(part) for part in re.split(r"(?:[\\/]+|__+)", candidate)]
-    normalized = "__".join(piece for piece in pieces if piece)
+    candidate = raw_output_name.strip()
+    if not candidate:
+        raise AnalysisError("The provided --output-name is empty.")
+    if "\\" in candidate or "/" in candidate:
+        raise AnalysisError("The --output-name value must be a single folder name, not a path.")
+
+    parts = [sanitize_component(part) for part in re.split(r"__+", candidate)]
+    normalized = "__".join(part for part in parts if part)
     if not normalized:
         raise AnalysisError(
-            f"The provided --run-id '{raw_run_id}' does not contain any usable characters."
+            f"The provided --output-name '{raw_output_name}' does not contain any usable characters."
         )
     return normalized
 
 
-def warn_on_run_id_outdir_mismatch(*, run_id: str, outdir: Path) -> None:
-    """Print a non-fatal warning when the output directory name does not match the run_id."""
-    if outdir.name == run_id:
-        return
-
-    print(
-        (
-            f"Warning: run_id '{run_id}' does not match output directory name "
-            f"'{outdir.name}'. Writing files to '{outdir}'."
-        ),
-        file=sys.stderr,
-    )
-
-
-def derive_run_id(summary_path: Path) -> str:
-    """Build a readable run_id from the summary path under outputs/."""
+def derive_output_name(summary_path: Path) -> str:
+    """Build a readable output folder name from the summary path under outputs/."""
     try:
         relative_parts = list(summary_path.resolve().relative_to(OUTPUTS_ROOT).parts)
     except ValueError:
@@ -236,7 +219,7 @@ def derive_run_id(summary_path: Path) -> str:
     relative_parts[-1] = summary_path.stem
     sanitized_parts = [sanitize_component(part) for part in relative_parts if sanitize_component(part)]
     if not sanitized_parts:
-        raise AnalysisError(f"Could not derive a readable run_id from '{summary_path}'.")
+        raise AnalysisError(f"Could not derive a readable output name from '{summary_path}'.")
     return "__".join(sanitized_parts)
 
 
