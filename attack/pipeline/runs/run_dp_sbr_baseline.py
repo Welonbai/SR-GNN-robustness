@@ -6,6 +6,11 @@ import random
 from collections import Counter
 from pathlib import Path
 
+if __package__ is None or __package__ == "":
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from attack.common.config import Config, load_config
 from attack.common.paths import target_dir
 from attack.common.seed import set_seed

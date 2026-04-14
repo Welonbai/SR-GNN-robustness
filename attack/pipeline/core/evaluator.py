@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
+_SUPPORTED_METRIC_BASES = ("precision", "recall", "mrr", "ndcg")
+
+
 def evaluate_targeted_metrics(
     rankings: Sequence[Sequence[int]] | None,
     *,
@@ -14,41 +17,53 @@ def evaluate_targeted_metrics(
     topk: Sequence[int],
 ) -> tuple[dict[str, float | None], bool]:
     """Compute requested targeted metrics from standardized top-k rankings."""
-    topk_values = list(topk)
+    scoped_metrics = _normalize_metric_names(metrics, scope="targeted")
     if rankings is None:
-        result: dict[str, float | None] = {}
-        for metric in metrics:
-            for k in topk_values:
-                result[f"{metric}@{k}"] = None
-        return result, False
+        return _empty_metric_result(scoped_metrics, topk), False
 
     ranks = _compute_ranks(rankings, target_item)
-    computed: dict[str, float | None] = {}
-    sample_count = len(ranks)
-    for metric in metrics:
-        for k in topk_values:
-            if metric == "targeted_precision":
-                hits = sum(1 for r in ranks if 0 < r <= k)
-                value = (hits / (sample_count * k)) if sample_count else 0.0
-            elif metric == "targeted_recall":
-                hits = sum(1 for r in ranks if 0 < r <= k)
-                value = (hits / sample_count) if sample_count else 0.0
-            elif metric == "targeted_mrr":
-                value = (
-                    sum((1.0 / r) for r in ranks if 0 < r <= k) / sample_count
-                    if sample_count
-                    else 0.0
-                )
-            elif metric == "targeted_ndcg":
-                value = (
-                    sum((1.0 / log2(r + 1)) for r in ranks if 0 < r <= k) / sample_count
-                    if sample_count
-                    else 0.0
-                )
-            else:
-                raise ValueError(f"Unsupported metric: {metric}")
-            computed[f"{metric}@{k}"] = float(value)
-    return computed, True
+    return _evaluate_rank_metrics(ranks, metrics=scoped_metrics, topk=topk), True
+
+
+def evaluate_ground_truth_metrics(
+    rankings: Sequence[Sequence[int]] | None,
+    *,
+    labels: Sequence[int] | None,
+    metrics: Sequence[str],
+    topk: Sequence[int],
+) -> tuple[dict[str, float | None], bool]:
+    """Compute requested ground-truth metrics from standardized top-k rankings."""
+    scoped_metrics = _normalize_metric_names(metrics, scope="ground_truth")
+    if rankings is None or labels is None:
+        return _empty_metric_result(scoped_metrics, topk), False
+
+    ranks = _compute_label_ranks(rankings, labels)
+    return _evaluate_rank_metrics(ranks, metrics=scoped_metrics, topk=topk), True
+
+
+def evaluate_prediction_metrics(
+    rankings: Sequence[Sequence[int]] | None,
+    *,
+    target_item: int,
+    ground_truth_labels: Sequence[int] | None,
+    metrics: Sequence[str],
+    topk: Sequence[int],
+) -> tuple[dict[str, float | None], bool]:
+    """Compute both targeted and ground-truth metrics from one prediction list."""
+    targeted_metrics, targeted_available = evaluate_targeted_metrics(
+        rankings,
+        target_item=target_item,
+        metrics=metrics,
+        topk=topk,
+    )
+    ground_truth_metrics, ground_truth_available = evaluate_ground_truth_metrics(
+        rankings,
+        labels=ground_truth_labels,
+        metrics=metrics,
+        topk=topk,
+    )
+    combined = {**targeted_metrics, **ground_truth_metrics}
+    return combined, bool(targeted_available and ground_truth_available)
 
 
 def evaluate_runner(runner, test_data, topk: int) -> dict[str, float]:
@@ -102,7 +117,97 @@ def _compute_ranks(rankings: Sequence[Sequence[int]], target_item: int) -> list[
     return ranks
 
 
+def _compute_label_ranks(rankings: Sequence[Sequence[int]], labels: Sequence[int]) -> list[int]:
+    if len(rankings) != len(labels):
+        raise ValueError(
+            "rankings and labels must have the same length for ground-truth evaluation: "
+            f"{len(rankings)} != {len(labels)}"
+        )
+    ranks: list[int] = []
+    for ranking, label in zip(rankings, labels):
+        target_id = int(label)
+        try:
+            idx = list(ranking).index(target_id)
+        except ValueError:
+            ranks.append(0)
+        else:
+            ranks.append(int(idx + 1))
+    return ranks
+
+
+def _normalize_metric_names(metrics: Sequence[str], *, scope: str) -> list[str]:
+    if scope not in {"targeted", "ground_truth"}:
+        raise ValueError(f"Unsupported metric scope: {scope}")
+    normalized: list[str] = []
+    for metric in metrics:
+        base = _metric_base_name(metric)
+        normalized.append(f"{scope}_{base}")
+    return normalized
+
+
+def _metric_base_name(metric: str) -> str:
+    metric_name = str(metric).strip().lower()
+    if metric_name.startswith("targeted_"):
+        base = metric_name[len("targeted_") :]
+    elif metric_name.startswith("ground_truth_"):
+        base = metric_name[len("ground_truth_") :]
+    else:
+        base = metric_name
+    if base not in _SUPPORTED_METRIC_BASES:
+        raise ValueError(f"Unsupported metric: {metric}")
+    return base
+
+
+def _empty_metric_result(
+    metrics: Sequence[str],
+    topk: Sequence[int],
+) -> dict[str, float | None]:
+    result: dict[str, float | None] = {}
+    for metric in metrics:
+        for k in topk:
+            result[f"{metric}@{int(k)}"] = None
+    return result
+
+
+def _evaluate_rank_metrics(
+    ranks: Sequence[int],
+    *,
+    metrics: Sequence[str],
+    topk: Sequence[int],
+) -> dict[str, float | None]:
+    computed: dict[str, float | None] = {}
+    sample_count = len(ranks)
+    for metric in metrics:
+        base = _metric_base_name(metric)
+        for k_value in topk:
+            k = int(k_value)
+            hits = sum(1 for rank in ranks if 0 < rank <= k)
+            if base == "precision":
+                value = (hits / (sample_count * k)) if sample_count else 0.0
+            elif base == "recall":
+                value = (hits / sample_count) if sample_count else 0.0
+            elif base == "mrr":
+                value = (
+                    sum((1.0 / rank) for rank in ranks if 0 < rank <= k) / sample_count
+                    if sample_count
+                    else 0.0
+                )
+            elif base == "ndcg":
+                value = (
+                    sum((1.0 / log2(rank + 1)) for rank in ranks if 0 < rank <= k)
+                    / sample_count
+                    if sample_count
+                    else 0.0
+                )
+            else:  # pragma: no cover - guarded by _metric_base_name
+                raise ValueError(f"Unsupported metric: {metric}")
+            computed[f"{metric}@{k}"] = float(value)
+    return computed
+
+
 __all__ = [
+    "evaluate_ground_truth_metrics",
+    "evaluate_prediction_metrics",
     "evaluate_targeted_metrics",
     "evaluate_runner",
     "save_metrics",

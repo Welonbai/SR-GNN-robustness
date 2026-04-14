@@ -28,7 +28,8 @@ from attack.common.paths import (
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.poisoned_dataset_builder import PoisonedDataset
 from attack.data.session_stats import SessionStats
-from attack.pipeline.core.evaluator import evaluate_targeted_metrics, save_metrics
+from attack.pipeline.core.evaluator import evaluate_prediction_metrics, save_metrics
+from attack.pipeline.core.ground_truth_alignment import resolve_ground_truth_labels
 from attack.pipeline.core.pipeline_utils import SharedAttackArtifacts, resolve_target_items
 from attack.pipeline.core.victim_execution import VictimExecutionResult, execute_single_victim
 
@@ -191,9 +192,17 @@ def run_targets_and_victims(
                     artifacts=artifacts,
                 )
 
-                metrics, available = evaluate_targeted_metrics(
+                ground_truth_labels = resolve_ground_truth_labels(
+                    config,
+                    victim_name=victim_name,
+                    canonical_dataset=context.canonical_dataset,
+                    predictions=victim_result.predictions,
+                )
+
+                metrics, available = evaluate_prediction_metrics(
                     victim_result.predictions,
                     target_item=int(target_item),
+                    ground_truth_labels=ground_truth_labels,
                     metrics=config.evaluation.metrics,
                     topk=config.evaluation.topk,
                 )
