@@ -45,6 +45,16 @@ class ViewSpec:
     cols: list[str]
     value_col: str
     agg: str
+    auto_context: bool
+    require_unique_cells: bool
+
+
+@dataclass(frozen=True)
+class HiddenColumnSummary:
+    """Describe omitted columns after filtering."""
+
+    singleton_values: dict[str, Any]
+    varying_columns: list[str]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -87,6 +97,10 @@ def main() -> None:
                 f"The filters in '{config_path}' produced an empty table from '{spec.input_csv}'."
             )
 
+        hidden_column_summary = summarize_hidden_columns(filtered_dataframe, spec)
+        if spec.require_unique_cells:
+            validate_unique_cells(filtered_dataframe, spec)
+
         report_dataframe = build_report_table(filtered_dataframe, spec)
         bundle_dir = spec.output_bundle_dir
         bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -103,11 +117,20 @@ def main() -> None:
             "cols": spec.cols,
             "value_col": spec.value_col,
             "agg": spec.agg,
+            "unused_singleton_columns": list(hidden_column_summary.singleton_values.keys()),
+            "unused_varying_columns": hidden_column_summary.varying_columns,
+            "aggregated_over": (
+                hidden_column_summary.varying_columns if not spec.require_unique_cells else []
+            ),
             "filtered_row_count": int(len(filtered_dataframe)),
             "output_row_count": int(len(report_dataframe)),
             "output_column_count": int(len(report_dataframe.columns)),
             "generation_timestamp": utc_now_iso(),
-            "context": build_context(filtered_dataframe),
+            "context": build_context(
+                filtered_dataframe,
+                hidden_column_summary=hidden_column_summary,
+                auto_context=spec.auto_context,
+            ),
         }
         write_json(meta_path, meta)
 
@@ -135,6 +158,11 @@ def parse_view_spec(payload: Mapping[str, Any]) -> ViewSpec:
     cols = require_string_list(payload.get("cols"), label="cols")
     value_col = require_nonempty_string(payload.get("value_col"), label="value_col")
     agg = require_nonempty_string(payload.get("agg"), label="agg").lower()
+    auto_context = require_bool(payload.get("auto_context", False), label="auto_context")
+    require_unique_cells = require_bool(
+        payload.get("require_unique_cells", False),
+        label="require_unique_cells",
+    )
     if agg not in ALLOWED_AGGREGATIONS:
         raise AnalysisError(
             f"Unsupported agg '{agg}'. Allowed values: {sorted(ALLOWED_AGGREGATIONS)}."
@@ -148,6 +176,8 @@ def parse_view_spec(payload: Mapping[str, Any]) -> ViewSpec:
         cols=cols,
         value_col=value_col,
         agg=agg,
+        auto_context=auto_context,
+        require_unique_cells=require_unique_cells,
     )
 
 
@@ -208,6 +238,63 @@ def build_report_table(dataframe: pd.DataFrame, spec: ViewSpec) -> pd.DataFrame:
     return flattened
 
 
+def summarize_hidden_columns(dataframe: pd.DataFrame, spec: ViewSpec) -> HiddenColumnSummary:
+    """Classify columns omitted from rows, cols, filters, and value_col."""
+    singleton_values: dict[str, Any] = {}
+    varying_columns: list[str] = []
+
+    for column in collect_hidden_columns(dataframe, spec):
+        values = collect_unique_values(dataframe, column)
+        if len(values) == 1:
+            singleton_values[column] = values[0]
+        elif len(values) > 1:
+            varying_columns.append(column)
+
+    return HiddenColumnSummary(
+        singleton_values=singleton_values,
+        varying_columns=varying_columns,
+    )
+
+
+def collect_hidden_columns(dataframe: pd.DataFrame, spec: ViewSpec) -> list[str]:
+    """Return columns omitted from the rendered table."""
+    excluded = set(spec.rows)
+    excluded.update(spec.cols)
+    excluded.update(spec.filters.keys())
+    excluded.add(spec.value_col)
+    return [column for column in dataframe.columns if column not in excluded]
+
+
+def validate_unique_cells(dataframe: pd.DataFrame, spec: ViewSpec) -> None:
+    """Require each output pivot cell to map to at most one source row."""
+    cell_dimensions = spec.rows + spec.cols
+    counts = (
+        dataframe.groupby(cell_dimensions, dropna=False, sort=True)
+        .size()
+        .reset_index(name="_row_count")
+    )
+    conflicts = counts[counts["_row_count"] > 1].reset_index(drop=True)
+    if conflicts.empty:
+        return
+
+    formatted_conflicts: list[str] = []
+    for _, row in conflicts.head(5).iterrows():
+        row_key = {column: normalize_scalar(row[column]) for column in spec.rows}
+        col_key = {column: normalize_scalar(row[column]) for column in spec.cols}
+        formatted_conflicts.append(
+            f"rows={int(row['_row_count'])}, row_key={row_key}, col_key={col_key}"
+        )
+
+    examples = " ; ".join(formatted_conflicts)
+    raise AnalysisError(
+        "Found multiple source rows for at least one pivot cell while "
+        "'require_unique_cells' is true. "
+        f"Conflicting cells: {examples}. "
+        "Add filters, add more row/col dimensions, or intentionally aggregate with "
+        "'require_unique_cells: false'."
+    )
+
+
 def flatten_column_label(label: Any) -> str:
     """Flatten one pandas column label into a readable single string."""
     if isinstance(label, tuple):
@@ -218,7 +305,12 @@ def flatten_column_label(label: Any) -> str:
     return str(label)
 
 
-def build_context(dataframe: pd.DataFrame) -> dict[str, Any]:
+def build_context(
+    dataframe: pd.DataFrame,
+    *,
+    hidden_column_summary: HiddenColumnSummary,
+    auto_context: bool,
+) -> dict[str, Any]:
     """Build render-friendly context values from the filtered long table."""
     context: dict[str, Any] = {}
 
@@ -253,6 +345,10 @@ def build_context(dataframe: pd.DataFrame) -> dict[str, Any]:
         context["ks"] = unique_ks
         if len(unique_ks) == 1:
             context["k"] = unique_ks[0]
+
+    if auto_context:
+        for column, value in hidden_column_summary.singleton_values.items():
+            context[column] = value
 
     return normalize_for_json(context)
 
@@ -380,6 +476,13 @@ def require_string_list(value: Any, *, label: str) -> list[str]:
     for index, item in enumerate(value):
         normalized.append(require_nonempty_string(item, label=f"{label}[{index}]"))
     return normalized
+
+
+def require_bool(value: Any, *, label: str) -> bool:
+    """Require a boolean value."""
+    if not isinstance(value, bool):
+        raise AnalysisError(f"Expected '{label}' to be a boolean, got {type(value).__name__}.")
+    return value
 
 
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:

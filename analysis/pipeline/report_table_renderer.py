@@ -62,12 +62,15 @@ class TableSpec:
     auto_shrink: bool
     wrap_text: bool
     cell_align: str
+    display_alias: dict[str, str]
+    value_alias: dict[str, dict[str, str]]
 
 
 @dataclass(frozen=True)
 class RenderSpec:
     """Validated render YAML content."""
 
+    input_bundle_dir: Path | None
     style_name: str
     output_format: str
     title: TitleSpec
@@ -82,7 +85,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--input-dir",
-        required=True,
         help="Path to one view bundle directory containing table.csv and meta.json.",
     )
     parser.add_argument(
@@ -109,14 +111,12 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        bundle_dir = resolve_existing_directory(args.input_dir, label="input directory")
-        ensure_path_within(bundle_dir, RESULTS_ROOT, label="bundle directory")
+        config_path = resolve_existing_file(args.config, label="render config")
+        render_spec = parse_render_spec(load_yaml_mapping(config_path, label="render config"))
+        bundle_dir = resolve_bundle_dir(cli_input_dir=args.input_dir, render_spec=render_spec)
 
         table_path = require_file(bundle_dir / "table.csv", label="bundle table")
         meta_path = require_file(bundle_dir / "meta.json", label="bundle metadata")
-        config_path = resolve_existing_file(args.config, label="render config")
-
-        render_spec = parse_render_spec(load_yaml_mapping(config_path, label="render config"))
         table_dataframe = load_table_csv(table_path)
         meta_payload = load_json_mapping(meta_path, label="bundle metadata")
         identifier_columns = extract_identifier_columns(meta_payload=meta_payload, dataframe=table_dataframe)
@@ -141,6 +141,10 @@ def main() -> None:
 
 def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
     """Validate and normalize one render YAML spec."""
+    input_bundle_dir = normalize_optional_directory_path(
+        payload.get("input_dir"),
+        label="input_dir",
+    )
     style_name = require_nonempty_string(payload.get("style_name"), label="style_name")
     output_format = require_nonempty_string(payload.get("output_format"), label="output_format").lower()
     if output_format not in SUPPORTED_OUTPUT_FORMATS:
@@ -175,9 +179,18 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
         auto_shrink=require_bool(table_payload.get("auto_shrink"), label="table.auto_shrink"),
         wrap_text=require_bool(table_payload.get("wrap_text"), label="table.wrap_text"),
         cell_align=require_alignment(table_payload.get("cell_align"), label="table.cell_align"),
+        display_alias=normalize_string_mapping(
+            table_payload.get("display_alias", {}),
+            label="table.display_alias",
+        ),
+        value_alias=normalize_value_alias_mapping(
+            table_payload.get("value_alias", {}),
+            label="table.value_alias",
+        ),
     )
 
     return RenderSpec(
+        input_bundle_dir=input_bundle_dir,
         style_name=style_name,
         output_format=output_format,
         title=title_spec,
@@ -199,6 +212,11 @@ def render_png(
         dataframe,
         identifier_columns=identifier_columns,
         round_digits=render_spec.table.round_digits,
+        value_alias=render_spec.table.value_alias,
+    )
+    display_column_labels = resolve_display_column_labels(
+        dataframe=display_dataframe,
+        display_alias=render_spec.table.display_alias,
     )
 
     fig, ax = plt.subplots(
@@ -212,7 +230,7 @@ def render_png(
 
     table = ax.table(
         cellText=display_dataframe.values.tolist(),
-        colLabels=[str(column) for column in display_dataframe.columns],
+        colLabels=display_column_labels,
         loc="center",
         cellLoc=render_spec.table.cell_align,
         colLoc=render_spec.table.cell_align,
@@ -248,6 +266,19 @@ def render_png(
     plt.close(fig)
 
 
+def resolve_bundle_dir(*, cli_input_dir: str | None, render_spec: RenderSpec) -> Path:
+    """Resolve the input bundle directory from CLI override or render YAML."""
+    if cli_input_dir is not None:
+        bundle_dir = resolve_existing_directory(cli_input_dir, label="input directory")
+    elif render_spec.input_bundle_dir is not None:
+        bundle_dir = render_spec.input_bundle_dir
+    else:
+        raise AnalysisError("The render config must contain 'input_dir' or the CLI must provide '--input-dir'.")
+
+    ensure_path_within(bundle_dir, RESULTS_ROOT, label="bundle directory")
+    return bundle_dir
+
+
 def style_table_cells(*, table: Any, render_spec: RenderSpec) -> None:
     """Apply consistent visual styling to every table cell."""
     edge_color = "black" if render_spec.table.show_grid else render_spec.figure.background_color
@@ -274,36 +305,83 @@ def format_dataframe_for_display(
     *,
     identifier_columns: set[str],
     round_digits: int,
+    value_alias: Mapping[str, Mapping[str, str]],
 ) -> pd.DataFrame:
     """Convert a dataframe into display strings for slide rendering."""
+    validate_value_alias_columns(dataframe=dataframe, value_alias=value_alias)
+
     formatted_columns: dict[str, pd.Series] = {}
     for column_name in dataframe.columns:
-        is_identifier_column = str(column_name) in identifier_columns
-        formatted_columns[str(column_name)] = dataframe[column_name].map(
+        normalized_column_name = str(column_name)
+        is_identifier_column = normalized_column_name in identifier_columns
+        column_value_alias = value_alias.get(normalized_column_name, {})
+        formatted_columns[normalized_column_name] = dataframe[column_name].map(
             lambda value: format_cell_value(
                 value,
                 is_identifier_column=is_identifier_column,
                 round_digits=round_digits,
+                value_alias=column_value_alias,
             )
         )
     return pd.DataFrame(formatted_columns)
 
 
-def format_cell_value(value: Any, *, is_identifier_column: bool, round_digits: int) -> str:
+def resolve_display_column_labels(
+    *,
+    dataframe: pd.DataFrame,
+    display_alias: Mapping[str, str],
+) -> list[str]:
+    """Map table.csv column names onto user-facing display labels."""
+    available_columns = [str(column) for column in dataframe.columns]
+    missing_columns = sorted(column for column in display_alias if column not in available_columns)
+    if missing_columns:
+        raise AnalysisError(
+            f"The render config display_alias keys {missing_columns} do not exist in table.csv "
+            f"columns {available_columns}."
+        )
+    return [display_alias.get(column, column) for column in available_columns]
+
+
+def validate_value_alias_columns(
+    *,
+    dataframe: pd.DataFrame,
+    value_alias: Mapping[str, Mapping[str, str]],
+) -> None:
+    """Require every value_alias column to exist in table.csv."""
+    available_columns = [str(column) for column in dataframe.columns]
+    missing_columns = sorted(column for column in value_alias if column not in available_columns)
+    if missing_columns:
+        raise AnalysisError(
+            f"The render config value_alias keys {missing_columns} do not exist in table.csv "
+            f"columns {available_columns}."
+        )
+
+
+def format_cell_value(
+    value: Any,
+    *,
+    is_identifier_column: bool,
+    round_digits: int,
+    value_alias: Mapping[str, str],
+) -> str:
     """Format one cell value for display."""
     if pd.isna(value):
         return ""
 
     normalized_value = normalize_scalar(value)
+    raw_lookup_key = stringify_alias_lookup_value(normalized_value)
     if is_identifier_column:
-        return str(normalized_value)
-    if isinstance(normalized_value, bool):
-        return "True" if normalized_value else "False"
-    if isinstance(normalized_value, Integral):
-        return str(int(normalized_value))
-    if isinstance(normalized_value, Real):
-        return f"{float(normalized_value):.{round_digits}f}"
-    return str(normalized_value)
+        formatted_value = str(normalized_value)
+    elif isinstance(normalized_value, bool):
+        formatted_value = "True" if normalized_value else "False"
+    elif isinstance(normalized_value, Integral):
+        formatted_value = str(int(normalized_value))
+    elif isinstance(normalized_value, Real):
+        formatted_value = f"{float(normalized_value):.{round_digits}f}"
+    else:
+        formatted_value = str(normalized_value)
+
+    return value_alias.get(raw_lookup_key, value_alias.get(formatted_value, formatted_value))
 
 
 def extract_identifier_columns(*, meta_payload: Mapping[str, Any], dataframe: pd.DataFrame) -> set[str]:
@@ -424,6 +502,14 @@ def load_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
     return payload
 
 
+def normalize_optional_directory_path(value: Any, *, label: str) -> Path | None:
+    """Resolve one optional existing directory path."""
+    if value is None:
+        return None
+    raw_path = require_nonempty_string(value, label=label)
+    return resolve_existing_directory(raw_path, label=label)
+
+
 def resolve_existing_file(raw_path: str, *, label: str) -> Path:
     """Resolve and validate one existing file path."""
     path = resolve_repo_path(raw_path)
@@ -474,6 +560,41 @@ def require_mapping(value: Any, *, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise AnalysisError(f"Expected '{label}' to be a mapping, got {type(value).__name__}.")
     return value
+
+
+def normalize_string_mapping(value: Any, *, label: str) -> dict[str, str]:
+    """Normalize an optional mapping of strings to strings."""
+    if value is None:
+        return {}
+
+    mapping = require_mapping(value, label=label)
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in mapping.items():
+        key = require_nonempty_string(raw_key, label=f"{label} key")
+        normalized[key] = require_nonempty_string(raw_value, label=f"{label}[{key}]")
+    return normalized
+
+
+def normalize_value_alias_mapping(value: Any, *, label: str) -> dict[str, dict[str, str]]:
+    """Normalize an optional nested mapping from column names to value aliases."""
+    if value is None:
+        return {}
+
+    mapping = require_mapping(value, label=label)
+    normalized: dict[str, dict[str, str]] = {}
+    for raw_column_name, raw_alias_map in mapping.items():
+        column_name = require_nonempty_string(raw_column_name, label=f"{label} column")
+        alias_map = require_mapping(raw_alias_map, label=f"{label}[{column_name}]")
+
+        normalized_alias_map: dict[str, str] = {}
+        for raw_key, raw_value in alias_map.items():
+            alias_key = stringify_alias_lookup_value(raw_key)
+            normalized_alias_map[alias_key] = require_nonempty_string(
+                raw_value,
+                label=f"{label}[{column_name}][{alias_key}]",
+            )
+        normalized[column_name] = normalized_alias_map
+    return normalized
 
 
 def require_nonempty_string(value: Any, *, label: str) -> str:
@@ -537,6 +658,18 @@ def require_alignment(value: Any, *, label: str) -> str:
             f"Unsupported alignment '{alignment}' for '{label}'. Allowed values: {sorted(ALLOWED_ALIGNMENTS)}."
         )
     return alignment
+
+
+def stringify_alias_lookup_value(value: Any) -> str:
+    """Convert one scalar into a stable alias-lookup key."""
+    normalized_value = normalize_scalar(value)
+    if isinstance(normalized_value, bool):
+        return "True" if normalized_value else "False"
+    if isinstance(normalized_value, Integral):
+        return str(int(normalized_value))
+    if isinstance(normalized_value, Real):
+        return str(float(normalized_value))
+    return str(normalized_value)
 
 
 def normalize_scalar(value: Any) -> Any:

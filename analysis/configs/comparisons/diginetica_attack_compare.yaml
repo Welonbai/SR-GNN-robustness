@@ -1,5 +1,5 @@
-comparison_id: dpsbr_vs_random_nonzero_when_possible_diginetica_popular_0.1size
+comparison_id: dpsbr_vs_clean_diginetica_popular_0.1size
 
 runs:
   - dpsbr_diginetica_popular_0.1size
-  - random_nonzero_when_possible_diginetica_popular_0.1size
+  - clean_diginetica_popular_0.1size
