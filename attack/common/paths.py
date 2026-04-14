@@ -297,7 +297,9 @@ def run_artifact_paths(
         "predictions": local_base / "predictions.json",
         "train_history": local_base / "train_history.json",
         "poisoned_train": local_base / "poisoned_train.txt",
-        "best_position_metadata": local_base / "best_position_metadata.pkl",
+        "prefix_nonzero_when_possible_metadata": (
+            local_base / "prefix_nonzero_when_possible_metadata.pkl"
+        ),
         "dpsbr_position_metadata": local_base / "dpsbr_position_metadata.json",
         "random_nonzero_position_metadata": local_base / "random_nonzero_position_metadata.json",
         "shared_dir": shared_base,
