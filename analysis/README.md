@@ -2,7 +2,38 @@
 
 Run all commands from the repository root.
 
-Internal layout:
+## Quick Start
+
+1. Generate one per-run long table.
+
+```powershell
+python analysis/pipeline/long_csv_generator.py `
+  --summary outputs/runs/diginetica/attack_dpsbr/eval_ea7308a8e0/summary_dpsbr_baseline.json `
+  --output-name diginetica_dpsbr_example
+```
+
+2. Merge multiple runs into one comparison table.
+
+```powershell
+python analysis/pipeline/compare_runs.py `
+  --config analysis/configs/comparisons/diginetica_attack_compare.yaml
+```
+
+3. Build one filtered pivot table view.
+
+```powershell
+python analysis/pipeline/view_table_builder.py `
+  --config analysis/configs/views/attack_vs_victim_metrics_11169.yaml
+```
+
+4. Render the view bundle to PNG.
+
+```powershell
+python analysis/pipeline/report_table_renderer.py `
+  --config analysis/configs/render/default_slide_png.yaml
+```
+
+## Layout
 
 - `analysis/pipeline/`: implementation files for the CLI stages
 - `analysis/utils/`: shared helpers
@@ -53,7 +84,7 @@ This writes:
 
 ```powershell
 python analysis/pipeline/view_table_builder.py `
-  --config analysis/configs/views/attack_vs_victim_metrics.yaml
+  --config analysis/configs/views/attack_vs_victim_metrics_11169.yaml
 ```
 
 This writes:

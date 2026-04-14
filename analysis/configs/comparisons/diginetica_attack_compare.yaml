@@ -1,5 +1,6 @@
-comparison_id: dpsbr_vs_clean_diginetica_popular_0.1size
+comparison_id: clean_vs_dpsbr_vs_random_nonzero_diginetica_popular_0.1size
 
 runs:
-  - dpsbr_diginetica_popular_0.1size
-  - clean_diginetica_popular_0.1size
+  - diginetica__attack_dpsbr__eval_ea7308a8e0__summary_dpsbr_baseline
+  - diginetica__attack_random_nonzero_when_possible__eval_1b8a0c10c9__summary_random_nonzero_when_possible
+  - diginetica__clean_run_no_attack__eval_64340bee37__summary_clean

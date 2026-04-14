@@ -2,10 +2,10 @@ style_name: default_slide_png
 
 output_format: png
 
-input_dir: results\comparisons\dpsbr_vs_random_nonzero_when_possible_diginetica_popular_0.1size\attack_vs_victim_metrics_largeK_11169
+input_dir: results\comparisons\clean_vs_dpsbr_vs_random_nonzero_diginetica_popular_0.1size\attack_vs_victim_metrics_11169
 
 title:
-  template: "Diginetica_attackSize0.1_popularTargets_metrics_11169_largeK_comparison"
+  template: "Diginetica_attackSize0.1_popularTargets_metrics_11169_comparison"
   align: center
   font_size: 12
   color: black
