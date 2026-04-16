@@ -74,6 +74,7 @@ class BestValueBoldingSpec:
 
     compare_along: str
     mode: str
+    partition_by_levels: list[str]
 
 
 @dataclass(frozen=True)
@@ -910,20 +911,80 @@ def resolve_best_value_cells(
     if best_value_bolding.mode != "max":
         raise AnalysisError(f"Unsupported best_value_bolding.mode '{best_value_bolding.mode}'.")
 
+    row_groups = resolve_partition_row_groups(
+        table_structure=table_structure,
+        partition_by_levels=best_value_bolding.partition_by_levels,
+    )
     best_cells: set[tuple[int, int]] = set()
     for leaf_column_index, value_column_name in enumerate(table_structure.value_column_names):
         numeric_values = pd.to_numeric(dataframe[value_column_name], errors="coerce")
-        valid_values = numeric_values.dropna()
-        if valid_values.empty:
-            continue
-
-        best_value = float(valid_values.max())
-        for row_index, numeric_value in enumerate(numeric_values.tolist()):
-            if pd.isna(numeric_value):
+        numeric_value_list = numeric_values.tolist()
+        for row_group in row_groups:
+            valid_group_values = [
+                float(numeric_value_list[row_index])
+                for row_index in row_group
+                if not pd.isna(numeric_value_list[row_index])
+            ]
+            if not valid_group_values:
                 continue
-            if are_close(float(numeric_value), best_value):
-                best_cells.add((row_index, leaf_column_index))
+
+            best_value = max(valid_group_values)
+            for row_index in row_group:
+                numeric_value = numeric_value_list[row_index]
+                if pd.isna(numeric_value):
+                    continue
+                if are_close(float(numeric_value), best_value):
+                    best_cells.add((row_index, leaf_column_index))
     return best_cells
+
+
+def resolve_partition_row_groups(
+    *,
+    table_structure: TableStructure,
+    partition_by_levels: list[str],
+) -> list[list[int]]:
+    """Partition row indices by one or more row hierarchy levels while preserving display order."""
+    if not partition_by_levels:
+        return [list(range(len(table_structure.row_tuples)))]
+
+    validate_partition_levels(
+        partition_by_levels=partition_by_levels,
+        available_levels=table_structure.row_levels,
+        label="best_value_bolding.partition_by_levels",
+    )
+    level_indexes = [table_structure.row_levels.index(level_name) for level_name in partition_by_levels]
+
+    grouped_row_indexes: dict[tuple[Any, ...], list[int]] = {}
+    for row_index, row_tuple in enumerate(table_structure.row_tuples):
+        group_key = tuple(row_tuple[level_index] for level_index in level_indexes)
+        grouped_row_indexes.setdefault(group_key, []).append(row_index)
+    return list(grouped_row_indexes.values())
+
+
+def validate_partition_levels(
+    *,
+    partition_by_levels: list[str],
+    available_levels: list[str],
+    label: str,
+) -> None:
+    """Require partition levels to be unique and present on the compared axis."""
+    seen_levels: set[str] = set()
+    duplicate_levels: list[str] = []
+    for level_name in partition_by_levels:
+        if level_name in seen_levels and level_name not in duplicate_levels:
+            duplicate_levels.append(level_name)
+        seen_levels.add(level_name)
+    if duplicate_levels:
+        raise AnalysisError(
+            f"Duplicate {label} values are not allowed: {sorted(duplicate_levels)}."
+        )
+
+    missing_levels = sorted(level_name for level_name in partition_by_levels if level_name not in available_levels)
+    if missing_levels:
+        raise AnalysisError(
+            f"The render config {label} targets {missing_levels} do not exist on the current axis. "
+            f"Available levels: {available_levels}."
+        )
 
 
 def are_close(left: float, right: float) -> bool:
@@ -1138,9 +1199,8 @@ def flatten_column_tuple(column_tuple: tuple[Any, ...]) -> str:
 
 
 def resolve_title(*, template: str, meta_payload: Mapping[str, Any]) -> str:
-    """Resolve the title template using meta.json context only."""
-    context_payload = require_mapping(meta_payload.get("context"), label="meta.json context")
-    render_context = build_render_context(context_payload)
+    """Resolve the title template using merged meta.json title context."""
+    render_context = build_title_render_context(meta_payload)
 
     formatter = string.Formatter()
     required_fields: list[str] = []
@@ -1149,7 +1209,7 @@ def resolve_title(*, template: str, meta_payload: Mapping[str, Any]) -> str:
             continue
         if not field_name or any(symbol in field_name for symbol in ".[]"):
             raise AnalysisError(
-                f"Unsupported title template field '{field_name}'. Use simple keys from meta.json context only."
+                f"Unsupported title template field '{field_name}'. Use simple keys from merged meta.json title context only."
             )
         required_fields.append(field_name)
 
@@ -1168,12 +1228,43 @@ def resolve_title(*, template: str, meta_payload: Mapping[str, Any]) -> str:
         ) from exc
 
 
+def build_title_render_context(meta_payload: Mapping[str, Any]) -> dict[str, str]:
+    """Merge title context from meta.json context, effective_filters, and split_values."""
+    render_context = build_render_context(
+        require_mapping(meta_payload.get("context"), label="meta.json context")
+    )
+    merge_render_context(
+        render_context,
+        meta_payload.get("effective_filters"),
+        label="meta.json effective_filters",
+    )
+    merge_render_context(
+        render_context,
+        meta_payload.get("split_values"),
+        label="meta.json split_values",
+    )
+    return render_context
+
+
 def build_render_context(context_payload: Mapping[str, Any]) -> dict[str, str]:
     """Convert meta.json context values into title-template strings."""
     render_context: dict[str, str] = {}
     for key, value in context_payload.items():
         render_context[require_nonempty_string(key, label="meta.json context key")] = stringify_context_value(value)
     return render_context
+
+
+def merge_render_context(
+    render_context: dict[str, str],
+    payload: Any,
+    *,
+    label: str,
+) -> None:
+    """Add missing title-template keys from one optional metadata mapping."""
+    if payload is None:
+        return
+    for key, value in build_render_context(require_mapping(payload, label=label)).items():
+        render_context.setdefault(key, value)
 
 
 def stringify_context_value(value: Any) -> str:
@@ -1391,7 +1482,16 @@ def normalize_best_value_bolding_spec(value: Any, *, label: str) -> BestValueBol
             f"Unsupported {label}.mode '{mode}'. Allowed values: {sorted(ALLOWED_BEST_VALUE_MODES)}."
         )
 
-    return BestValueBoldingSpec(compare_along=compare_along, mode=mode)
+    partition_by_levels = normalize_optional_string_list(
+        payload.get("partition_by_levels"),
+        label=f"{label}.partition_by_levels",
+    )
+
+    return BestValueBoldingSpec(
+        compare_along=compare_along,
+        mode=mode,
+        partition_by_levels=partition_by_levels,
+    )
 
 
 def normalize_value_alias_mapping(value: Any, *, label: str) -> dict[str, dict[str, str]]:
@@ -1430,6 +1530,19 @@ def require_string_list(value: Any, *, label: str) -> list[str]:
     """Require a non-empty list of non-empty strings."""
     if not isinstance(value, list) or not value:
         raise AnalysisError(f"Expected '{label}' to be a non-empty list of strings.")
+
+    normalized: list[str] = []
+    for index, item in enumerate(value):
+        normalized.append(require_nonempty_string(item, label=f"{label}[{index}]"))
+    return normalized
+
+
+def normalize_optional_string_list(value: Any, *, label: str) -> list[str]:
+    """Normalize an optional list of strings."""
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise AnalysisError(f"Expected '{label}' to be a list of strings.")
 
     normalized: list[str] = []
     for index, item in enumerate(value):

@@ -1,52 +1,66 @@
-style_name: phase4_semantic_validation
+style_name: attack_vs_victim_metrics_split_by_target_item
 
 output_format: png
 
-input_dir: results\comparisons\clean_vs_dpsbr_vs_random_nonzero_diginetica_popular_0.1size\phase2_metric_scope_validation
-
 title:
-  template: "Diginetica_phase4_semantic_validation"
+  template: "Diginetica | target={target_item} | {target_type} | attack_size={attack_size}"
   align: center
   font_size: 12
   color: black
 
 figure:
-  width: 16
-  height: 6.5
+  width: 14
+  height: 6
   dpi: 220
   background_color: white
 
 table:
-  font_size: 11
+  font_size: 12
   round_digits: 6
   text_color: black
   show_grid: true
   auto_shrink: false
   wrap_text: false
   cell_align: center
+  top_level_group_separators: true
+
   display_alias:
     labels:
       attack_method: Attack
       victim_model: Victim
       metric_name: Metric
       metric_scope: Scope
+      k: K
+
     attack_method:
+      clean: Clean
       dpsbr_baseline: DPSBR
       random_nonzero_when_possible: Random-NZ
+
     victim_model:
       miasrec: MIARec
+      srgnn: SR-GNN
+      tron: TRON
+
+    metric_name:
+      precision: Precision
+      recall: Recall
+      mrr: MRR
+      ndcg: NDCG
+
     metric_scope:
       ground_truth: GT
       targeted: Target
-    metric_name:
-      mrr: MRR
-      recall: Recall
+
   value_alias: {}
+
   scope_colors:
     metric_scope:
       ground_truth: "#E8F1FF"
       targeted: "#FFF0E1"
+
   best_value_bolding:
     compare_along: rows
     mode: max
-  top_level_group_separators: true
+    partition_by_levels:
+      - victim_model

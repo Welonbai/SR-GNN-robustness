@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one pivoted report-table bundle from a long-table CSV and YAML spec."""
+"""Build one or more pivoted report-table bundles from a long-table CSV and YAML spec."""
 
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ class ViewSpec:
 
     input_csv: Path
     output_bundle_dir: Path
+    source_spec_path: Path
     parent_spec_name: str
     filters: dict[str, Any]
     split_by: list[str]
@@ -107,7 +108,10 @@ def main() -> None:
 
     try:
         config_path = resolve_existing_path(args.config, label="view config")
-        spec = parse_view_spec(load_yaml_mapping(config_path, label="view config"))
+        spec = parse_view_spec(
+            load_yaml_mapping(config_path, label="view config"),
+            source_spec_path=config_path,
+        )
 
         dataframe = prepare_view_dataframe(pd.read_csv(spec.input_csv), spec)
         validate_required_columns(
@@ -143,7 +147,7 @@ def main() -> None:
         raise SystemExit(f"Error: {exc}") from exc
 
 
-def parse_view_spec(payload: Mapping[str, Any]) -> ViewSpec:
+def parse_view_spec(payload: Mapping[str, Any], *, source_spec_path: Path) -> ViewSpec:
     """Validate and normalize a view YAML spec."""
     input_csv = resolve_existing_path(
         require_nonempty_string(payload.get("input"), label="input"),
@@ -174,6 +178,7 @@ def parse_view_spec(payload: Mapping[str, Any]) -> ViewSpec:
     return ViewSpec(
         input_csv=input_csv,
         output_bundle_dir=output_bundle_dir,
+        source_spec_path=source_spec_path,
         parent_spec_name=parent_spec_name,
         filters=filters,
         split_by=split_by,
@@ -347,14 +352,21 @@ def resolve_bundle_dir(*, spec: ViewSpec, split_values: Mapping[str, Any]) -> Pa
         return spec.output_bundle_dir
     return spec.output_bundle_dir.parent / build_bundle_name(
         parent_spec_name=spec.parent_spec_name,
+        split_by=spec.split_by,
         split_values=split_values,
     )
 
 
-def build_bundle_name(*, parent_spec_name: str, split_values: Mapping[str, Any]) -> str:
+def build_bundle_name(
+    *,
+    parent_spec_name: str,
+    split_by: list[str],
+    split_values: Mapping[str, Any],
+) -> str:
     """Build one deterministic bundle directory name from split values."""
-    parts = [parent_spec_name]
-    for column_name, raw_value in split_values.items():
+    ordered_split_values = normalize_split_value_mapping(split_by, split_values)
+    parts = [sanitize_component(parent_spec_name)]
+    for column_name, raw_value in ordered_split_values.items():
         parts.append(f"{sanitize_component(column_name)}_{sanitize_component(stringify_split_value(raw_value))}")
     return "__".join(parts)
 
@@ -378,18 +390,20 @@ def write_view_bundle(
     meta_path = bundle_dir / "meta.json"
     report_dataframe.to_csv(table_path, index=False)
 
-    normalized_split_values = normalize_for_json(dict(split_values))
+    normalized_split_values = normalize_split_value_mapping(spec.split_by, split_values)
+    json_split_values = normalize_for_json(normalized_split_values)
     meta = {
         "mode": infer_optional_mode(dataframe, spec),
         "input_csv": to_repo_relative(spec.input_csv),
+        "source_view_spec_path": to_repo_relative(spec.source_spec_path),
         "output_bundle_dir": to_repo_relative(bundle_dir),
         "bundle_output_dir": to_repo_relative(bundle_dir),
         "parent_spec_name": spec.parent_spec_name,
         "bundle_name": bundle_dir.name,
         "filters": normalize_for_json(spec.filters),
-        "effective_filters": build_effective_filters(spec.filters, split_values),
+        "effective_filters": build_effective_filters(spec.filters, normalized_split_values),
         "split_by": spec.split_by,
-        "split_values": normalized_split_values,
+        "split_values": json_split_values,
         "rows": spec.rows,
         "cols": spec.cols,
         "row_levels": pivot_structure.row_levels,
@@ -411,7 +425,7 @@ def write_view_bundle(
             dataframe,
             hidden_column_summary=hidden_column_summary,
             auto_context=spec.auto_context,
-            forced_context=normalized_split_values,
+            forced_context=json_split_values,
         ),
     }
     write_json(meta_path, meta)
@@ -710,6 +724,21 @@ def build_effective_filters(
     for column_name, raw_value in split_values.items():
         effective_filters[column_name] = normalize_scalar(raw_value)
     return normalize_for_json(effective_filters)
+
+
+def normalize_split_value_mapping(
+    split_by: list[str],
+    split_values: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Normalize split assignments while preserving the declared split order."""
+    normalized: dict[str, Any] = {}
+    for column_name in split_by:
+        if column_name in split_values:
+            normalized[column_name] = normalize_scalar(split_values[column_name])
+    for column_name, raw_value in split_values.items():
+        if column_name not in normalized:
+            normalized[str(column_name)] = normalize_scalar(raw_value)
+    return normalized
 
 
 def normalize_optional_string_list(value: Any, *, label: str) -> list[str]:

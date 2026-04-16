@@ -1,0 +1,29 @@
+name: attack_vs_victim_metrics_split_by_target_item
+
+input: results\comparisons\clean_vs_dpsbr_vs_random_nonzero_diginetica_popular_0.1size\merged_long_table.csv
+output_dir: results\comparisons\clean_vs_dpsbr_vs_random_nonzero_diginetica_popular_0.1size
+
+filters:
+  poison_model: srgnn
+  target_type: popular
+  attack_size: 0.01
+  metric_name: [recall, mrr]
+  metric_scope: [ground_truth, targeted]
+  k: [10, 20, 30]
+
+split_by:
+  - target_item
+
+rows:
+  - victim_model
+  - attack_method
+
+cols:
+  - metric_name
+  - k
+  - metric_scope
+
+value_col: value
+agg: first
+auto_context: true
+require_unique_cells: true
