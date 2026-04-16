@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import pandas as pd
 import yaml
 
@@ -25,6 +26,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_ROOT = REPO_ROOT / "results"
 SUPPORTED_OUTPUT_FORMATS = {"png"}
 ALLOWED_ALIGNMENTS = {"left", "center", "right"}
+COLUMN_LABEL_SEPARATOR = " | "
+TABLE_AX_POSITION = [0.01, 0.04, 0.98, 0.76]
+STUB_COLUMN_WIDTH_WEIGHT = 1.35
+LEAF_COLUMN_WIDTH_WEIGHT = 1.0
+CELL_PADDING_FRACTION = 0.06
 
 
 class AnalysisError(ValueError):
@@ -78,6 +84,18 @@ class RenderSpec:
     table: TableSpec
 
 
+@dataclass(frozen=True)
+class TableStructure:
+    """Validated row/column hierarchy for one rendered table."""
+
+    row_levels: list[str]
+    col_levels: list[str]
+    row_tuples: list[tuple[Any, ...]]
+    column_tuples: list[tuple[Any, ...]]
+    row_column_names: list[str]
+    value_column_names: list[str]
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """Create the Phase 3 CLI parser."""
     parser = argparse.ArgumentParser(
@@ -119,13 +137,21 @@ def main() -> None:
         meta_path = require_file(bundle_dir / "meta.json", label="bundle metadata")
         table_dataframe = load_table_csv(table_path)
         meta_payload = load_json_mapping(meta_path, label="bundle metadata")
-        identifier_columns = extract_identifier_columns(meta_payload=meta_payload, dataframe=table_dataframe)
+        row_column_names = extract_identifier_column_names(
+            meta_payload=meta_payload,
+            dataframe=table_dataframe,
+        )
+        table_structure = extract_table_structure(
+            meta_payload=meta_payload,
+            dataframe=table_dataframe,
+            row_column_names=row_column_names,
+        )
         title_text = resolve_title(template=render_spec.title.template, meta_payload=meta_payload)
 
         output_path = bundle_dir / "render.png"
         render_png(
             dataframe=table_dataframe,
-            identifier_columns=identifier_columns,
+            table_structure=table_structure,
             title_text=title_text,
             render_spec=render_spec,
             output_path=output_path,
@@ -202,21 +228,21 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
 def render_png(
     *,
     dataframe: pd.DataFrame,
-    identifier_columns: set[str],
+    table_structure: TableStructure,
     title_text: str,
     render_spec: RenderSpec,
     output_path: Path,
 ) -> None:
     """Render one report table into a PNG image."""
+    validate_display_alias_columns(
+        dataframe=dataframe,
+        display_alias=render_spec.table.display_alias,
+    )
     display_dataframe = format_dataframe_for_display(
         dataframe,
-        identifier_columns=identifier_columns,
+        identifier_columns=set(table_structure.row_column_names),
         round_digits=render_spec.table.round_digits,
         value_alias=render_spec.table.value_alias,
-    )
-    display_column_labels = resolve_display_column_labels(
-        dataframe=display_dataframe,
-        display_alias=render_spec.table.display_alias,
     )
 
     fig, ax = plt.subplots(
@@ -226,26 +252,12 @@ def render_png(
     fig.patch.set_facecolor(render_spec.figure.background_color)
     ax.set_facecolor(render_spec.figure.background_color)
     ax.axis("off")
-    ax.set_position([0.01, 0.04, 0.98, 0.76])
+    ax.set_position(TABLE_AX_POSITION)
 
-    table = ax.table(
-        cellText=display_dataframe.values.tolist(),
-        colLabels=display_column_labels,
-        loc="center",
-        cellLoc=render_spec.table.cell_align,
-        colLoc=render_spec.table.cell_align,
-        bbox=[0.0, 0.0, 1.0, 1.0],
-    )
-
-    if render_spec.table.auto_shrink:
-        table.auto_set_font_size(True)
-    else:
-        table.auto_set_font_size(False)
-        table.set_fontsize(render_spec.table.font_size)
-
-    table.scale(1.0, 1.3)
-    style_table_cells(
-        table=table,
+    draw_structured_table(
+        ax=ax,
+        dataframe=display_dataframe,
+        table_structure=table_structure,
         render_spec=render_spec,
     )
 
@@ -279,25 +291,242 @@ def resolve_bundle_dir(*, cli_input_dir: str | None, render_spec: RenderSpec) ->
     return bundle_dir
 
 
-def style_table_cells(*, table: Any, render_spec: RenderSpec) -> None:
-    """Apply consistent visual styling to every table cell."""
+def draw_structured_table(
+    *,
+    ax: Any,
+    dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    render_spec: RenderSpec,
+) -> None:
+    """Draw one hierarchy-aware table with merged headers and grouped row labels."""
+    header_row_count = len(table_structure.col_levels)
+    data_row_count = len(table_structure.row_tuples)
+    stub_column_count = len(table_structure.row_levels)
+    leaf_column_count = len(table_structure.column_tuples)
+    total_row_count = header_row_count + data_row_count
+
+    if total_row_count <= 0:
+        raise AnalysisError("Cannot render an empty table structure.")
+
+    column_width_weights = ([STUB_COLUMN_WIDTH_WEIGHT] * stub_column_count) + (
+        [LEAF_COLUMN_WIDTH_WEIGHT] * leaf_column_count
+    )
+    column_boundaries = build_boundaries(column_width_weights)
+
+    ax.set_xlim(0.0, column_boundaries[-1])
+    ax.set_ylim(float(total_row_count), 0.0)
+
+    header_label_row_index = header_row_count - 1
+    for header_row_index in range(header_row_count):
+        for stub_column_index, row_level_name in enumerate(table_structure.row_levels):
+            header_text = ""
+            if header_row_index == header_label_row_index:
+                header_text = render_spec.table.display_alias.get(row_level_name, row_level_name)
+            draw_cell_block(
+                ax=ax,
+                x0=column_boundaries[stub_column_index],
+                x1=column_boundaries[stub_column_index + 1],
+                y0=float(header_row_index),
+                y1=float(header_row_index + 1),
+                text=header_text,
+                font_weight="bold",
+                render_spec=render_spec,
+                total_table_width=column_boundaries[-1],
+                total_row_count=total_row_count,
+            )
+
+    for level_index in range(header_row_count):
+        for start_index, end_index in iterate_hierarchy_spans(
+            table_structure.column_tuples,
+            level_index=level_index,
+        ):
+            draw_cell_block(
+                ax=ax,
+                x0=column_boundaries[stub_column_count + start_index],
+                x1=column_boundaries[stub_column_count + end_index],
+                y0=float(level_index),
+                y1=float(level_index + 1),
+                text=resolve_column_header_label(
+                    column_tuple=table_structure.column_tuples[start_index],
+                    value_column_name=table_structure.value_column_names[start_index],
+                    level_index=level_index,
+                    level_count=header_row_count,
+                    display_alias=render_spec.table.display_alias,
+                ),
+                font_weight="bold",
+                render_spec=render_spec,
+                total_table_width=column_boundaries[-1],
+                total_row_count=total_row_count,
+            )
+
+    for level_index in range(stub_column_count):
+        for start_index, end_index in iterate_hierarchy_spans(
+            table_structure.row_tuples,
+            level_index=level_index,
+        ):
+            draw_cell_block(
+                ax=ax,
+                x0=column_boundaries[level_index],
+                x1=column_boundaries[level_index + 1],
+                y0=float(header_row_count + start_index),
+                y1=float(header_row_count + end_index),
+                text=stringify_header_value(
+                    dataframe.iloc[start_index][table_structure.row_column_names[level_index]]
+                ),
+                font_weight="normal",
+                render_spec=render_spec,
+                total_table_width=column_boundaries[-1],
+                total_row_count=total_row_count,
+            )
+
+    for row_index in range(data_row_count):
+        for leaf_column_index, value_column_name in enumerate(table_structure.value_column_names):
+            draw_cell_block(
+                ax=ax,
+                x0=column_boundaries[stub_column_count + leaf_column_index],
+                x1=column_boundaries[stub_column_count + leaf_column_index + 1],
+                y0=float(header_row_count + row_index),
+                y1=float(header_row_count + row_index + 1),
+                text=str(dataframe.iloc[row_index][value_column_name]),
+                font_weight="normal",
+                render_spec=render_spec,
+                total_table_width=column_boundaries[-1],
+                total_row_count=total_row_count,
+            )
+
+
+def draw_cell_block(
+    *,
+    ax: Any,
+    x0: float,
+    x1: float,
+    y0: float,
+    y1: float,
+    text: str,
+    font_weight: str,
+    render_spec: RenderSpec,
+    total_table_width: float,
+    total_row_count: int,
+) -> None:
+    """Draw one rectangular cell or merged block and its text."""
     edge_color = "black" if render_spec.table.show_grid else render_spec.figure.background_color
     line_width = 0.5 if render_spec.table.show_grid else 0.0
 
-    for (row_index, _column_index), cell in table.get_celld().items():
-        cell.set_facecolor(render_spec.figure.background_color)
-        cell.set_edgecolor(edge_color)
-        cell.set_linewidth(line_width)
+    rectangle = Rectangle(
+        (x0, y0),
+        x1 - x0,
+        y1 - y0,
+        facecolor=render_spec.figure.background_color,
+        edgecolor=edge_color,
+        linewidth=line_width,
+    )
+    ax.add_patch(rectangle)
 
-        text = cell.get_text()
-        text.set_color(render_spec.table.text_color)
-        text.set_wrap(render_spec.table.wrap_text)
-        text.set_ha(render_spec.table.cell_align)
-        text.set_va("center")
-        if not render_spec.table.auto_shrink:
-            text.set_fontsize(render_spec.table.font_size)
-        if row_index == 0:
-            text.set_weight("bold")
+    if not text:
+        return
+
+    text_artist = ax.text(
+        resolve_text_x(x0=x0, x1=x1, align=render_spec.table.cell_align),
+        (y0 + y1) / 2.0,
+        text,
+        ha=render_spec.table.cell_align,
+        va="center",
+        color=render_spec.table.text_color,
+        fontsize=resolve_font_size(
+            text=text,
+            cell_width=x1 - x0,
+            cell_height=y1 - y0,
+            total_table_width=total_table_width,
+            total_row_count=total_row_count,
+            render_spec=render_spec,
+        ),
+        fontweight=font_weight,
+        wrap=render_spec.table.wrap_text,
+        clip_on=True,
+    )
+    text_artist.set_clip_path(rectangle)
+
+
+def build_boundaries(width_weights: list[float]) -> list[float]:
+    """Convert width weights into cumulative x boundaries."""
+    boundaries = [0.0]
+    for weight in width_weights:
+        boundaries.append(boundaries[-1] + float(weight))
+    return boundaries
+
+
+def iterate_hierarchy_spans(keys: list[tuple[Any, ...]], *, level_index: int) -> list[tuple[int, int]]:
+    """Group consecutive hierarchy entries that share the same prefix through one level."""
+    spans: list[tuple[int, int]] = []
+    start_index = 0
+    while start_index < len(keys):
+        prefix = keys[start_index][: level_index + 1]
+        end_index = start_index + 1
+        while end_index < len(keys) and keys[end_index][: level_index + 1] == prefix:
+            end_index += 1
+        spans.append((start_index, end_index))
+        start_index = end_index
+    return spans
+
+
+def resolve_column_header_label(
+    *,
+    column_tuple: tuple[Any, ...],
+    value_column_name: str,
+    level_index: int,
+    level_count: int,
+    display_alias: Mapping[str, str],
+) -> str:
+    """Resolve the text for one column-header block."""
+    if level_count == 1:
+        return display_alias.get(value_column_name, stringify_header_value(column_tuple[0]))
+    return stringify_header_value(column_tuple[level_index])
+
+
+def stringify_header_value(value: Any) -> str:
+    """Convert one structural value into renderable header/body text."""
+    normalized_value = normalize_scalar(value)
+    if normalized_value is None:
+        return ""
+    return str(normalized_value)
+
+
+def resolve_text_x(*, x0: float, x1: float, align: str) -> float:
+    """Resolve one text anchor position inside a cell rectangle."""
+    padding = (x1 - x0) * CELL_PADDING_FRACTION
+    if align == "left":
+        return x0 + padding
+    if align == "center":
+        return (x0 + x1) / 2.0
+    if align == "right":
+        return x1 - padding
+    raise AnalysisError(f"Unsupported alignment '{align}'.")
+
+
+def resolve_font_size(
+    *,
+    text: str,
+    cell_width: float,
+    cell_height: float,
+    total_table_width: float,
+    total_row_count: int,
+    render_spec: RenderSpec,
+) -> float:
+    """Return either the configured font size or a conservative shrunken size."""
+    base_font_size = render_spec.table.font_size
+    if not render_spec.table.auto_shrink:
+        return base_font_size
+
+    table_width_inches = render_spec.figure.width * TABLE_AX_POSITION[2]
+    table_height_inches = render_spec.figure.height * TABLE_AX_POSITION[3]
+    cell_width_inches = table_width_inches * (cell_width / total_table_width)
+    cell_height_inches = table_height_inches * (cell_height / float(total_row_count))
+    max_height_points = cell_height_inches * 72.0 * 0.55
+
+    longest_line_length = max(len(line) for line in text.splitlines()) if text else 1
+    estimated_char_width = 0.56 * max(longest_line_length, 1)
+    max_width_points = (cell_width_inches * 72.0 * 0.9) / estimated_char_width
+    return max(4.0, min(base_font_size, max_height_points, max_width_points))
 
 
 def format_dataframe_for_display(
@@ -326,12 +555,12 @@ def format_dataframe_for_display(
     return pd.DataFrame(formatted_columns)
 
 
-def resolve_display_column_labels(
+def validate_display_alias_columns(
     *,
     dataframe: pd.DataFrame,
     display_alias: Mapping[str, str],
-) -> list[str]:
-    """Map table.csv column names onto user-facing display labels."""
+) -> None:
+    """Require every display_alias key to exist in table.csv."""
     available_columns = [str(column) for column in dataframe.columns]
     missing_columns = sorted(column for column in display_alias if column not in available_columns)
     if missing_columns:
@@ -339,7 +568,6 @@ def resolve_display_column_labels(
             f"The render config display_alias keys {missing_columns} do not exist in table.csv "
             f"columns {available_columns}."
         )
-    return [display_alias.get(column, column) for column in available_columns]
 
 
 def validate_value_alias_columns(
@@ -384,25 +612,167 @@ def format_cell_value(
     return value_alias.get(raw_lookup_key, value_alias.get(formatted_value, formatted_value))
 
 
-def extract_identifier_columns(*, meta_payload: Mapping[str, Any], dataframe: pd.DataFrame) -> set[str]:
-    """Read identifier columns from meta.json rows and validate that they exist in table.csv."""
+def extract_identifier_column_names(
+    *,
+    meta_payload: Mapping[str, Any],
+    dataframe: pd.DataFrame,
+) -> list[str]:
+    """Read ordered identifier columns from meta.json rows and validate table.csv layout."""
     rows_value = meta_payload.get("rows")
     if not isinstance(rows_value, list) or not rows_value:
         raise AnalysisError("The bundle metadata must contain a non-empty 'rows' list for rendering.")
 
-    identifier_columns: set[str] = set()
-    missing_columns: list[str] = []
+    ordered_columns: list[str] = []
     for index, raw_name in enumerate(rows_value):
         column_name = require_nonempty_string(raw_name, label=f"meta.json rows[{index}]")
-        identifier_columns.add(column_name)
-        if column_name not in dataframe.columns:
-            missing_columns.append(column_name)
+        ordered_columns.append(column_name)
 
-    if missing_columns:
+    actual_prefix = [str(column) for column in dataframe.columns[: len(ordered_columns)]]
+    if actual_prefix != ordered_columns:
         raise AnalysisError(
-            f"The bundle metadata rows {missing_columns} do not exist in table.csv columns {list(dataframe.columns)}."
+            f"The bundle metadata rows {ordered_columns} do not match the leading table.csv columns "
+            f"{actual_prefix}. Full columns: {list(dataframe.columns)}."
         )
-    return identifier_columns
+    return ordered_columns
+
+
+def extract_table_structure(
+    *,
+    meta_payload: Mapping[str, Any],
+    dataframe: pd.DataFrame,
+    row_column_names: list[str],
+) -> TableStructure:
+    """Load hierarchy metadata from meta.json with a flat fallback for old bundles."""
+    row_levels = extract_optional_string_list(meta_payload.get("row_levels"), label="meta.json row_levels")
+    if row_levels is None:
+        row_levels = list(row_column_names)
+    elif row_levels != row_column_names:
+        raise AnalysisError(
+            f"meta.json row_levels {row_levels} do not match table.csv identifier columns {row_column_names}."
+        )
+
+    value_column_names = [str(column) for column in dataframe.columns[len(row_column_names) :]]
+    if not value_column_names:
+        raise AnalysisError("The rendered table must contain at least one value column.")
+
+    dataframe_row_tuples = extract_dataframe_row_tuples(
+        dataframe=dataframe,
+        row_column_names=row_column_names,
+    )
+    meta_row_tuples = extract_optional_structure_tuples(
+        meta_payload.get("row_tuples"),
+        expected_arity=len(row_levels),
+        label="meta.json row_tuples",
+    )
+    if meta_row_tuples is None:
+        row_tuples = dataframe_row_tuples
+    else:
+        if meta_row_tuples != dataframe_row_tuples:
+            raise AnalysisError(
+                "meta.json row_tuples do not match the actual identifier rows in table.csv."
+            )
+        row_tuples = meta_row_tuples
+
+    raw_col_levels = meta_payload.get("col_levels")
+    raw_column_tuples = meta_payload.get("column_tuples")
+    if raw_col_levels is None and raw_column_tuples is None:
+        col_levels = ["column"]
+        column_tuples = [(column_name,) for column_name in value_column_names]
+    elif raw_col_levels is None or raw_column_tuples is None:
+        raise AnalysisError("meta.json must contain both 'col_levels' and 'column_tuples', or neither.")
+    else:
+        col_levels = require_string_list(raw_col_levels, label="meta.json col_levels")
+        column_tuples = extract_structure_tuples(
+            raw_column_tuples,
+            expected_arity=len(col_levels),
+            label="meta.json column_tuples",
+        )
+        if len(column_tuples) != len(value_column_names):
+            raise AnalysisError(
+                f"meta.json column_tuples has {len(column_tuples)} entries but table.csv has "
+                f"{len(value_column_names)} value columns."
+            )
+
+        flattened_column_labels = [
+            flatten_column_tuple(column_tuple) for column_tuple in column_tuples
+        ]
+        if flattened_column_labels != value_column_names:
+            raise AnalysisError(
+                "meta.json column_tuples do not match the flattened value columns in table.csv. "
+                f"Expected {value_column_names}, got {flattened_column_labels}."
+            )
+
+    return TableStructure(
+        row_levels=row_levels,
+        col_levels=col_levels,
+        row_tuples=row_tuples,
+        column_tuples=column_tuples,
+        row_column_names=row_column_names,
+        value_column_names=value_column_names,
+    )
+
+
+def extract_optional_string_list(value: Any, *, label: str) -> list[str] | None:
+    """Return a validated non-empty string list when present."""
+    if value is None:
+        return None
+    return require_string_list(value, label=label)
+
+
+def extract_optional_structure_tuples(
+    value: Any,
+    *,
+    expected_arity: int,
+    label: str,
+) -> list[tuple[Any, ...]] | None:
+    """Return structure tuples when present, otherwise None."""
+    if value is None:
+        return None
+    return extract_structure_tuples(value, expected_arity=expected_arity, label=label)
+
+
+def extract_structure_tuples(
+    value: Any,
+    *,
+    expected_arity: int,
+    label: str,
+) -> list[tuple[Any, ...]]:
+    """Validate one JSON list-of-tuples payload from meta.json."""
+    if not isinstance(value, list):
+        raise AnalysisError(f"Expected '{label}' to be a list, got {type(value).__name__}.")
+
+    normalized_tuples: list[tuple[Any, ...]] = []
+    for index, raw_item in enumerate(value):
+        if not isinstance(raw_item, list):
+            raise AnalysisError(
+                f"Expected '{label}[{index}]' to be a list, got {type(raw_item).__name__}."
+            )
+        if len(raw_item) != expected_arity:
+            raise AnalysisError(
+                f"Expected '{label}[{index}]' to contain {expected_arity} items, got {len(raw_item)}."
+            )
+        normalized_tuples.append(tuple(normalize_scalar(item) for item in raw_item))
+    return normalized_tuples
+
+
+def extract_dataframe_row_tuples(
+    *,
+    dataframe: pd.DataFrame,
+    row_column_names: list[str],
+) -> list[tuple[Any, ...]]:
+    """Read ordered row tuples directly from table.csv."""
+    row_tuples: list[tuple[Any, ...]] = []
+    for _, row in dataframe.iterrows():
+        row_tuples.append(tuple(normalize_scalar(row[column_name]) for column_name in row_column_names))
+    return row_tuples
+
+
+def flatten_column_tuple(column_tuple: tuple[Any, ...]) -> str:
+    """Flatten one structural column tuple using the builder's CSV label convention."""
+    parts = [str(item) for item in column_tuple if str(item) != ""]
+    if not parts:
+        return "column"
+    return COLUMN_LABEL_SEPARATOR.join(parts)
 
 
 def resolve_title(*, template: str, meta_payload: Mapping[str, Any]) -> str:
@@ -605,6 +975,17 @@ def require_nonempty_string(value: Any, *, label: str) -> str:
     if not stripped:
         raise AnalysisError(f"Expected '{label}' to be a non-empty string.")
     return stripped
+
+
+def require_string_list(value: Any, *, label: str) -> list[str]:
+    """Require a non-empty list of non-empty strings."""
+    if not isinstance(value, list) or not value:
+        raise AnalysisError(f"Expected '{label}' to be a non-empty list of strings.")
+
+    normalized: list[str] = []
+    for index, item in enumerate(value):
+        normalized.append(require_nonempty_string(item, label=f"{label}[{index}]"))
+    return normalized
 
 
 def require_positive_float(value: Any, *, label: str) -> float:
