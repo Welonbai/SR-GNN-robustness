@@ -28,6 +28,16 @@ ALLOWED_AGGREGATIONS = {
     "last",
 }
 COLUMN_LABEL_SEPARATOR = " | "
+METRIC_COLUMN = "metric"
+METRIC_NAME_COLUMN = "metric_name"
+METRIC_SCOPE_COLUMN = "metric_scope"
+GROUND_TRUTH_SCOPE = "ground_truth"
+TARGETED_SCOPE = "targeted"
+METRIC_SCOPE_PREFIXES = (
+    ("ground_truth_", GROUND_TRUTH_SCOPE),
+    ("targeted_", TARGETED_SCOPE),
+)
+DERIVED_VIEW_COLUMNS = {METRIC_NAME_COLUMN, METRIC_SCOPE_COLUMN}
 
 
 class AnalysisError(ValueError):
@@ -57,6 +67,16 @@ class HiddenColumnSummary:
     varying_columns: list[str]
 
 
+@dataclass(frozen=True)
+class PivotStructure:
+    """Describe the logical row/column hierarchy of one pivoted table."""
+
+    row_levels: list[str]
+    col_levels: list[str]
+    row_tuples: list[list[Any]]
+    column_tuples: list[list[Any]]
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """Create the Phase 2 view-builder CLI parser."""
     parser = argparse.ArgumentParser(
@@ -84,7 +104,7 @@ def main() -> None:
         config_path = resolve_existing_path(args.config, label="view config")
         spec = parse_view_spec(load_yaml_mapping(config_path, label="view config"))
 
-        dataframe = pd.read_csv(spec.input_csv)
+        dataframe = prepare_view_dataframe(pd.read_csv(spec.input_csv), spec)
         validate_required_columns(
             dataframe,
             required_columns=spec.rows + spec.cols + [spec.value_col] + list(spec.filters.keys()),
@@ -101,7 +121,7 @@ def main() -> None:
         if spec.require_unique_cells:
             validate_unique_cells(filtered_dataframe, spec)
 
-        report_dataframe = build_report_table(filtered_dataframe, spec)
+        report_dataframe, pivot_structure = build_report_table(filtered_dataframe, spec)
         bundle_dir = spec.output_bundle_dir
         bundle_dir.mkdir(parents=True, exist_ok=True)
 
@@ -110,11 +130,16 @@ def main() -> None:
         report_dataframe.to_csv(table_path, index=False)
 
         meta = {
+            "mode": infer_optional_mode(filtered_dataframe, spec),
             "input_csv": to_repo_relative(spec.input_csv),
             "output_bundle_dir": to_repo_relative(bundle_dir),
             "filters": normalize_for_json(spec.filters),
             "rows": spec.rows,
             "cols": spec.cols,
+            "row_levels": pivot_structure.row_levels,
+            "col_levels": pivot_structure.col_levels,
+            "row_tuples": pivot_structure.row_tuples,
+            "column_tuples": pivot_structure.column_tuples,
             "value_col": spec.value_col,
             "agg": spec.agg,
             "unused_singleton_columns": list(hidden_column_summary.singleton_values.keys()),
@@ -198,6 +223,66 @@ def resolve_output_bundle_dir(payload: Mapping[str, Any]) -> Path:
     return output_dir / name
 
 
+def prepare_view_dataframe(dataframe: pd.DataFrame, spec: ViewSpec) -> pd.DataFrame:
+    """Attach derived view-time columns that are requested by the spec."""
+    requested_columns = set(spec.rows)
+    requested_columns.update(spec.cols)
+    requested_columns.update(spec.filters.keys())
+
+    missing_derived_columns = sorted(
+        column_name
+        for column_name in requested_columns
+        if column_name in DERIVED_VIEW_COLUMNS and column_name not in dataframe.columns
+    )
+    if not missing_derived_columns:
+        return dataframe.copy()
+
+    if METRIC_COLUMN not in dataframe.columns:
+        raise AnalysisError(
+            "The view spec references derived metric columns "
+            f"{missing_derived_columns}, but the input CSV does not contain '{METRIC_COLUMN}'."
+        )
+
+    prepared = dataframe.copy()
+    derived_metric_columns = derive_metric_identity_columns(prepared[METRIC_COLUMN])
+    for column_name in missing_derived_columns:
+        prepared[column_name] = derived_metric_columns[column_name]
+    return prepared
+
+
+def derive_metric_identity_columns(metric_series: pd.Series) -> dict[str, pd.Series]:
+    """Split raw metric labels into view-friendly metric_name and metric_scope columns."""
+    derived_pairs = metric_series.map(derive_metric_identity)
+    return {
+        METRIC_NAME_COLUMN: derived_pairs.map(lambda item: item[0]),
+        METRIC_SCOPE_COLUMN: derived_pairs.map(lambda item: item[1]),
+    }
+
+
+def derive_metric_identity(metric_value: Any) -> tuple[str, str]:
+    """Derive one metric name and semantic scope from a raw metric label."""
+    normalized_metric_value = normalize_scalar(metric_value)
+    if not isinstance(normalized_metric_value, str):
+        raise AnalysisError(
+            "Could not derive metric_name/metric_scope because one metric value is not a string: "
+            f"{normalized_metric_value!r}."
+        )
+
+    metric_token = normalized_metric_value.strip().lower()
+    if not metric_token:
+        raise AnalysisError("Could not derive metric_name/metric_scope from an empty metric value.")
+
+    for prefix, scope in METRIC_SCOPE_PREFIXES:
+        if metric_token.startswith(prefix):
+            metric_name = metric_token[len(prefix) :]
+            if not metric_name:
+                raise AnalysisError(
+                    f"Could not derive metric_name from raw metric '{normalized_metric_value}'."
+                )
+            return metric_name, scope
+    return metric_token, TARGETED_SCOPE
+
+
 def apply_filters(dataframe: pd.DataFrame, filters: Mapping[str, Any]) -> pd.DataFrame:
     """Apply equality and inclusion filters to a long-table dataframe."""
     filtered = dataframe.copy()
@@ -214,8 +299,8 @@ def apply_filters(dataframe: pd.DataFrame, filters: Mapping[str, Any]) -> pd.Dat
     return filtered
 
 
-def build_report_table(dataframe: pd.DataFrame, spec: ViewSpec) -> pd.DataFrame:
-    """Build a pivoted report table and flatten it into a CSV-friendly dataframe."""
+def build_report_table(dataframe: pd.DataFrame, spec: ViewSpec) -> tuple[pd.DataFrame, PivotStructure]:
+    """Build one pivoted report table plus structural metadata for the view bundle."""
     try:
         pivoted = pd.pivot_table(
             dataframe,
@@ -233,9 +318,19 @@ def build_report_table(dataframe: pd.DataFrame, spec: ViewSpec) -> pd.DataFrame:
     if pivoted.empty:
         raise AnalysisError("The pivoted report table is empty after aggregation.")
 
+    pivot_structure = PivotStructure(
+        row_levels=extract_axis_levels(pivoted.index, fallback_levels=spec.rows),
+        col_levels=extract_axis_levels(pivoted.columns, fallback_levels=spec.cols),
+        row_tuples=extract_axis_tuples(pivoted.index, level_count=len(spec.rows), axis_label="rows"),
+        column_tuples=extract_axis_tuples(
+            pivoted.columns,
+            level_count=len(spec.cols),
+            axis_label="columns",
+        ),
+    )
     flattened = pivoted.reset_index()
     flattened.columns = [flatten_column_label(column) for column in flattened.columns]
-    return flattened
+    return flattened, pivot_structure
 
 
 def summarize_hidden_columns(dataframe: pd.DataFrame, spec: ViewSpec) -> HiddenColumnSummary:
@@ -262,7 +357,17 @@ def collect_hidden_columns(dataframe: pd.DataFrame, spec: ViewSpec) -> list[str]
     excluded.update(spec.cols)
     excluded.update(spec.filters.keys())
     excluded.add(spec.value_col)
+    if is_metric_semantically_represented(spec):
+        excluded.add(METRIC_COLUMN)
     return [column for column in dataframe.columns if column not in excluded]
+
+
+def is_metric_semantically_represented(spec: ViewSpec) -> bool:
+    """Return whether the spec already exposes both derived metric dimensions."""
+    represented_columns = set(spec.rows)
+    represented_columns.update(spec.cols)
+    represented_columns.update(spec.filters.keys())
+    return METRIC_NAME_COLUMN in represented_columns and METRIC_SCOPE_COLUMN in represented_columns
 
 
 def validate_unique_cells(dataframe: pd.DataFrame, spec: ViewSpec) -> None:
@@ -305,6 +410,67 @@ def flatten_column_label(label: Any) -> str:
     return str(label)
 
 
+def infer_optional_mode(dataframe: pd.DataFrame, spec: ViewSpec) -> Any | None:
+    """Infer one stable mode value when it exists in filters or the input table."""
+    if "mode" in spec.filters:
+        mode_value = spec.filters["mode"]
+        if isinstance(mode_value, list):
+            return mode_value[0] if len(mode_value) == 1 else None
+        return normalize_for_json(mode_value)
+
+    unique_modes = collect_unique_values(dataframe, "mode")
+    if len(unique_modes) == 1:
+        return normalize_for_json(unique_modes[0])
+    return None
+
+
+def extract_axis_levels(axis: pd.Index, *, fallback_levels: list[str]) -> list[str]:
+    """Return the logical level names for one pivot axis."""
+    raw_names = list(axis.names) if isinstance(axis, pd.MultiIndex) else [axis.name]
+    if not raw_names:
+        return list(fallback_levels)
+
+    normalized_levels: list[str] = []
+    for index, raw_name in enumerate(raw_names):
+        if raw_name is None:
+            if index >= len(fallback_levels):
+                raise AnalysisError(
+                    f"Could not infer a fallback level name for pivot axis position {index}."
+                )
+            normalized_levels.append(fallback_levels[index])
+        else:
+            normalized_levels.append(str(raw_name))
+    return normalized_levels
+
+
+def extract_axis_tuples(
+    axis: pd.Index,
+    *,
+    level_count: int,
+    axis_label: str,
+) -> list[list[Any]]:
+    """Convert one pivot axis into ordered JSON-safe tuple payloads."""
+    tuples: list[list[Any]] = []
+    for raw_key in axis.tolist():
+        tuple_key = coerce_axis_key(raw_key, level_count=level_count, axis_label=axis_label)
+        tuples.append([normalize_for_json(value) for value in tuple_key])
+    return tuples
+
+
+def coerce_axis_key(raw_key: Any, *, level_count: int, axis_label: str) -> tuple[Any, ...]:
+    """Normalize one pandas axis key into a tuple with the expected arity."""
+    if isinstance(raw_key, tuple):
+        tuple_key = raw_key
+    else:
+        tuple_key = (raw_key,)
+
+    if len(tuple_key) != level_count:
+        raise AnalysisError(
+            f"Unexpected pivot {axis_label} key {tuple_key!r}; expected {level_count} levels."
+        )
+    return tuple_key
+
+
 def build_context(
     dataframe: pd.DataFrame,
     *,
@@ -339,6 +505,18 @@ def build_context(
         context["metrics"] = unique_metrics
         if len(unique_metrics) == 1:
             context["metric"] = unique_metrics[0]
+
+    unique_metric_names = collect_unique_values(dataframe, METRIC_NAME_COLUMN)
+    if unique_metric_names:
+        context["metric_names"] = unique_metric_names
+        if len(unique_metric_names) == 1:
+            context[METRIC_NAME_COLUMN] = unique_metric_names[0]
+
+    unique_metric_scopes = collect_unique_values(dataframe, METRIC_SCOPE_COLUMN)
+    if unique_metric_scopes:
+        context["metric_scopes"] = unique_metric_scopes
+        if len(unique_metric_scopes) == 1:
+            context[METRIC_SCOPE_COLUMN] = unique_metric_scopes[0]
 
     unique_ks = collect_unique_values(dataframe, "k")
     if unique_ks:
@@ -400,9 +578,14 @@ def normalize_filters(value: Any) -> dict[str, Any]:
 
 def normalize_scalar(value: Any) -> Any:
     """Convert scalar values into JSON-safe Python primitives."""
+    if pd.isna(value):
+        return None
     if hasattr(value, "item") and callable(value.item):
         try:
-            return value.item()
+            normalized = value.item()
+            if pd.isna(normalized):
+                return None
+            return normalized
         except ValueError:
             return value
     return value
