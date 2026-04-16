@@ -26,11 +26,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_ROOT = REPO_ROOT / "results"
 SUPPORTED_OUTPUT_FORMATS = {"png"}
 ALLOWED_ALIGNMENTS = {"left", "center", "right"}
+ALLOWED_COMPARE_ALONG = {"rows"}
+ALLOWED_BEST_VALUE_MODES = {"max"}
 COLUMN_LABEL_SEPARATOR = " | "
 TABLE_AX_POSITION = [0.01, 0.04, 0.98, 0.76]
 STUB_COLUMN_WIDTH_WEIGHT = 1.35
 LEAF_COLUMN_WIDTH_WEIGHT = 1.0
 CELL_PADDING_FRACTION = 0.06
+GROUP_SEPARATOR_LINE_WIDTH = 1.2
 
 
 class AnalysisError(ValueError):
@@ -58,6 +61,22 @@ class FigureSpec:
 
 
 @dataclass(frozen=True)
+class DisplayAliasSpec:
+    """Display-only aliases for header labels and structural values."""
+
+    label_alias: dict[str, str]
+    value_alias: dict[str, dict[str, str]]
+
+
+@dataclass(frozen=True)
+class BestValueBoldingSpec:
+    """Configuration for bolding best values within each comparable slice."""
+
+    compare_along: str
+    mode: str
+
+
+@dataclass(frozen=True)
 class TableSpec:
     """Table formatting configuration for the renderer."""
 
@@ -68,8 +87,11 @@ class TableSpec:
     auto_shrink: bool
     wrap_text: bool
     cell_align: str
-    display_alias: dict[str, str]
+    display_alias: DisplayAliasSpec
     value_alias: dict[str, dict[str, str]]
+    scope_colors: dict[str, dict[str, str]]
+    best_value_bolding: BestValueBoldingSpec | None
+    top_level_group_separators: bool
 
 
 @dataclass(frozen=True)
@@ -205,13 +227,25 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
         auto_shrink=require_bool(table_payload.get("auto_shrink"), label="table.auto_shrink"),
         wrap_text=require_bool(table_payload.get("wrap_text"), label="table.wrap_text"),
         cell_align=require_alignment(table_payload.get("cell_align"), label="table.cell_align"),
-        display_alias=normalize_string_mapping(
+        display_alias=normalize_display_alias_spec(
             table_payload.get("display_alias", {}),
             label="table.display_alias",
         ),
         value_alias=normalize_value_alias_mapping(
             table_payload.get("value_alias", {}),
             label="table.value_alias",
+        ),
+        scope_colors=normalize_dimension_value_string_mapping(
+            table_payload.get("scope_colors", {}),
+            label="table.scope_colors",
+        ),
+        best_value_bolding=normalize_best_value_bolding_spec(
+            table_payload.get("best_value_bolding"),
+            label="table.best_value_bolding",
+        ),
+        top_level_group_separators=require_bool(
+            table_payload.get("top_level_group_separators", False),
+            label="table.top_level_group_separators",
         ),
     )
 
@@ -234,15 +268,24 @@ def render_png(
     output_path: Path,
 ) -> None:
     """Render one report table into a PNG image."""
-    validate_display_alias_columns(
-        dataframe=dataframe,
+    validate_display_alias_targets(
+        table_structure=table_structure,
         display_alias=render_spec.table.display_alias,
+    )
+    validate_scope_color_targets(
+        table_structure=table_structure,
+        scope_colors=render_spec.table.scope_colors,
     )
     display_dataframe = format_dataframe_for_display(
         dataframe,
         identifier_columns=set(table_structure.row_column_names),
         round_digits=render_spec.table.round_digits,
         value_alias=render_spec.table.value_alias,
+    )
+    best_value_cells = resolve_best_value_cells(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        best_value_bolding=render_spec.table.best_value_bolding,
     )
 
     fig, ax = plt.subplots(
@@ -256,8 +299,10 @@ def render_png(
 
     draw_structured_table(
         ax=ax,
+        raw_dataframe=dataframe,
         dataframe=display_dataframe,
         table_structure=table_structure,
+        best_value_cells=best_value_cells,
         render_spec=render_spec,
     )
 
@@ -294,8 +339,10 @@ def resolve_bundle_dir(*, cli_input_dir: str | None, render_spec: RenderSpec) ->
 def draw_structured_table(
     *,
     ax: Any,
+    raw_dataframe: pd.DataFrame,
     dataframe: pd.DataFrame,
     table_structure: TableStructure,
+    best_value_cells: set[tuple[int, int]],
     render_spec: RenderSpec,
 ) -> None:
     """Draw one hierarchy-aware table with merged headers and grouped row labels."""
@@ -312,6 +359,14 @@ def draw_structured_table(
         [LEAF_COLUMN_WIDTH_WEIGHT] * leaf_column_count
     )
     column_boundaries = build_boundaries(column_width_weights)
+    leaf_column_fill_colors = [
+        resolve_leaf_axis_fill_color(
+            axis_levels=table_structure.col_levels,
+            axis_tuple=column_tuple,
+            scope_colors=render_spec.table.scope_colors,
+        )
+        for column_tuple in table_structure.column_tuples
+    ]
 
     ax.set_xlim(0.0, column_boundaries[-1])
     ax.set_ylim(float(total_row_count), 0.0)
@@ -321,7 +376,10 @@ def draw_structured_table(
         for stub_column_index, row_level_name in enumerate(table_structure.row_levels):
             header_text = ""
             if header_row_index == header_label_row_index:
-                header_text = render_spec.table.display_alias.get(row_level_name, row_level_name)
+                header_text = resolve_label_alias(
+                    label=row_level_name,
+                    display_alias=render_spec.table.display_alias,
+                )
             draw_cell_block(
                 ax=ax,
                 x0=column_boundaries[stub_column_index],
@@ -330,6 +388,7 @@ def draw_structured_table(
                 y1=float(header_row_index + 1),
                 text=header_text,
                 font_weight="bold",
+                facecolor=None,
                 render_spec=render_spec,
                 total_table_width=column_boundaries[-1],
                 total_row_count=total_row_count,
@@ -347,6 +406,7 @@ def draw_structured_table(
                 y0=float(level_index),
                 y1=float(level_index + 1),
                 text=resolve_column_header_label(
+                    level_name=table_structure.col_levels[level_index],
                     column_tuple=table_structure.column_tuples[start_index],
                     value_column_name=table_structure.value_column_names[start_index],
                     level_index=level_index,
@@ -354,6 +414,11 @@ def draw_structured_table(
                     display_alias=render_spec.table.display_alias,
                 ),
                 font_weight="bold",
+                facecolor=resolve_dimension_fill_color(
+                    dimension_name=table_structure.col_levels[level_index],
+                    value=table_structure.column_tuples[start_index][level_index],
+                    scope_colors=render_spec.table.scope_colors,
+                ),
                 render_spec=render_spec,
                 total_table_width=column_boundaries[-1],
                 total_row_count=total_row_count,
@@ -370,10 +435,21 @@ def draw_structured_table(
                 x1=column_boundaries[level_index + 1],
                 y0=float(header_row_count + start_index),
                 y1=float(header_row_count + end_index),
-                text=stringify_header_value(
-                    dataframe.iloc[start_index][table_structure.row_column_names[level_index]]
+                text=resolve_dimension_value_alias(
+                    dimension_name=table_structure.row_levels[level_index],
+                    value=raw_dataframe.iloc[start_index][table_structure.row_column_names[level_index]],
+                    display_alias=render_spec.table.display_alias,
+                    fallback_value_alias=render_spec.table.value_alias.get(
+                        table_structure.row_column_names[level_index],
+                        {},
+                    ),
                 ),
                 font_weight="normal",
+                facecolor=resolve_dimension_fill_color(
+                    dimension_name=table_structure.row_levels[level_index],
+                    value=raw_dataframe.iloc[start_index][table_structure.row_column_names[level_index]],
+                    scope_colors=render_spec.table.scope_colors,
+                ),
                 render_spec=render_spec,
                 total_table_width=column_boundaries[-1],
                 total_row_count=total_row_count,
@@ -388,11 +464,28 @@ def draw_structured_table(
                 y0=float(header_row_count + row_index),
                 y1=float(header_row_count + row_index + 1),
                 text=str(dataframe.iloc[row_index][value_column_name]),
-                font_weight="normal",
+                font_weight="bold" if (row_index, leaf_column_index) in best_value_cells else "normal",
+                facecolor=resolve_data_cell_fill_color(
+                    table_structure=table_structure,
+                    row_tuple=table_structure.row_tuples[row_index],
+                    column_tuple=table_structure.column_tuples[leaf_column_index],
+                    leaf_column_fill_color=leaf_column_fill_colors[leaf_column_index],
+                    scope_colors=render_spec.table.scope_colors,
+                ),
                 render_spec=render_spec,
                 total_table_width=column_boundaries[-1],
                 total_row_count=total_row_count,
             )
+
+    if render_spec.table.top_level_group_separators:
+        draw_top_level_group_separators(
+            ax=ax,
+            column_boundaries=column_boundaries,
+            table_structure=table_structure,
+            header_row_count=header_row_count,
+            total_row_count=total_row_count,
+            render_spec=render_spec,
+        )
 
 
 def draw_cell_block(
@@ -404,6 +497,7 @@ def draw_cell_block(
     y1: float,
     text: str,
     font_weight: str,
+    facecolor: str | None,
     render_spec: RenderSpec,
     total_table_width: float,
     total_row_count: int,
@@ -416,7 +510,7 @@ def draw_cell_block(
         (x0, y0),
         x1 - x0,
         y1 - y0,
-        facecolor=render_spec.figure.background_color,
+        facecolor=facecolor or render_spec.figure.background_color,
         edgecolor=edge_color,
         linewidth=line_width,
     )
@@ -471,16 +565,132 @@ def iterate_hierarchy_spans(keys: list[tuple[Any, ...]], *, level_index: int) ->
 
 def resolve_column_header_label(
     *,
+    level_name: str,
     column_tuple: tuple[Any, ...],
     value_column_name: str,
     level_index: int,
     level_count: int,
-    display_alias: Mapping[str, str],
+    display_alias: DisplayAliasSpec,
 ) -> str:
     """Resolve the text for one column-header block."""
-    if level_count == 1:
-        return display_alias.get(value_column_name, stringify_header_value(column_tuple[0]))
-    return stringify_header_value(column_tuple[level_index])
+    if level_count == 1 and value_column_name in display_alias.label_alias:
+        return display_alias.label_alias[value_column_name]
+    return resolve_dimension_value_alias(
+        dimension_name=level_name,
+        value=column_tuple[level_index],
+        display_alias=display_alias,
+        fallback_value_alias={},
+    )
+
+
+def resolve_label_alias(*, label: str, display_alias: DisplayAliasSpec) -> str:
+    """Resolve one display-only alias for a structural label name."""
+    return display_alias.label_alias.get(label, label)
+
+
+def resolve_dimension_value_alias(
+    *,
+    dimension_name: str,
+    value: Any,
+    display_alias: DisplayAliasSpec,
+    fallback_value_alias: Mapping[str, str],
+) -> str:
+    """Resolve one display alias for a structural dimension value."""
+    lookup_key = stringify_alias_lookup_value(value)
+    dimension_aliases = display_alias.value_alias.get(dimension_name, {})
+    if lookup_key in dimension_aliases:
+        return dimension_aliases[lookup_key]
+    if lookup_key in fallback_value_alias:
+        return fallback_value_alias[lookup_key]
+    stringified_value = stringify_header_value(value)
+    if stringified_value in fallback_value_alias:
+        return fallback_value_alias[stringified_value]
+    return stringified_value
+
+
+def resolve_dimension_fill_color(
+    *,
+    dimension_name: str,
+    value: Any,
+    scope_colors: Mapping[str, Mapping[str, str]],
+) -> str | None:
+    """Return one configured semantic fill color for a dimension value."""
+    lookup_key = stringify_alias_lookup_value(value)
+    dimension_colors = scope_colors.get(dimension_name, {})
+    return dimension_colors.get(lookup_key)
+
+
+def resolve_leaf_axis_fill_color(
+    *,
+    axis_levels: list[str],
+    axis_tuple: tuple[Any, ...],
+    scope_colors: Mapping[str, Mapping[str, str]],
+) -> str | None:
+    """Return the most specific configured fill color for one leaf axis tuple."""
+    for dimension_name, value in reversed(list(zip(axis_levels, axis_tuple))):
+        fill_color = resolve_dimension_fill_color(
+            dimension_name=dimension_name,
+            value=value,
+            scope_colors=scope_colors,
+        )
+        if fill_color is not None:
+            return fill_color
+    return None
+
+
+def resolve_data_cell_fill_color(
+    *,
+    table_structure: TableStructure,
+    row_tuple: tuple[Any, ...],
+    column_tuple: tuple[Any, ...],
+    leaf_column_fill_color: str | None,
+    scope_colors: Mapping[str, Mapping[str, str]],
+) -> str | None:
+    """Resolve one semantic fill color for a data cell."""
+    if leaf_column_fill_color is not None:
+        return leaf_column_fill_color
+    return resolve_leaf_axis_fill_color(
+        axis_levels=table_structure.row_levels,
+        axis_tuple=row_tuple,
+        scope_colors=scope_colors,
+    )
+
+
+def draw_top_level_group_separators(
+    *,
+    ax: Any,
+    column_boundaries: list[float],
+    table_structure: TableStructure,
+    header_row_count: int,
+    total_row_count: int,
+    render_spec: RenderSpec,
+) -> None:
+    """Draw slightly stronger separators between top-level groups."""
+    separator_color = "black" if render_spec.table.show_grid else render_spec.table.text_color
+    stub_column_count = len(table_structure.row_levels)
+    total_width = column_boundaries[-1]
+
+    top_level_column_spans = iterate_hierarchy_spans(table_structure.column_tuples, level_index=0)
+    for _, end_index in top_level_column_spans[:-1]:
+        x_position = column_boundaries[stub_column_count + end_index]
+        ax.plot(
+            [x_position, x_position],
+            [0.0, float(total_row_count)],
+            color=separator_color,
+            linewidth=GROUP_SEPARATOR_LINE_WIDTH,
+            solid_capstyle="butt",
+        )
+
+    top_level_row_spans = iterate_hierarchy_spans(table_structure.row_tuples, level_index=0)
+    for _, end_index in top_level_row_spans[:-1]:
+        y_position = float(header_row_count + end_index)
+        ax.plot(
+            [0.0, total_width],
+            [y_position, y_position],
+            color=separator_color,
+            linewidth=GROUP_SEPARATOR_LINE_WIDTH,
+            solid_capstyle="butt",
+        )
 
 
 def stringify_header_value(value: Any) -> str:
@@ -555,19 +765,95 @@ def format_dataframe_for_display(
     return pd.DataFrame(formatted_columns)
 
 
-def validate_display_alias_columns(
+def validate_display_alias_targets(
+    *,
+    table_structure: TableStructure,
+    display_alias: DisplayAliasSpec,
+) -> None:
+    """Require every display alias target to exist in the rendered structure."""
+    allowed_label_targets = set(table_structure.row_levels)
+    allowed_label_targets.update(table_structure.col_levels)
+    allowed_label_targets.update(table_structure.row_column_names)
+    allowed_label_targets.update(table_structure.value_column_names)
+    missing_label_targets = sorted(
+        label_key for label_key in display_alias.label_alias if label_key not in allowed_label_targets
+    )
+    if missing_label_targets:
+        raise AnalysisError(
+            f"The render config display_alias label targets {missing_label_targets} do not exist in the "
+            "current table structure."
+        )
+
+    allowed_value_dimensions = set(table_structure.row_levels)
+    allowed_value_dimensions.update(table_structure.col_levels)
+    allowed_value_dimensions.update(table_structure.row_column_names)
+    missing_value_dimensions = sorted(
+        dimension_name
+        for dimension_name in display_alias.value_alias
+        if dimension_name not in allowed_value_dimensions
+    )
+    if missing_value_dimensions:
+        raise AnalysisError(
+            f"The render config display_alias value targets {missing_value_dimensions} do not exist in the "
+            "current table structure."
+        )
+
+
+def validate_scope_color_targets(
+    *,
+    table_structure: TableStructure,
+    scope_colors: Mapping[str, Mapping[str, str]],
+) -> None:
+    """Require every semantic-color target dimension to exist in the rendered structure."""
+    allowed_dimensions = set(table_structure.row_levels)
+    allowed_dimensions.update(table_structure.col_levels)
+    missing_dimensions = sorted(
+        dimension_name for dimension_name in scope_colors if dimension_name not in allowed_dimensions
+    )
+    if missing_dimensions:
+        raise AnalysisError(
+            f"The render config scope_colors targets {missing_dimensions} do not exist in the current "
+            "table structure."
+        )
+
+
+def resolve_best_value_cells(
     *,
     dataframe: pd.DataFrame,
-    display_alias: Mapping[str, str],
-) -> None:
-    """Require every display_alias key to exist in table.csv."""
-    available_columns = [str(column) for column in dataframe.columns]
-    missing_columns = sorted(column for column in display_alias if column not in available_columns)
-    if missing_columns:
+    table_structure: TableStructure,
+    best_value_bolding: BestValueBoldingSpec | None,
+) -> set[tuple[int, int]]:
+    """Return the set of data-cell coordinates that should be bolded."""
+    if best_value_bolding is None:
+        return set()
+
+    if best_value_bolding.compare_along != "rows":
         raise AnalysisError(
-            f"The render config display_alias keys {missing_columns} do not exist in table.csv "
-            f"columns {available_columns}."
+            f"Unsupported best_value_bolding.compare_along '{best_value_bolding.compare_along}'."
         )
+    if best_value_bolding.mode != "max":
+        raise AnalysisError(f"Unsupported best_value_bolding.mode '{best_value_bolding.mode}'.")
+
+    best_cells: set[tuple[int, int]] = set()
+    for leaf_column_index, value_column_name in enumerate(table_structure.value_column_names):
+        numeric_values = pd.to_numeric(dataframe[value_column_name], errors="coerce")
+        valid_values = numeric_values.dropna()
+        if valid_values.empty:
+            continue
+
+        best_value = float(valid_values.max())
+        for row_index, numeric_value in enumerate(numeric_values.tolist()):
+            if pd.isna(numeric_value):
+                continue
+            if are_close(float(numeric_value), best_value):
+                best_cells.add((row_index, leaf_column_index))
+    return best_cells
+
+
+def are_close(left: float, right: float) -> bool:
+    """Compare two floats with a small tolerance for formatting noise."""
+    tolerance = 1e-12 * max(1.0, abs(left), abs(right))
+    return abs(left - right) <= tolerance
 
 
 def validate_value_alias_columns(
@@ -943,6 +1229,93 @@ def normalize_string_mapping(value: Any, *, label: str) -> dict[str, str]:
         key = require_nonempty_string(raw_key, label=f"{label} key")
         normalized[key] = require_nonempty_string(raw_value, label=f"{label}[{key}]")
     return normalized
+
+
+def normalize_display_alias_spec(value: Any, *, label: str) -> DisplayAliasSpec:
+    """Normalize display aliases for structural labels and values."""
+    if value is None:
+        return DisplayAliasSpec(label_alias={}, value_alias={})
+
+    mapping = require_mapping(value, label=label)
+    label_alias: dict[str, str] = {}
+    value_alias: dict[str, dict[str, str]] = {}
+
+    for raw_key, raw_value in mapping.items():
+        key = require_nonempty_string(raw_key, label=f"{label} key")
+        if key == "labels":
+            nested_labels = normalize_string_mapping(raw_value, label=f"{label}.labels")
+            label_alias.update(nested_labels)
+            continue
+        if key == "values":
+            nested_value_alias = normalize_dimension_value_string_mapping(
+                raw_value,
+                label=f"{label}.values",
+            )
+            for dimension_name, alias_map in nested_value_alias.items():
+                value_alias.setdefault(dimension_name, {}).update(alias_map)
+            continue
+        if isinstance(raw_value, Mapping):
+            value_alias[key] = normalize_one_alias_map(
+                raw_value,
+                label=f"{label}[{key}]",
+            )
+            continue
+        label_alias[key] = require_nonempty_string(raw_value, label=f"{label}[{key}]")
+
+    return DisplayAliasSpec(label_alias=label_alias, value_alias=value_alias)
+
+
+def normalize_dimension_value_string_mapping(value: Any, *, label: str) -> dict[str, dict[str, str]]:
+    """Normalize a mapping from dimension names to per-value strings."""
+    if value is None:
+        return {}
+
+    mapping = require_mapping(value, label=label)
+    normalized: dict[str, dict[str, str]] = {}
+    for raw_dimension_name, raw_alias_map in mapping.items():
+        dimension_name = require_nonempty_string(raw_dimension_name, label=f"{label} dimension")
+        normalized[dimension_name] = normalize_one_alias_map(
+            raw_alias_map,
+            label=f"{label}[{dimension_name}]",
+        )
+    return normalized
+
+
+def normalize_one_alias_map(value: Any, *, label: str) -> dict[str, str]:
+    """Normalize one per-dimension alias map."""
+    mapping = require_mapping(value, label=label)
+    normalized: dict[str, str] = {}
+    for raw_key, raw_value in mapping.items():
+        alias_key = stringify_alias_lookup_value(raw_key)
+        normalized[alias_key] = require_nonempty_string(raw_value, label=f"{label}[{alias_key}]")
+    return normalized
+
+
+def normalize_best_value_bolding_spec(value: Any, *, label: str) -> BestValueBoldingSpec | None:
+    """Normalize optional best-value bolding configuration."""
+    if value is None:
+        return None
+
+    payload = require_mapping(value, label=label)
+    compare_along = require_nonempty_string(
+        payload.get("compare_along"),
+        label=f"{label}.compare_along",
+    ).lower()
+    if compare_along not in ALLOWED_COMPARE_ALONG:
+        raise AnalysisError(
+            f"Unsupported {label}.compare_along '{compare_along}'. Allowed values: {sorted(ALLOWED_COMPARE_ALONG)}."
+        )
+
+    mode = require_nonempty_string(
+        payload.get("mode", "max"),
+        label=f"{label}.mode",
+    ).lower()
+    if mode not in ALLOWED_BEST_VALUE_MODES:
+        raise AnalysisError(
+            f"Unsupported {label}.mode '{mode}'. Allowed values: {sorted(ALLOWED_BEST_VALUE_MODES)}."
+        )
+
+    return BestValueBoldingSpec(compare_along=compare_along, mode=mode)
 
 
 def normalize_value_alias_mapping(value: Any, *, label: str) -> dict[str, dict[str, str]]:
