@@ -203,7 +203,8 @@ def run_targets_and_victims(
                     victim_result.predictions,
                     target_item=int(target_item),
                     ground_truth_labels=ground_truth_labels,
-                    metrics=config.evaluation.metrics,
+                    targeted_metrics=config.evaluation.targeted_metrics,
+                    ground_truth_metrics=config.evaluation.ground_truth_metrics,
                     topk=config.evaluation.topk,
                 )
 

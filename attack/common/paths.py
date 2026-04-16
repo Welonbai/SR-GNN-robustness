@@ -154,7 +154,8 @@ def evaluation_key_payload(config: Config, *, run_type: str) -> dict[str, Any]:
         },
         "evaluation": {
             "topk": [int(k) for k in config.evaluation.topk],
-            "metrics": list(config.evaluation.metrics),
+            "targeted_metrics": list(config.evaluation.targeted_metrics),
+            "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
         },
     }
 

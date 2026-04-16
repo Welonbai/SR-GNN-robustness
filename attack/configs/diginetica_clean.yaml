@@ -86,7 +86,8 @@ victims:
 
 evaluation:
   topk: [5, 10, 15, 20, 25, 30, 40, 50]
-  metrics: [targeted_precision, targeted_recall, targeted_mrr, targeted_ndcg]
+  targeted_metrics: [precision, recall, mrr, ndcg]
+  ground_truth_metrics: [precision, recall, mrr, ndcg]
 
 artifacts:
   root: outputs

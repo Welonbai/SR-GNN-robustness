@@ -76,7 +76,7 @@ class SRGNNBaseRunner:
                 metrics, _ = evaluate_targeted_metrics(
                     rankings,
                     target_item=target_item,
-                    metrics=["targeted_precision"],
+                    metrics=["precision"],
                     topk=[topk],
                 )
                 targeted = metrics.get(f"targeted_precision@{topk}", 0.0)

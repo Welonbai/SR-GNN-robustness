@@ -7,12 +7,7 @@ from typing import Any, Mapping, Sequence
 
 _ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron"}
 _ALLOWED_TARGET_BUCKETS = {"popular", "unpopular", "all"}
-_ALLOWED_EVAL_METRICS = {
-    "targeted_precision",
-    "targeted_recall",
-    "targeted_mrr",
-    "targeted_ndcg",
-}
+_ALLOWED_EVAL_METRICS = {"precision", "recall", "mrr", "ndcg"}
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -87,7 +82,8 @@ class VictimsConfig:
 @dataclass(frozen=True)
 class EvaluationConfig:
     topk: tuple[int, ...]
-    metrics: tuple[str, ...]
+    targeted_metrics: tuple[str, ...]
+    ground_truth_metrics: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -704,22 +700,36 @@ def _normalize_evaluation_config(evaluation: Mapping[str, Any]) -> dict[str, Any
     if any(k <= 0 for k in normalized_topk):
         raise ValueError("evaluation.topk values must be positive integers.")
 
-    raw_metrics = _as_str_list(
-        _require(evaluation, "metrics", "evaluation"),
-        "evaluation.metrics",
+    raw_targeted_metrics = _as_str_list(
+        evaluation.get("targeted_metrics", []),
+        "evaluation.targeted_metrics",
     )
-    if not raw_metrics:
-        raise ValueError("evaluation.metrics must include at least one metric.")
-    normalized_metrics = _unique_preserve_order(raw_metrics)
-    if not set(normalized_metrics).issubset(_ALLOWED_EVAL_METRICS):
+    raw_ground_truth_metrics = _as_str_list(
+        evaluation.get("ground_truth_metrics", []),
+        "evaluation.ground_truth_metrics",
+    )
+    if not raw_targeted_metrics and not raw_ground_truth_metrics:
         raise ValueError(
-            "evaluation.metrics must be a subset of: "
-            "targeted_precision, targeted_recall, targeted_mrr, targeted_ndcg."
+            "evaluation.targeted_metrics and evaluation.ground_truth_metrics "
+            "cannot both be empty."
+        )
+    normalized_targeted_metrics = _unique_preserve_order(raw_targeted_metrics)
+    normalized_ground_truth_metrics = _unique_preserve_order(raw_ground_truth_metrics)
+    if not set(normalized_targeted_metrics).issubset(_ALLOWED_EVAL_METRICS):
+        raise ValueError(
+            "evaluation.targeted_metrics must be a subset of: "
+            "precision, recall, mrr, ndcg."
+        )
+    if not set(normalized_ground_truth_metrics).issubset(_ALLOWED_EVAL_METRICS):
+        raise ValueError(
+            "evaluation.ground_truth_metrics must be a subset of: "
+            "precision, recall, mrr, ndcg."
         )
 
     return {
         "topk": list(normalized_topk),
-        "metrics": list(normalized_metrics),
+        "targeted_metrics": list(normalized_targeted_metrics),
+        "ground_truth_metrics": list(normalized_ground_truth_metrics),
     }
 
 
@@ -847,8 +857,17 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
         ),
         evaluation=EvaluationConfig(
             topk=tuple(_as_int_list(_require(evaluation, "topk", "evaluation"), "evaluation.topk")),
-            metrics=tuple(
-                _as_str_list(_require(evaluation, "metrics", "evaluation"), "evaluation.metrics")
+            targeted_metrics=tuple(
+                _as_str_list(
+                    evaluation.get("targeted_metrics", []),
+                    "evaluation.targeted_metrics",
+                )
+            ),
+            ground_truth_metrics=tuple(
+                _as_str_list(
+                    evaluation.get("ground_truth_metrics", []),
+                    "evaluation.ground_truth_metrics",
+                )
             ),
         ),
         artifacts=ArtifactsConfig(

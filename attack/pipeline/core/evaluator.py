@@ -46,24 +46,29 @@ def evaluate_prediction_metrics(
     *,
     target_item: int,
     ground_truth_labels: Sequence[int] | None,
-    metrics: Sequence[str],
+    targeted_metrics: Sequence[str],
+    ground_truth_metrics: Sequence[str],
     topk: Sequence[int],
 ) -> tuple[dict[str, float | None], bool]:
     """Compute both targeted and ground-truth metrics from one prediction list."""
-    targeted_metrics, targeted_available = evaluate_targeted_metrics(
+    targeted_metric_list = list(targeted_metrics)
+    ground_truth_metric_list = list(ground_truth_metrics)
+    targeted_results, targeted_available = evaluate_targeted_metrics(
         rankings,
         target_item=target_item,
-        metrics=metrics,
+        metrics=targeted_metric_list,
         topk=topk,
     )
-    ground_truth_metrics, ground_truth_available = evaluate_ground_truth_metrics(
+    ground_truth_results, ground_truth_available = evaluate_ground_truth_metrics(
         rankings,
         labels=ground_truth_labels,
-        metrics=metrics,
+        metrics=ground_truth_metric_list,
         topk=topk,
     )
-    combined = {**targeted_metrics, **ground_truth_metrics}
-    return combined, bool(targeted_available and ground_truth_available)
+    combined = {**targeted_results, **ground_truth_results}
+    targeted_ok = targeted_available or not targeted_metric_list
+    ground_truth_ok = ground_truth_available or not ground_truth_metric_list
+    return combined, bool(targeted_ok and ground_truth_ok)
 
 
 def evaluate_runner(runner, test_data, topk: int) -> dict[str, float]:
