@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -38,6 +39,8 @@ METRIC_SCOPE_PREFIXES = (
     ("targeted_", TARGETED_SCOPE),
 )
 DERIVED_VIEW_COLUMNS = {METRIC_NAME_COLUMN, METRIC_SCOPE_COLUMN}
+UNSAFE_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
+REPEATED_UNDERSCORE_PATTERN = re.compile(r"_+")
 
 
 class AnalysisError(ValueError):
@@ -50,7 +53,9 @@ class ViewSpec:
 
     input_csv: Path
     output_bundle_dir: Path
+    parent_spec_name: str
     filters: dict[str, Any]
+    split_by: list[str]
     rows: list[str]
     cols: list[str]
     value_col: str
@@ -107,7 +112,9 @@ def main() -> None:
         dataframe = prepare_view_dataframe(pd.read_csv(spec.input_csv), spec)
         validate_required_columns(
             dataframe,
-            required_columns=spec.rows + spec.cols + [spec.value_col] + list(spec.filters.keys()),
+            required_columns=(
+                spec.rows + spec.cols + spec.split_by + [spec.value_col] + list(spec.filters.keys())
+            ),
             label="view input CSV",
         )
 
@@ -117,51 +124,20 @@ def main() -> None:
                 f"The filters in '{config_path}' produced an empty table from '{spec.input_csv}'."
             )
 
-        hidden_column_summary = summarize_hidden_columns(filtered_dataframe, spec)
-        if spec.require_unique_cells:
-            validate_unique_cells(filtered_dataframe, spec)
-
-        report_dataframe, pivot_structure = build_report_table(filtered_dataframe, spec)
-        bundle_dir = spec.output_bundle_dir
-        bundle_dir.mkdir(parents=True, exist_ok=True)
-
-        table_path = bundle_dir / "table.csv"
-        meta_path = bundle_dir / "meta.json"
-        report_dataframe.to_csv(table_path, index=False)
-
-        meta = {
-            "mode": infer_optional_mode(filtered_dataframe, spec),
-            "input_csv": to_repo_relative(spec.input_csv),
-            "output_bundle_dir": to_repo_relative(bundle_dir),
-            "filters": normalize_for_json(spec.filters),
-            "rows": spec.rows,
-            "cols": spec.cols,
-            "row_levels": pivot_structure.row_levels,
-            "col_levels": pivot_structure.col_levels,
-            "row_tuples": pivot_structure.row_tuples,
-            "column_tuples": pivot_structure.column_tuples,
-            "value_col": spec.value_col,
-            "agg": spec.agg,
-            "unused_singleton_columns": list(hidden_column_summary.singleton_values.keys()),
-            "unused_varying_columns": hidden_column_summary.varying_columns,
-            "aggregated_over": (
-                hidden_column_summary.varying_columns if not spec.require_unique_cells else []
-            ),
-            "filtered_row_count": int(len(filtered_dataframe)),
-            "output_row_count": int(len(report_dataframe)),
-            "output_column_count": int(len(report_dataframe.columns)),
-            "generation_timestamp": utc_now_iso(),
-            "context": build_context(
-                filtered_dataframe,
-                hidden_column_summary=hidden_column_summary,
-                auto_context=spec.auto_context,
-            ),
-        }
-        write_json(meta_path, meta)
+        bundle_count = 0
+        for split_values, bundle_dataframe in iter_view_bundle_inputs(filtered_dataframe, spec):
+            bundle_dir = resolve_bundle_dir(spec=spec, split_values=split_values)
+            write_view_bundle(
+                dataframe=bundle_dataframe,
+                spec=spec,
+                bundle_dir=bundle_dir,
+                split_values=split_values,
+            )
+            bundle_count += 1
 
         print(
-            f"Wrote report bundle '{bundle_dir}' from '{spec.input_csv}' "
-            f"using view output '{bundle_dir.name}'."
+            f"Wrote {bundle_count} report bundle(s) under '{spec.output_bundle_dir.parent}' "
+            f"from '{spec.input_csv}' using parent spec '{spec.parent_spec_name}'."
         )
     except AnalysisError as exc:
         raise SystemExit(f"Error: {exc}") from exc
@@ -178,7 +154,9 @@ def parse_view_spec(payload: Mapping[str, Any]) -> ViewSpec:
     output_bundle_dir = resolve_output_bundle_dir(payload)
     ensure_path_within(output_bundle_dir, RESULTS_ROOT, label="view output")
 
+    parent_spec_name = resolve_parent_spec_name(payload, output_bundle_dir=output_bundle_dir)
     filters = normalize_filters(payload.get("filters", {}))
+    split_by = normalize_optional_string_list(payload.get("split_by"), label="split_by")
     rows = require_string_list(payload.get("rows"), label="rows")
     cols = require_string_list(payload.get("cols"), label="cols")
     value_col = require_nonempty_string(payload.get("value_col"), label="value_col")
@@ -196,7 +174,9 @@ def parse_view_spec(payload: Mapping[str, Any]) -> ViewSpec:
     return ViewSpec(
         input_csv=input_csv,
         output_bundle_dir=output_bundle_dir,
+        parent_spec_name=parent_spec_name,
         filters=filters,
+        split_by=split_by,
         rows=rows,
         cols=cols,
         value_col=value_col,
@@ -223,10 +203,19 @@ def resolve_output_bundle_dir(payload: Mapping[str, Any]) -> Path:
     return output_dir / name
 
 
+def resolve_parent_spec_name(payload: Mapping[str, Any], *, output_bundle_dir: Path) -> str:
+    """Resolve the stable parent bundle name used for split outputs."""
+    raw_name = payload.get("name")
+    if raw_name is None:
+        return output_bundle_dir.name
+    return require_nonempty_string(raw_name, label="name")
+
+
 def prepare_view_dataframe(dataframe: pd.DataFrame, spec: ViewSpec) -> pd.DataFrame:
     """Attach derived view-time columns that are requested by the spec."""
     requested_columns = set(spec.rows)
     requested_columns.update(spec.cols)
+    requested_columns.update(spec.split_by)
     requested_columns.update(spec.filters.keys())
 
     missing_derived_columns = sorted(
@@ -299,6 +288,135 @@ def apply_filters(dataframe: pd.DataFrame, filters: Mapping[str, Any]) -> pd.Dat
     return filtered
 
 
+def iter_view_bundle_inputs(
+    filtered_dataframe: pd.DataFrame,
+    spec: ViewSpec,
+) -> list[tuple[dict[str, Any], pd.DataFrame]]:
+    """Return one or more per-bundle filtered dataframes after optional splitting."""
+    if not spec.split_by:
+        return [({}, filtered_dataframe.copy())]
+
+    bundle_inputs: list[tuple[dict[str, Any], pd.DataFrame]] = []
+    for split_values in extract_split_assignments(filtered_dataframe, split_by=spec.split_by):
+        bundle_inputs.append(
+            (
+                split_values,
+                apply_split_values(filtered_dataframe, split_values),
+            )
+        )
+    return bundle_inputs
+
+
+def extract_split_assignments(
+    dataframe: pd.DataFrame,
+    *,
+    split_by: list[str],
+) -> list[dict[str, Any]]:
+    """Collect deterministic split assignments from one filtered dataframe."""
+    unique_rows = dataframe[split_by].drop_duplicates().reset_index(drop=True)
+    assignments: list[dict[str, Any]] = []
+    for _, row in unique_rows.iterrows():
+        assignments.append(
+            {column_name: normalize_scalar(row[column_name]) for column_name in split_by}
+        )
+    return sorted(assignments, key=build_split_assignment_sort_key)
+
+
+def apply_split_values(dataframe: pd.DataFrame, split_values: Mapping[str, Any]) -> pd.DataFrame:
+    """Filter one dataframe down to a single split assignment."""
+    filtered = dataframe.copy()
+    for column_name, raw_value in split_values.items():
+        if column_name not in filtered.columns:
+            raise AnalysisError(f"Split column '{column_name}' does not exist in the input CSV.")
+
+        if pd.isna(raw_value):
+            filtered = filtered[filtered[column_name].isna()]
+        else:
+            filtered = filtered[filtered[column_name] == raw_value]
+
+    if filtered.empty:
+        raise AnalysisError(
+            f"The split values {dict(split_values)} produced an empty bundle after filtering."
+        )
+    return filtered
+
+
+def resolve_bundle_dir(*, spec: ViewSpec, split_values: Mapping[str, Any]) -> Path:
+    """Resolve the final output directory for one bundle."""
+    if not split_values:
+        return spec.output_bundle_dir
+    return spec.output_bundle_dir.parent / build_bundle_name(
+        parent_spec_name=spec.parent_spec_name,
+        split_values=split_values,
+    )
+
+
+def build_bundle_name(*, parent_spec_name: str, split_values: Mapping[str, Any]) -> str:
+    """Build one deterministic bundle directory name from split values."""
+    parts = [parent_spec_name]
+    for column_name, raw_value in split_values.items():
+        parts.append(f"{sanitize_component(column_name)}_{sanitize_component(stringify_split_value(raw_value))}")
+    return "__".join(parts)
+
+
+def write_view_bundle(
+    *,
+    dataframe: pd.DataFrame,
+    spec: ViewSpec,
+    bundle_dir: Path,
+    split_values: Mapping[str, Any],
+) -> None:
+    """Write one fully-renderable view bundle."""
+    hidden_column_summary = summarize_hidden_columns(dataframe, spec)
+    if spec.require_unique_cells:
+        validate_unique_cells(dataframe, spec)
+
+    report_dataframe, pivot_structure = build_report_table(dataframe, spec)
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+
+    table_path = bundle_dir / "table.csv"
+    meta_path = bundle_dir / "meta.json"
+    report_dataframe.to_csv(table_path, index=False)
+
+    normalized_split_values = normalize_for_json(dict(split_values))
+    meta = {
+        "mode": infer_optional_mode(dataframe, spec),
+        "input_csv": to_repo_relative(spec.input_csv),
+        "output_bundle_dir": to_repo_relative(bundle_dir),
+        "bundle_output_dir": to_repo_relative(bundle_dir),
+        "parent_spec_name": spec.parent_spec_name,
+        "bundle_name": bundle_dir.name,
+        "filters": normalize_for_json(spec.filters),
+        "effective_filters": build_effective_filters(spec.filters, split_values),
+        "split_by": spec.split_by,
+        "split_values": normalized_split_values,
+        "rows": spec.rows,
+        "cols": spec.cols,
+        "row_levels": pivot_structure.row_levels,
+        "col_levels": pivot_structure.col_levels,
+        "row_tuples": pivot_structure.row_tuples,
+        "column_tuples": pivot_structure.column_tuples,
+        "value_col": spec.value_col,
+        "agg": spec.agg,
+        "unused_singleton_columns": list(hidden_column_summary.singleton_values.keys()),
+        "unused_varying_columns": hidden_column_summary.varying_columns,
+        "aggregated_over": (
+            hidden_column_summary.varying_columns if not spec.require_unique_cells else []
+        ),
+        "filtered_row_count": int(len(dataframe)),
+        "output_row_count": int(len(report_dataframe)),
+        "output_column_count": int(len(report_dataframe.columns)),
+        "generation_timestamp": utc_now_iso(),
+        "context": build_context(
+            dataframe,
+            hidden_column_summary=hidden_column_summary,
+            auto_context=spec.auto_context,
+            forced_context=normalized_split_values,
+        ),
+    }
+    write_json(meta_path, meta)
+
+
 def build_report_table(dataframe: pd.DataFrame, spec: ViewSpec) -> tuple[pd.DataFrame, PivotStructure]:
     """Build one pivoted report table plus structural metadata for the view bundle."""
     try:
@@ -355,6 +473,7 @@ def collect_hidden_columns(dataframe: pd.DataFrame, spec: ViewSpec) -> list[str]
     """Return columns omitted from the rendered table."""
     excluded = set(spec.rows)
     excluded.update(spec.cols)
+    excluded.update(spec.split_by)
     excluded.update(spec.filters.keys())
     excluded.add(spec.value_col)
     if is_metric_semantically_represented(spec):
@@ -366,6 +485,7 @@ def is_metric_semantically_represented(spec: ViewSpec) -> bool:
     """Return whether the spec already exposes both derived metric dimensions."""
     represented_columns = set(spec.rows)
     represented_columns.update(spec.cols)
+    represented_columns.update(spec.split_by)
     represented_columns.update(spec.filters.keys())
     return METRIC_NAME_COLUMN in represented_columns and METRIC_SCOPE_COLUMN in represented_columns
 
@@ -476,6 +596,7 @@ def build_context(
     *,
     hidden_column_summary: HiddenColumnSummary,
     auto_context: bool,
+    forced_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build render-friendly context values from the filtered long table."""
     context: dict[str, Any] = {}
@@ -528,6 +649,10 @@ def build_context(
         for column, value in hidden_column_summary.singleton_values.items():
             context[column] = value
 
+    if forced_context is not None:
+        for column, value in forced_context.items():
+            context[str(column)] = normalize_for_json(value)
+
     return normalize_for_json(context)
 
 
@@ -574,6 +699,65 @@ def normalize_filters(value: Any) -> dict[str, Any]:
         else:
             normalized[key] = normalize_scalar(raw_value)
     return normalized
+
+
+def build_effective_filters(
+    filters: Mapping[str, Any],
+    split_values: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Combine global spec filters with one bundle's split values."""
+    effective_filters = dict(filters)
+    for column_name, raw_value in split_values.items():
+        effective_filters[column_name] = normalize_scalar(raw_value)
+    return normalize_for_json(effective_filters)
+
+
+def normalize_optional_string_list(value: Any, *, label: str) -> list[str]:
+    """Normalize an optional list of strings."""
+    if value is None:
+        return []
+    return require_string_list(value, label=label)
+
+
+def build_split_assignment_sort_key(split_values: Mapping[str, Any]) -> tuple[tuple[int, Any], ...]:
+    """Build a deterministic sort key for one split assignment."""
+    return tuple(build_scalar_sort_key(split_values[column_name]) for column_name in split_values)
+
+
+def build_scalar_sort_key(value: Any) -> tuple[int, Any]:
+    """Build a deterministic cross-type sort key for scalar split values."""
+    normalized_value = normalize_scalar(value)
+    if normalized_value is None:
+        return (0, "")
+    if isinstance(normalized_value, bool):
+        return (1, int(normalized_value))
+    if isinstance(normalized_value, int):
+        return (2, normalized_value)
+    if isinstance(normalized_value, float):
+        return (3, normalized_value)
+    if isinstance(normalized_value, str):
+        return (4, normalized_value.casefold())
+    return (5, str(normalized_value))
+
+
+def stringify_split_value(value: Any) -> str:
+    """Convert one split value into a readable bundle-name token."""
+    normalized_value = normalize_scalar(value)
+    if normalized_value is None:
+        return "null"
+    if isinstance(normalized_value, bool):
+        return "true" if normalized_value else "false"
+    if isinstance(normalized_value, float):
+        return format(normalized_value, "g")
+    return str(normalized_value)
+
+
+def sanitize_component(raw_value: str) -> str:
+    """Make one bundle-name component filesystem-safe without losing readability."""
+    sanitized = UNSAFE_COMPONENT_PATTERN.sub("_", raw_value.strip())
+    sanitized = REPEATED_UNDERSCORE_PATTERN.sub("_", sanitized)
+    sanitized = sanitized.strip("._-")
+    return sanitized or "item"
 
 
 def normalize_scalar(value: Any) -> Any:
