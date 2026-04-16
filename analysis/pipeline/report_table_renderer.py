@@ -124,13 +124,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Render one report-table bundle into a PNG image.",
     )
     parser.add_argument(
-        "--input-dir",
+        "--bundle-dir",
         help="Path to one view bundle directory containing table.csv and meta.json.",
     )
     parser.add_argument(
-        "--bundle-dir",
-        dest="input_dir",
+        "--input-dir",
+        dest="bundle_dir",
         help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--bundle-parent-dir",
+        help="Path to a parent directory whose direct child bundle directories will all be rendered.",
     )
     parser.add_argument(
         "--config",
@@ -153,36 +157,26 @@ def main() -> None:
     try:
         config_path = resolve_existing_file(args.config, label="render config")
         render_spec = parse_render_spec(load_yaml_mapping(config_path, label="render config"))
-        bundle_dir = resolve_bundle_dir(cli_input_dir=args.input_dir, render_spec=render_spec)
-
-        table_path = require_file(bundle_dir / "table.csv", label="bundle table")
-        meta_path = require_file(bundle_dir / "meta.json", label="bundle metadata")
-        table_dataframe = load_table_csv(table_path)
-        meta_payload = load_json_mapping(meta_path, label="bundle metadata")
-        row_column_names = extract_identifier_column_names(
-            meta_payload=meta_payload,
-            dataframe=table_dataframe,
-        )
-        table_structure = extract_table_structure(
-            meta_payload=meta_payload,
-            dataframe=table_dataframe,
-            row_column_names=row_column_names,
-        )
-        title_text = resolve_title(template=render_spec.title.template, meta_payload=meta_payload)
-
-        output_path = bundle_dir / "render.png"
-        render_png(
-            dataframe=table_dataframe,
-            table_structure=table_structure,
-            title_text=title_text,
+        render_mode, bundle_dirs = resolve_bundle_targets(
+            cli_bundle_dir=args.bundle_dir,
+            cli_bundle_parent_dir=args.bundle_parent_dir,
             render_spec=render_spec,
-            output_path=output_path,
         )
+        output_paths = [
+            render_bundle(bundle_dir=bundle_dir, render_spec=render_spec) for bundle_dir in bundle_dirs
+        ]
 
-        print(
-            f"Wrote '{output_path}' from bundle '{bundle_dir}' "
-            f"using style '{render_spec.style_name}'."
-        )
+        if render_mode == "single":
+            print(
+                f"Wrote '{output_paths[0]}' from bundle '{bundle_dirs[0]}' "
+                f"using style '{render_spec.style_name}'."
+            )
+        else:
+            rendered_paths = ", ".join(str(path) for path in output_paths)
+            print(
+                f"Rendered {len(output_paths)} bundle(s) using style '{render_spec.style_name}': "
+                f"{rendered_paths}"
+            )
     except AnalysisError as exc:
         raise SystemExit(f"Error: {exc}") from exc
 
@@ -323,17 +317,99 @@ def render_png(
     plt.close(fig)
 
 
-def resolve_bundle_dir(*, cli_input_dir: str | None, render_spec: RenderSpec) -> Path:
-    """Resolve the input bundle directory from CLI override or render YAML."""
-    if cli_input_dir is not None:
-        bundle_dir = resolve_existing_directory(cli_input_dir, label="input directory")
-    elif render_spec.input_bundle_dir is not None:
-        bundle_dir = render_spec.input_bundle_dir
-    else:
-        raise AnalysisError("The render config must contain 'input_dir' or the CLI must provide '--input-dir'.")
+def resolve_bundle_targets(
+    *,
+    cli_bundle_dir: str | None,
+    cli_bundle_parent_dir: str | None,
+    render_spec: RenderSpec,
+) -> tuple[str, list[Path]]:
+    """Resolve either one bundle or a batch of direct child bundles."""
+    if cli_bundle_dir is not None and cli_bundle_parent_dir is not None:
+        raise AnalysisError("Provide exactly one of '--bundle-dir' or '--bundle-parent-dir', not both.")
 
-    ensure_path_within(bundle_dir, RESULTS_ROOT, label="bundle directory")
-    return bundle_dir
+    if cli_bundle_parent_dir is not None:
+        bundle_parent_dir = resolve_existing_directory(
+            cli_bundle_parent_dir,
+            label="bundle parent directory",
+        )
+        ensure_path_within(bundle_parent_dir, RESULTS_ROOT, label="bundle parent directory")
+        bundle_dirs = discover_bundle_dirs(bundle_parent_dir)
+        if not bundle_dirs:
+            raise AnalysisError(
+                f"No valid bundle directories were found directly under '{bundle_parent_dir}'. "
+                "Expected child directories containing both 'table.csv' and 'meta.json'."
+            )
+        return "batch", bundle_dirs
+
+    if cli_bundle_dir is not None:
+        bundle_dir = resolve_existing_directory(cli_bundle_dir, label="bundle directory")
+        ensure_path_within(bundle_dir, RESULTS_ROOT, label="bundle directory")
+        validate_bundle_dir(bundle_dir)
+        return "single", [bundle_dir]
+
+    if render_spec.input_bundle_dir is not None:
+        ensure_path_within(render_spec.input_bundle_dir, RESULTS_ROOT, label="bundle directory")
+        validate_bundle_dir(render_spec.input_bundle_dir)
+        return "single", [render_spec.input_bundle_dir]
+
+    raise AnalysisError(
+        "Provide '--bundle-dir' or '--bundle-parent-dir'. "
+        "Legacy fallback: the render config may also set 'input_dir' for single-bundle rendering."
+    )
+
+
+def discover_bundle_dirs(bundle_parent_dir: Path) -> list[Path]:
+    """Return valid direct child bundle directories in deterministic order."""
+    child_directories = sorted(
+        (child_path for child_path in bundle_parent_dir.iterdir() if child_path.is_dir()),
+        key=lambda child_path: child_path.name,
+    )
+    return [child_path for child_path in child_directories if is_valid_bundle_dir(child_path)]
+
+
+def is_valid_bundle_dir(bundle_dir: Path) -> bool:
+    """Return whether one directory looks like a renderable bundle."""
+    return (bundle_dir / "table.csv").is_file() and (bundle_dir / "meta.json").is_file()
+
+
+def validate_bundle_dir(bundle_dir: Path) -> None:
+    """Require one directory to contain the files needed for rendering."""
+    if not bundle_dir.is_dir():
+        raise AnalysisError(f"The bundle directory path is not a directory: '{bundle_dir}'.")
+    require_file(bundle_dir / "table.csv", label="bundle table")
+    require_file(bundle_dir / "meta.json", label="bundle metadata")
+
+
+def render_bundle(*, bundle_dir: Path, render_spec: RenderSpec) -> Path:
+    """Render exactly one bundle directory using the shared rendering path."""
+    try:
+        validate_bundle_dir(bundle_dir)
+        table_path = bundle_dir / "table.csv"
+        meta_path = bundle_dir / "meta.json"
+        table_dataframe = load_table_csv(table_path)
+        meta_payload = load_json_mapping(meta_path, label="bundle metadata")
+        row_column_names = extract_identifier_column_names(
+            meta_payload=meta_payload,
+            dataframe=table_dataframe,
+        )
+        table_structure = extract_table_structure(
+            meta_payload=meta_payload,
+            dataframe=table_dataframe,
+            row_column_names=row_column_names,
+        )
+        title_text = resolve_title(template=render_spec.title.template, meta_payload=meta_payload)
+
+        output_path = bundle_dir / "render.png"
+        render_png(
+            dataframe=table_dataframe,
+            table_structure=table_structure,
+            title_text=title_text,
+            render_spec=render_spec,
+            output_path=output_path,
+        )
+        return output_path
+    except AnalysisError as exc:
+        raise AnalysisError(f"Could not render bundle '{bundle_dir}': {exc}") from exc
 
 
 def draw_structured_table(
