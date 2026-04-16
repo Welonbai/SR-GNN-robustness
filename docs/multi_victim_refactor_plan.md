@@ -443,9 +443,12 @@ victims:
 
 evaluation:
   topk: 20
-  metrics:
-    - targeted_precision
-    - targeted_mrr
+  targeted_metrics:
+    - precision
+    - mrr
+  ground_truth_metrics:
+    - precision
+    - mrr
 
 artifacts:
   root: outputs
