@@ -42,6 +42,20 @@ def _hash_token(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:10]
 
 
+def _strip_key_recursive(value: Any, *, excluded_keys: set[str]) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _strip_key_recursive(item, excluded_keys=excluded_keys)
+            for key, item in value.items()
+            if key not in excluded_keys
+        }
+    if isinstance(value, list):
+        return [_strip_key_recursive(item, excluded_keys=excluded_keys) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_key_recursive(item, excluded_keys=excluded_keys) for item in value)
+    return value
+
+
 def split_key_payload(config: Config) -> dict[str, Any]:
     split_cfg = config.data.canonical_split
     return {
@@ -116,6 +130,31 @@ def attack_key(config: Config, *, run_type: str) -> str:
     return f"attack_{_hash_token(_stable_json(attack_key_payload(config, run_type=run_type)))}"
 
 
+def shared_attack_artifact_key_payload(config: Config, *, run_type: str) -> dict[str, Any]:
+    if run_type == "clean":
+        return {
+            "run_type": "clean",
+            "split_key": split_key(config),
+        }
+    return {
+        "split_key": split_key(config),
+        "fake_session_seed": int(config.seeds.fake_session_seed),
+        "attack_generation": {
+            "size": float(config.attack.size),
+            "fake_session_generation_topk": int(config.attack.fake_session_generation_topk),
+            "poison_model": {
+                "name": config.attack.poison_model.name,
+                "params": config.attack.poison_model.params,
+            },
+        },
+    }
+
+
+def shared_attack_artifact_key(config: Config, *, run_type: str) -> str:
+    payload = shared_attack_artifact_key_payload(config, run_type=run_type)
+    return f"attack_shared_{_hash_token(_stable_json(payload))}"
+
+
 def victim_prediction_key_payload(
     config: Config,
     victim_name: str,
@@ -132,10 +171,17 @@ def victim_prediction_key_payload(
             "run_type": run_type,
             "attack_key": attack_key(config, run_type=run_type),
         }
+    # Keep victim prediction/evaluation output keys stable across changes to
+    # per-step training batch size. The batch size still affects execution, but
+    # it should not force a different output key/folder by itself.
+    victim_params = _strip_key_recursive(
+        config.victims.params[victim_name],
+        excluded_keys={"train_batch_size"},
+    )
     return {
         **base_context,
         "victim_name": victim_name,
-        "victim_params": config.victims.params[victim_name],
+        "victim_params": victim_params,
     }
 
 
@@ -194,7 +240,11 @@ def target_selection_dir(config: Config) -> Path:
 
 
 def shared_attack_dir(config: Config, *, run_type: str) -> Path:
-    return shared_root(config) / "attack" / attack_key(config, run_type=run_type)
+    # Shared fake-session / poison-model artifacts should only depend on the
+    # inputs that actually affect their generation. Final attack/evaluation keys
+    # still use attack_key(...), which may include downstream replacement-policy
+    # settings such as replacement_topk_ratio.
+    return shared_root(config) / "attack" / shared_attack_artifact_key(config, run_type=run_type)
 
 
 def shared_victim_dir(

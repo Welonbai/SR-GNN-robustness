@@ -1,0 +1,95 @@
+experiment:
+  name: attack_position_optimization_reward
+
+data:
+  dataset_name: diginetica
+  split_protocol: unified
+  poison_train_only: true
+  canonical_split:
+    min_item_count: 150
+    min_session_len: 3
+    valid_ratio: 0.1
+    test_days: 7
+
+seeds:
+  fake_session_seed: 20260405
+  target_selection_seed: 20260405
+
+attack:
+  size: 0.01
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 0.2
+  poison_model:
+    name: srgnn
+    params:
+      train:
+        epochs: 8
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-5
+        step: 1
+        patience: 10
+        nonhybrid: false
+
+targets:
+  mode: sampled
+  explicit_list: []
+  bucket: popular
+  count: 1
+  reuse_saved_targets: true
+
+victims:
+  enabled: [srgnn, miasrec, tron]
+  params:
+    srgnn:
+      train:
+        epochs: 8
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-5
+        step: 1
+        patience: 10
+        nonhybrid: false
+    miasrec:
+      train:
+        epochs: 4
+        train_batch_size: 256
+        eval_batch_size: 128
+    tron:
+      train:
+        max_epochs: 8
+  runtime:
+    miasrec:
+      python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"
+      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
+      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      logging:
+        show_progress: false
+    tron:
+      python_executable: "C:\\Users\\User\\anaconda3\\envs\\tron-gpu\\python.exe"
+      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
+      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      dataloader:
+        num_workers: 2
+
+evaluation:
+  topk: [5, 10, 15, 20, 25, 30, 40, 50]
+  targeted_metrics: [precision, recall, mrr, ndcg]
+  ground_truth_metrics: [precision, recall, mrr, ndcg]
+
+artifacts:
+  root: outputs
+  shared_dir: shared
+  runs_dir: runs
