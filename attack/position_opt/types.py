@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -82,6 +82,54 @@ class InnerTrainResult:
 POSITION_OPT_DEFAULTS = PositionOptDefaults()
 
 
+def resolve_position_opt_config(
+    overrides: PositionOptDefaults | Mapping[str, Any] | None,
+) -> PositionOptDefaults:
+    # Position-opt config still uses Python defaults plus explicit runtime
+    # overrides. YAML/config parser wiring is intentionally deferred.
+    if overrides is None:
+        resolved = replace(POSITION_OPT_DEFAULTS)
+    elif isinstance(overrides, PositionOptDefaults):
+        resolved = overrides
+    elif isinstance(overrides, Mapping):
+        allowed_fields = {field.name for field in fields(PositionOptDefaults)}
+        unknown = set(overrides) - allowed_fields
+        if unknown:
+            raise ValueError(
+                "Unknown position-opt config keys: " + ", ".join(sorted(map(str, unknown)))
+            )
+        resolved = replace(POSITION_OPT_DEFAULTS, **dict(overrides))
+    else:
+        raise TypeError(
+            "position_opt_config must be a PositionOptDefaults instance, a mapping, or None."
+        )
+
+    if resolved.training_selector not in {"categorical_reinforce", "st_gumbel"}:
+        raise ValueError(
+            "Phase 2.5 only supports training_selector='categorical_reinforce' "
+            "or the legacy 'st_gumbel' compatibility value."
+        )
+    if resolved.eval_selector != "argmax":
+        raise ValueError("Phase 2.5 only supports eval_selector='argmax'.")
+    if int(resolved.outer_steps) < 0:
+        raise ValueError("outer_steps must be non-negative.")
+    if float(resolved.policy_lr) <= 0.0:
+        raise ValueError("policy_lr must be positive.")
+    if float(resolved.gumbel_temperature) <= 0.0:
+        raise ValueError("gumbel_temperature must be positive.")
+    if int(resolved.fine_tune_steps) < 0:
+        raise ValueError("fine_tune_steps must be non-negative.")
+    if float(resolved.gt_penalty_weight) < 0.0:
+        raise ValueError("gt_penalty_weight must be non-negative.")
+    if float(resolved.gt_tolerance) < 0.0:
+        raise ValueError("gt_tolerance must be non-negative.")
+    if not 0.0 <= float(resolved.reward_baseline_momentum) <= 1.0:
+        raise ValueError("reward_baseline_momentum must be in [0, 1].")
+    if resolved.validation_subset_size is not None and int(resolved.validation_subset_size) <= 0:
+        raise ValueError("validation_subset_size must be positive when provided.")
+    return resolved
+
+
 __all__ = [
     "POSITION_OPT_DEFAULTS",
     "CandidateMetadata",
@@ -91,4 +139,5 @@ __all__ = [
     "SelectedPositionResult",
     "SurrogateScoreResult",
     "TruncatedFineTuneConfig",
+    "resolve_position_opt_config",
 ]

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 import hashlib
 import json
 
 from .config import Config
+
+
+POSITION_OPT_RUN_TYPE = "position_opt_mvp"
 
 
 def output_root(config: Config) -> Path:
@@ -42,21 +45,64 @@ def _hash_token(value: str) -> str:
     return hashlib.sha1(value.encode("utf-8")).hexdigest()[:10]
 
 
-def _strip_key_recursive(value: Any, *, excluded_keys: set[str]) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _strip_key_recursive(item, excluded_keys=excluded_keys)
-            for key, item in value.items()
-            if key not in excluded_keys
-        }
+def _normalize_identity_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _normalize_identity_value(item) for key, item in value.items()}
     if isinstance(value, list):
-        return [_strip_key_recursive(item, excluded_keys=excluded_keys) for item in value]
+        return [_normalize_identity_value(item) for item in value]
     if isinstance(value, tuple):
-        return tuple(_strip_key_recursive(item, excluded_keys=excluded_keys) for item in value)
+        return [_normalize_identity_value(item) for item in value]
     return value
 
 
+def checkpoint_identity_payload(checkpoint_path: str | Path) -> dict[str, Any]:
+    """Return a content-based identity for an explicit external checkpoint.
+
+    This helper is for downstream attack-result identity only. It must not be
+    used to key split caches, target caches, or shared fake-session generation
+    caches.
+    """
+    path = Path(checkpoint_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Checkpoint not found for identity hashing: {path}")
+
+    digest = hashlib.sha1()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return {
+        "type": "file_sha1",
+        "sha1": digest.hexdigest(),
+    }
+
+
+def build_position_opt_attack_identity_context(
+    *,
+    position_opt_config: Mapping[str, Any],
+    clean_surrogate_checkpoint: str | Path,
+) -> dict[str, Any]:
+    """Build the position-opt-specific runtime identity payload.
+
+    The final position-opt poisoned result can change when either the outer-loop
+    settings or the clean surrogate checkpoint changes, so both belong in the
+    final attack identity layer.
+    """
+    return {
+        "position_opt": {
+            "config": _normalize_identity_value(position_opt_config),
+            "clean_surrogate": checkpoint_identity_payload(clean_surrogate_checkpoint),
+        }
+    }
+
+
 def split_key_payload(config: Config) -> dict[str, Any]:
+    # Canonical dataset cache is split-only. It must not depend on targets,
+    # attack settings, victims, evaluation, or position-opt runtime overrides.
     split_cfg = config.data.canonical_split
     return {
         "dataset_name": config.data.dataset_name,
@@ -87,6 +133,8 @@ def split_key(config: Config) -> str:
 
 
 def target_selection_key_payload(config: Config) -> dict[str, Any]:
+    # Target selection cache is target-choice-only. It depends on the split and
+    # the target sampling/selection settings, but not on downstream attacks.
     return {
         "split_key": split_key(config),
         "targets": {
@@ -104,13 +152,21 @@ def target_selection_key(config: Config) -> str:
     return f"targets_{_hash_token(_stable_json(target_selection_key_payload(config)))}"
 
 
-def attack_key_payload(config: Config, *, run_type: str) -> dict[str, Any]:
+def attack_key_payload(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    # Final attack identity is downstream-facing. It intentionally includes
+    # replacement-policy semantics and, for position-opt runs, the runtime
+    # settings that can change the optimized poisoned result.
     if run_type == "clean":
         return {
             "run_type": "clean",
             "split_key": split_key(config),
         }
-    return {
+    payload = {
         "split_key": split_key(config),
         "target_selection_key": target_selection_key(config),
         "fake_session_seed": int(config.seeds.fake_session_seed),
@@ -124,10 +180,29 @@ def attack_key_payload(config: Config, *, run_type: str) -> dict[str, Any]:
             },
         },
     }
+    if run_type == POSITION_OPT_RUN_TYPE:
+        if attack_identity_context is None:
+            raise ValueError(
+                "position_opt_mvp final attack identity requires explicit "
+                "attack_identity_context with position-opt settings and clean "
+                "surrogate identity."
+            )
+        payload["attack_runtime_identity"] = _normalize_identity_value(attack_identity_context)
+    return payload
 
 
-def attack_key(config: Config, *, run_type: str) -> str:
-    return f"attack_{_hash_token(_stable_json(attack_key_payload(config, run_type=run_type)))}"
+def attack_key(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> str:
+    payload = attack_key_payload(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    return f"attack_{_hash_token(_stable_json(payload))}"
 
 
 def shared_attack_artifact_key_payload(config: Config, *, run_type: str) -> dict[str, Any]:
@@ -136,6 +211,9 @@ def shared_attack_artifact_key_payload(config: Config, *, run_type: str) -> dict
             "run_type": "clean",
             "split_key": split_key(config),
         }
+    # Shared generation cache is generation-only: fake-session templates and the
+    # poison model used to generate them. It must not depend on target choice,
+    # replacement policy, victim settings, or position-opt runtime overrides.
     return {
         "split_key": split_key(config),
         "fake_session_seed": int(config.seeds.fake_session_seed),
@@ -160,6 +238,7 @@ def victim_prediction_key_payload(
     victim_name: str,
     *,
     run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     if run_type == "clean":
         base_context: dict[str, Any] = {
@@ -169,15 +248,16 @@ def victim_prediction_key_payload(
     else:
         base_context = {
             "run_type": run_type,
-            "attack_key": attack_key(config, run_type=run_type),
+            "attack_key": attack_key(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
         }
-    # Keep victim prediction/evaluation output keys stable across changes to
-    # per-step training batch size. The batch size still affects execution, but
-    # it should not force a different output key/folder by itself.
-    victim_params = _strip_key_recursive(
-        config.victims.params[victim_name],
-        excluded_keys={"train_batch_size"},
-    )
+    # Victim prediction identity covers settings that can change victim training
+    # results. Runtime-only fields stay excluded because they live under
+    # victims.runtime rather than victims.params.
+    victim_params = config.victims.params[victim_name]
     return {
         **base_context,
         "victim_name": victim_name,
@@ -185,17 +265,40 @@ def victim_prediction_key_payload(
     }
 
 
-def victim_prediction_key(config: Config, victim_name: str, *, run_type: str) -> str:
-    payload = victim_prediction_key_payload(config, victim_name, run_type=run_type)
+def victim_prediction_key(
+    config: Config,
+    victim_name: str,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> str:
+    payload = victim_prediction_key_payload(
+        config,
+        victim_name,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
     return f"victim_{victim_name}_{_hash_token(_stable_json(payload))}"
 
 
-def evaluation_key_payload(config: Config, *, run_type: str) -> dict[str, Any]:
+def evaluation_key_payload(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    # Final reporting identity composes the upstream final attack identity, the
+    # victim-training-result identities, and the evaluation metric settings.
     return {
         "run_type": run_type,
         "target_selection_key": target_selection_key(config),
         "victim_prediction_keys": {
-            victim_name: victim_prediction_key(config, victim_name, run_type=run_type)
+            victim_name: victim_prediction_key(
+                config,
+                victim_name,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            )
             for victim_name in config.victims.enabled
         },
         "evaluation": {
@@ -206,8 +309,18 @@ def evaluation_key_payload(config: Config, *, run_type: str) -> dict[str, Any]:
     }
 
 
-def evaluation_key(config: Config, *, run_type: str) -> str:
-    return f"eval_{_hash_token(_stable_json(evaluation_key_payload(config, run_type=run_type)))}"
+def evaluation_key(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> str:
+    payload = evaluation_key_payload(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    return f"eval_{_hash_token(_stable_json(payload))}"
 
 
 def shared_root(config: Config) -> Path:
@@ -253,12 +366,18 @@ def shared_victim_dir(
     run_type: str,
     target_id: str | int,
     victim_name: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
 ) -> Path:
     return (
         shared_root(config)
         / "victim_predictions"
         / victim_name
-        / victim_prediction_key(config, victim_name, run_type=run_type)
+        / victim_prediction_key(
+            config,
+            victim_name,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        )
         / "targets"
         / str(target_id)
     )
@@ -273,12 +392,35 @@ def runs_root(config: Config) -> Path:
     )
 
 
-def run_config_dir(config: Config, *, run_type: str) -> Path:
-    return runs_root(config) / evaluation_key(config, run_type=run_type)
+def run_config_dir(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> Path:
+    return runs_root(config) / evaluation_key(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
 
 
-def target_dir(config: Config, target_id: str | int, *, run_type: str) -> Path:
-    return run_config_dir(config, run_type=run_type) / "targets" / str(target_id)
+def target_dir(
+    config: Config,
+    target_id: str | int,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> Path:
+    return (
+        run_config_dir(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        )
+        / "targets"
+        / str(target_id)
+    )
 
 
 def _primary_victim(config: Config) -> str:
@@ -291,9 +433,19 @@ def victim_dir(
     *,
     run_type: str,
     victim_name: str | None = None,
+    attack_identity_context: Mapping[str, Any] | None = None,
 ) -> Path:
     victim = victim_name or _primary_victim(config)
-    return target_dir(config, target_id, run_type=run_type) / "victims" / victim
+    return (
+        target_dir(
+            config,
+            target_id,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        )
+        / "victims"
+        / victim
+    )
 
 
 def shared_artifact_paths(config: Config, *, run_type: str) -> dict[str, Path]:
@@ -313,8 +465,17 @@ def shared_artifact_paths(config: Config, *, run_type: str) -> dict[str, Path]:
     }
 
 
-def run_metadata_paths(config: Config, *, run_type: str) -> dict[str, Path]:
-    run_root = run_config_dir(config, run_type=run_type)
+def run_metadata_paths(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> dict[str, Path]:
+    run_root = run_config_dir(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
     return {
         "run_root": run_root,
         "resolved_config": run_root / "resolved_config.json",
@@ -331,14 +492,22 @@ def run_artifact_paths(
     run_type: str,
     target_id: str | int,
     victim_name: str | None = None,
+    attack_identity_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Path]:
     victim = victim_name or _primary_victim(config)
-    local_base = victim_dir(config, target_id, run_type=run_type, victim_name=victim)
+    local_base = victim_dir(
+        config,
+        target_id,
+        run_type=run_type,
+        victim_name=victim,
+        attack_identity_context=attack_identity_context,
+    )
     shared_base = shared_victim_dir(
         config,
         run_type=run_type,
         target_id=target_id,
         victim_name=victim,
+        attack_identity_context=attack_identity_context,
     )
     return {
         "run_dir": local_base,
@@ -364,8 +533,10 @@ def run_artifact_paths(
 __all__ = [
     "attack_key",
     "attack_key_payload",
+    "build_position_opt_attack_identity_context",
     "canonical_split_dir",
     "canonical_split_paths",
+    "checkpoint_identity_payload",
     "dataset_name",
     "dataset_paths",
     "dataset_root",

@@ -24,6 +24,7 @@ from .types import (
     SelectedPositionResult,
     SurrogateScoreResult,
     TruncatedFineTuneConfig,
+    resolve_position_opt_config,
 )
 
 if TYPE_CHECKING:
@@ -57,6 +58,7 @@ __all__ = [
     "compute_position_opt_objective",
     "ensure_position_opt_artifact_dirs",
     "replace_item_at_position",
+    "resolve_position_opt_config",
     "resolve_clean_surrogate_checkpoint_path",
     "sample_position_reinforce",
     "select_position_eval",

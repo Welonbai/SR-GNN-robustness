@@ -12,6 +12,7 @@ if __package__ is None or __package__ == "":
 
 from attack.common.artifact_io import save_json
 from attack.common.config import Config, load_config
+from attack.common.paths import build_position_opt_attack_identity_context
 from attack.common.seed import set_seed
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.inner_train.truncated_finetune import TruncatedFineTuneInnerTrainer
@@ -31,6 +32,7 @@ from attack.position_opt import (
     build_position_opt_artifact_paths,
     ensure_position_opt_artifact_dirs,
     resolve_clean_surrogate_checkpoint_path,
+    resolve_position_opt_config,
 )
 from attack.surrogate.srgnn_backend import SRGNNBackend
 
@@ -63,6 +65,11 @@ def run_position_opt_mvp(
             "Explicit clean surrogate checkpoint not found: "
             f"{clean_checkpoint}"
         )
+    resolved_position_opt_config = resolve_position_opt_config(position_opt_config)
+    attack_identity_context = build_position_opt_attack_identity_context(
+        position_opt_config=asdict(resolved_position_opt_config),
+        clean_surrogate_checkpoint=clean_checkpoint,
+    )
     candidate_summary = _candidate_size_summary(
         shared.template_sessions,
         replacement_topk_ratio=config.attack.replacement_topk_ratio,
@@ -86,6 +93,7 @@ def run_position_opt_mvp(
                 run_type=POSITION_OPT_RUN_TYPE,
                 target_item=target_item,
                 clean_checkpoint_override=clean_checkpoint,
+                attack_identity_context=attack_identity_context,
             )
         )
         surrogate_backend = SRGNNBackend(config, base_dir=Path.cwd())
@@ -94,7 +102,7 @@ def run_position_opt_mvp(
             surrogate_backend,
             inner_trainer,
             clean_surrogate_checkpoint_path=artifact_paths.clean_surrogate_checkpoint,
-            position_opt_config=position_opt_config,
+            position_opt_config=resolved_position_opt_config,
         )
 
         trainer_result = trainer.train(
@@ -168,6 +176,7 @@ def run_position_opt_mvp(
         context=context,
         run_type=POSITION_OPT_RUN_TYPE,
         build_poisoned=build_poisoned,
+        attack_identity_context=attack_identity_context,
     )
     print("[position-opt] Final victim evaluation completed.")
     return summary

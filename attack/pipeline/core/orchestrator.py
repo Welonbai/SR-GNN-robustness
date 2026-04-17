@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 import time
-from typing import Callable
+from typing import Callable, Mapping
 from zoneinfo import ZoneInfo
 
 from attack.common.artifact_io import load_json, save_json
@@ -74,8 +74,13 @@ def run_targets_and_victims(
     context: RunContext,
     run_type: str,
     build_poisoned: Callable[[int], TargetPoisonOutput],
+    attack_identity_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    metadata_paths = run_metadata_paths(config, run_type=run_type)
+    metadata_paths = run_metadata_paths(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
     run_root = metadata_paths["run_root"]
     summary_path = metadata_paths["summary"]
     if summary_path.exists():
@@ -93,13 +98,22 @@ def run_targets_and_victims(
         target_snapshot = context.shared_paths["target_config_snapshot"]
         if not target_snapshot.exists():
             shutil.copyfile(config_path, target_snapshot)
-    resolved_payload = _resolved_config_payload(config, run_type=run_type)
-    key_payloads = _key_payloads(config, run_type=run_type)
+    resolved_payload = _resolved_config_payload(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    key_payloads = _key_payloads(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
     artifact_manifest = _initial_artifact_manifest(
         config,
         context=context,
         run_type=run_type,
         metadata_paths=metadata_paths,
+        attack_identity_context=attack_identity_context,
     )
     save_json(resolved_payload, metadata_paths["resolved_config"])
     save_json(key_payloads, metadata_paths["key_payloads"])
@@ -171,6 +185,7 @@ def run_targets_and_victims(
                     run_type=run_type,
                     target_id=target_item,
                     victim_name=victim_name,
+                    attack_identity_context=attack_identity_context,
                 )
                 run_dir = artifacts["run_dir"]
                 run_dir.mkdir(parents=True, exist_ok=True)
@@ -276,9 +291,19 @@ def run_targets_and_victims(
         raise
 
 
-def _resolved_config_payload(config: Config, *, run_type: str) -> dict[str, object]:
+def _resolved_config_payload(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     victim_prediction_keys = {
-        victim_name: victim_prediction_key(config, victim_name, run_type=run_type)
+        victim_name: victim_prediction_key(
+            config,
+            victim_name,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        )
         for victim_name in config.victims.enabled
     }
     return {
@@ -288,23 +313,49 @@ def _resolved_config_payload(config: Config, *, run_type: str) -> dict[str, obje
             "run_type": run_type,
             "split_key": split_key(config),
             "target_selection_key": target_selection_key(config),
-            "attack_key": attack_key(config, run_type=run_type),
+            "attack_key": attack_key(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
             "victim_prediction_keys": victim_prediction_keys,
-            "evaluation_key": evaluation_key(config, run_type=run_type),
+            "evaluation_key": evaluation_key(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
         },
     }
 
 
-def _key_payloads(config: Config, *, run_type: str) -> dict[str, object]:
+def _key_payloads(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     return {
         "split_key_payload": split_key_payload(config),
         "target_selection_key_payload": target_selection_key_payload(config),
-        "attack_key_payload": attack_key_payload(config, run_type=run_type),
+        "attack_key_payload": attack_key_payload(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ),
         "victim_prediction_key_payloads": {
-            victim_name: victim_prediction_key_payload(config, victim_name, run_type=run_type)
+            victim_name: victim_prediction_key_payload(
+                config,
+                victim_name,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            )
             for victim_name in config.victims.enabled
         },
-        "evaluation_key_payload": evaluation_key_payload(config, run_type=run_type),
+        "evaluation_key_payload": evaluation_key_payload(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ),
     }
 
 
@@ -314,6 +365,7 @@ def _initial_artifact_manifest(
     context: RunContext,
     run_type: str,
     metadata_paths: dict[str, Path],
+    attack_identity_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     canonical_paths = canonical_split_paths(config)
     target_selection_artifact = {
@@ -332,11 +384,17 @@ def _initial_artifact_manifest(
             "poison_train_history": str(context.shared_paths["poison_train_history"]),
             "config_snapshot": str(context.shared_paths["attack_config_snapshot"]),
         }
+    derived_identity: dict[str, object] | None = None
+    if attack_identity_context is not None:
+        derived_identity = {
+            "final_attack_identity_context": dict(attack_identity_context),
+        }
     return {
         "run_type": run_type,
         "canonical_split_artifact": {key: str(path) for key, path in canonical_paths.items()},
         "target_selection_artifact": target_selection_artifact,
         "poison_artifact": poison_artifact,
+        "derived_identity": derived_identity,
         "victims": {},
         "generated_configs": {},
         "output_files": {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, Mapping
 
 from attack.common.config import Config
 from attack.common.paths import shared_attack_dir, target_dir
@@ -34,6 +35,7 @@ def build_position_opt_artifact_paths(
     run_type: str = POSITION_OPT_RUN_TYPE,
     target_item: int | None = None,
     clean_checkpoint_override: str | Path | None = None,
+    attack_identity_context: Mapping[str, Any] | None = None,
 ) -> PositionOptArtifactPaths:
     # Position-opt artifacts live beside the existing scaffold artifacts, but the
     # clean surrogate checkpoint is a separate role and must be supplied explicitly
@@ -41,7 +43,15 @@ def build_position_opt_artifact_paths(
     if target_item is None:
         base_dir = shared_attack_dir(config, run_type=run_type) / "position_opt"
     else:
-        base_dir = target_dir(config, target_item, run_type=run_type) / "position_opt"
+        base_dir = (
+            target_dir(
+                config,
+                target_item,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            )
+            / "position_opt"
+        )
 
     return PositionOptArtifactPaths(
         base_dir=base_dir,
