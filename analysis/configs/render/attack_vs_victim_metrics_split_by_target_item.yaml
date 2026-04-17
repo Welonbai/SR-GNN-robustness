@@ -35,6 +35,7 @@ table:
     attack_method:
       clean: Clean
       dpsbr_baseline: DPSBR
+      prefix_nonzero_when_possible: Prefix-NZ
       random_nonzero_when_possible: Random-NZ
 
     victim_model:
