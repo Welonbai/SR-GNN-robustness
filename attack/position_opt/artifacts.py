@@ -51,8 +51,10 @@ def build_position_opt_artifact_paths(
             override=clean_checkpoint_override,
         ),
         optimized_poisoned_sessions=base_dir / "optimized_poisoned_sessions.pkl",
+        selected_positions=base_dir / "selected_positions.json",
         training_history=base_dir / "training_history.json",
         learned_logits=base_dir / "learned_logits.pt",
+        run_metadata=base_dir / "run_metadata.json",
     )
 
 
@@ -60,10 +62,14 @@ def ensure_position_opt_artifact_dirs(paths: PositionOptArtifactPaths) -> Positi
     paths.base_dir.mkdir(parents=True, exist_ok=True)
     paths.clean_surrogate_checkpoint.parent.mkdir(parents=True, exist_ok=True)
     paths.optimized_poisoned_sessions.parent.mkdir(parents=True, exist_ok=True)
+    if paths.selected_positions is not None:
+        paths.selected_positions.parent.mkdir(parents=True, exist_ok=True)
     if paths.training_history is not None:
         paths.training_history.parent.mkdir(parents=True, exist_ok=True)
     if paths.learned_logits is not None:
         paths.learned_logits.parent.mkdir(parents=True, exist_ok=True)
+    if paths.run_metadata is not None:
+        paths.run_metadata.parent.mkdir(parents=True, exist_ok=True)
     return paths
 
 

@@ -49,7 +49,7 @@ class TruncatedFineTuneConfig:
 @dataclass(frozen=True)
 class PositionOptDefaults:
     enabled: bool = True
-    training_selector: str = "st_gumbel"
+    training_selector: str = "categorical_reinforce"
     eval_selector: str = "argmax"
     outer_steps: int = 30
     policy_lr: float = 0.05
@@ -58,6 +58,8 @@ class PositionOptDefaults:
     enable_gt_penalty: bool = False
     gt_penalty_weight: float = 0.0
     gt_tolerance: float = 0.0
+    reward_baseline_momentum: float = 0.9
+    validation_subset_size: int | None = None
 
 
 @dataclass(frozen=True)
@@ -65,8 +67,10 @@ class PositionOptArtifactPaths:
     base_dir: Path
     clean_surrogate_checkpoint: Path
     optimized_poisoned_sessions: Path
+    selected_positions: Path | None = None
     training_history: Path | None = None
     learned_logits: Path | None = None
+    run_metadata: Path | None = None
 
 
 @dataclass(frozen=True)
