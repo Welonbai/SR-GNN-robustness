@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from attack.common.config import Config
+from attack.common.paths import shared_attack_dir, target_dir
+
+from .types import PositionOptArtifactPaths
+
+
+POSITION_OPT_RUN_TYPE = "position_opt_mvp"
+
+
+def resolve_clean_surrogate_checkpoint_path(
+    config: Config,
+    *,
+    run_type: str = POSITION_OPT_RUN_TYPE,
+    override: str | Path | None = None,
+) -> Path:
+    del config, run_type
+    if override is not None:
+        return Path(override)
+    raise ValueError(
+        "Position optimization MVP Phase 1 requires an explicit clean surrogate "
+        "checkpoint path. The existing poison-model checkpoint is used by the "
+        "fake-session generation scaffold and must not be reused as the clean "
+        "surrogate checkpoint."
+    )
+
+
+def build_position_opt_artifact_paths(
+    config: Config,
+    *,
+    run_type: str = POSITION_OPT_RUN_TYPE,
+    target_item: int | None = None,
+    clean_checkpoint_override: str | Path | None = None,
+) -> PositionOptArtifactPaths:
+    # Position-opt artifacts live beside the existing scaffold artifacts, but the
+    # clean surrogate checkpoint is a separate role and must be supplied explicitly
+    # until dedicated artifact/config plumbing is added in a later phase.
+    if target_item is None:
+        base_dir = shared_attack_dir(config, run_type=run_type) / "position_opt"
+    else:
+        base_dir = target_dir(config, target_item, run_type=run_type) / "position_opt"
+
+    return PositionOptArtifactPaths(
+        base_dir=base_dir,
+        clean_surrogate_checkpoint=resolve_clean_surrogate_checkpoint_path(
+            config,
+            run_type=run_type,
+            override=clean_checkpoint_override,
+        ),
+        optimized_poisoned_sessions=base_dir / "optimized_poisoned_sessions.pkl",
+        training_history=base_dir / "training_history.json",
+        learned_logits=base_dir / "learned_logits.pt",
+    )
+
+
+def ensure_position_opt_artifact_dirs(paths: PositionOptArtifactPaths) -> PositionOptArtifactPaths:
+    paths.base_dir.mkdir(parents=True, exist_ok=True)
+    paths.clean_surrogate_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+    paths.optimized_poisoned_sessions.parent.mkdir(parents=True, exist_ok=True)
+    if paths.training_history is not None:
+        paths.training_history.parent.mkdir(parents=True, exist_ok=True)
+    if paths.learned_logits is not None:
+        paths.learned_logits.parent.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+__all__ = [
+    "POSITION_OPT_RUN_TYPE",
+    "build_position_opt_artifact_paths",
+    "ensure_position_opt_artifact_dirs",
+    "resolve_clean_surrogate_checkpoint_path",
+]
