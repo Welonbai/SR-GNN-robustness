@@ -100,8 +100,8 @@ def test_resolved_config_separates_stable_run_group_from_execution_request() -> 
     assert "target_selection_identity" in stable_run_group["legacy_identities"]
     assert "evaluation_identity" in stable_run_group["legacy_identities"]
 
-    assert execution_request["request_model"] == "target_append_invocation"
-    assert execution_request["execution_semantics"] == "target_append_against_stable_run_group"
+    assert execution_request["request_model"] == "append_invocation"
+    assert execution_request["execution_semantics"] == "append_against_stable_run_group"
     assert execution_request["requested_victims"] == list(config.victims.enabled)
     assert execution_request["target_request"]["requested_target_count"] == config.targets.count
     assert execution_request["target_request"]["count_interpretation"] == "prefix_length"

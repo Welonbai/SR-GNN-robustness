@@ -248,6 +248,7 @@ def test_larger_prefix_only_executes_new_targets_and_rerun_executes_nothing_new(
         metadata_paths = run_metadata_paths(larger_config, run_type="clean")
         execution_log = load_execution_log(metadata_paths["execution_log"])
         summary_current = load_summary_current(metadata_paths["summary_current"])
+        progress_payload = load_json(metadata_paths["progress"])
 
     assert len(first_calls) == 2
     assert second_calls == [(int(target_item), "miasrec") for target_item in appended_targets]
@@ -268,16 +269,18 @@ def test_larger_prefix_only_executes_new_targets_and_rerun_executes_nothing_new(
 
     assert summary_current is not None
     assert set(summary_current["targets"]) == {str(item) for item in expected_larger_targets}
+    assert progress_payload["total_victims"] == 1
+    assert progress_payload["requested_victims"] == ["miasrec"]
 
 
-def test_victim_set_change_is_rejected_until_phase5(monkeypatch) -> None:
+def test_victim_ordering_difference_is_treated_as_compatible_same_set(monkeypatch) -> None:
     with _phase4_temp_root() as temp_root:
-        first_config = _config_for_temp_root(temp_root, count=2, victims=("miasrec",))
-        second_config = _config_for_temp_root(temp_root, count=2, victims=("miasrec", "tron"))
+        first_config = _config_for_temp_root(temp_root, count=2, victims=("miasrec", "tron"))
+        reordered_config = _config_for_temp_root(temp_root, count=2, victims=("tron", "miasrec"))
         context = _minimal_context(first_config, run_type="clean")
-        calls: list[tuple[int, str]] = []
-        _install_fake_execution(monkeypatch, calls=calls)
 
+        first_calls: list[tuple[int, str]] = []
+        _install_fake_execution(monkeypatch, calls=first_calls)
         run_targets_and_victims(
             first_config,
             config_path=None,
@@ -286,19 +289,23 @@ def test_victim_set_change_is_rejected_until_phase5(monkeypatch) -> None:
             build_poisoned=_build_poisoned,
         )
 
-        with pytest.raises(RuntimeError) as exc_info:
-            run_targets_and_victims(
-                second_config,
-                config_path=None,
-                context=context,
-                run_type="clean",
-                build_poisoned=_build_poisoned,
-            )
+        second_calls: list[tuple[int, str]] = []
+        _install_fake_execution(monkeypatch, calls=second_calls)
+        run_targets_and_victims(
+            reordered_config,
+            config_path=None,
+            context=context,
+            run_type="clean",
+            build_poisoned=_build_poisoned,
+        )
 
-    assert "Victim-append or victim-set changes are not implemented until Phase 5" in str(
-        exc_info.value
-    )
+        metadata_paths = run_metadata_paths(reordered_config, run_type="clean")
+        progress_payload = load_json(metadata_paths["progress"])
 
+    assert len(first_calls) == 4
+    assert second_calls == []
+    assert progress_payload["total_victims"] == 2
+    assert progress_payload["requested_victims"] == ["tron", "miasrec"]
 
 def test_failed_cells_remain_eligible_and_rerun_only_retries_failures(monkeypatch) -> None:
     with _phase4_temp_root() as temp_root:

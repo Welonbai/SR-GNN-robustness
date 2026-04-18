@@ -35,6 +35,7 @@ from attack.common.paths import (
     split_key,
     target_cohort_key,
     target_selection_key,
+    victim_prediction_key,
 )
 from attack.common.seed import derive_seed, set_seed
 from attack.data.canonical_dataset import CanonicalDataset
@@ -381,26 +382,98 @@ def requested_target_prefix(target_registry: Mapping[str, Any]) -> list[int]:
     return [int(item) for item in ordered_targets[:current_count]]
 
 
-def _default_victim_coverage_entry(timestamp: str) -> dict[str, Any]:
+def _default_victim_coverage_entry(
+    timestamp: str,
+    *,
+    victim_prediction_key_value: str,
+) -> dict[str, Any]:
     return {
         "status": "requested",
         "first_requested_at": timestamp,
         "last_requested_at": timestamp,
+        "victim_prediction_key": victim_prediction_key_value,
+    }
+
+
+def _default_cell_artifacts() -> dict[str, Any]:
+    return {
+        "metrics": None,
+        "predictions": None,
+        "train_history": None,
+        "poisoned_train": None,
     }
 
 
 def _default_cell_coverage_entry(timestamp: str) -> dict[str, Any]:
     return {
-        "status": "pending",
-        "artifacts": {
-            "metrics": None,
-            "predictions": None,
-            "train_history": None,
-            "poisoned_train": None,
-        },
+        "status": "requested",
+        "artifacts": _default_cell_artifacts(),
         "error": None,
+        "first_requested_at": timestamp,
+        "last_requested_at": timestamp,
+        "last_started_at": None,
+        "last_execution_id": None,
+        "attempt_count": 0,
+        "completed_at": None,
+        "failed_at": None,
         "last_updated_at": timestamp,
     }
+
+
+def _normalize_cell_coverage_entry(
+    cell: Mapping[str, Any],
+    *,
+    timestamp: str,
+    default_requested_at: str,
+) -> tuple[dict[str, Any], bool]:
+    normalized = dict(cell)
+    changed = False
+
+    status = normalized.get("status")
+    if not isinstance(status, str):
+        normalized["status"] = "requested"
+        changed = True
+
+    artifacts = normalized.get("artifacts")
+    if not isinstance(artifacts, Mapping):
+        normalized["artifacts"] = _default_cell_artifacts()
+        changed = True
+    else:
+        artifact_payload = dict(artifacts)
+        for artifact_name in ("metrics", "predictions", "train_history", "poisoned_train"):
+            if artifact_name not in artifact_payload:
+                artifact_payload[artifact_name] = None
+                changed = True
+        normalized["artifacts"] = artifact_payload
+
+    if "error" not in normalized:
+        normalized["error"] = None
+        changed = True
+    if "first_requested_at" not in normalized:
+        normalized["first_requested_at"] = default_requested_at
+        changed = True
+    if "last_requested_at" not in normalized:
+        normalized["last_requested_at"] = normalized.get("first_requested_at", default_requested_at)
+        changed = True
+    if "last_started_at" not in normalized:
+        normalized["last_started_at"] = None
+        changed = True
+    if "last_execution_id" not in normalized:
+        normalized["last_execution_id"] = None
+        changed = True
+    if "attempt_count" not in normalized:
+        normalized["attempt_count"] = 0
+        changed = True
+    if "completed_at" not in normalized:
+        normalized["completed_at"] = None
+        changed = True
+    if "failed_at" not in normalized:
+        normalized["failed_at"] = None
+        changed = True
+    if "last_updated_at" not in normalized:
+        normalized["last_updated_at"] = timestamp
+        changed = True
+    return normalized, changed
 
 
 def load_or_init_run_coverage(
@@ -420,6 +493,15 @@ def load_or_init_run_coverage(
         attack_identity_context=attack_identity_context,
     )
     expected_target_cohort_key = target_cohort_key(config)
+    expected_victim_prediction_keys = {
+        victim_name: victim_prediction_key(
+            config,
+            victim_name,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        )
+        for victim_name in config.victims.enabled
+    }
     now = _timestamp_utc()
 
     coverage = load_run_coverage(coverage_path)
@@ -431,7 +513,10 @@ def load_or_init_run_coverage(
             "run_type": run_type,
             "targets_order": expected_targets_order,
             "victims": {
-                victim_name: _default_victim_coverage_entry(now)
+                victim_name: _default_victim_coverage_entry(
+                    now,
+                    victim_prediction_key_value=expected_victim_prediction_keys[victim_name],
+                )
                 for victim_name in config.victims.enabled
             },
             "cells": {
@@ -458,6 +543,7 @@ def load_or_init_run_coverage(
     cells_payload = coverage.get("cells")
     if not isinstance(cells_payload, dict):
         raise ValueError("run_coverage.json must contain a cells object.")
+    default_requested_at = str(coverage.get("created_at", now))
 
     changed = False
     for victim_name in config.victims.enabled:
@@ -470,11 +556,26 @@ def load_or_init_run_coverage(
                     "same victim set. Victim-append or victim-set changes are not "
                     "implemented until Phase 5."
                 )
-            victims_payload[victim_name] = _default_victim_coverage_entry(now)
+            victims_payload[victim_name] = _default_victim_coverage_entry(
+                now,
+                victim_prediction_key_value=expected_victim_prediction_keys[victim_name],
+            )
             changed = True
             continue
         if not isinstance(victim_entry, dict):
             raise ValueError(f"run_coverage.json victims[{victim_name}] must be an object.")
+        expected_key = expected_victim_prediction_keys[victim_name]
+        stored_key = victim_entry.get("victim_prediction_key")
+        if stored_key is None:
+            victim_entry["victim_prediction_key"] = expected_key
+            changed = True
+        elif stored_key != expected_key:
+            raise RuntimeError(
+                "Existing run_coverage.json victim registry is incompatible with the "
+                f"currently requested victim configuration for '{victim_name}'. "
+                f"Existing victim_prediction_key={stored_key}, "
+                f"requested victim_prediction_key={expected_key}."
+            )
         victim_entry["last_requested_at"] = now
 
     existing_targets_order = [int(item) for item in coverage.get("targets_order", [])]
@@ -496,6 +597,20 @@ def load_or_init_run_coverage(
         for victim_name in victim_names:
             if victim_name not in target_cells:
                 target_cells[victim_name] = _default_cell_coverage_entry(now)
+                changed = True
+                continue
+            cell_payload = target_cells[victim_name]
+            if not isinstance(cell_payload, Mapping):
+                raise ValueError(
+                    f"run_coverage.json cells[{target_key}][{victim_name}] must be an object."
+                )
+            normalized_cell, normalized_changed = _normalize_cell_coverage_entry(
+                cell_payload,
+                timestamp=now,
+                default_requested_at=default_requested_at,
+            )
+            if normalized_changed:
+                target_cells[victim_name] = normalized_cell
                 changed = True
 
     if changed:

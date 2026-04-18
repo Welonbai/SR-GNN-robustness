@@ -135,6 +135,7 @@ def run_targets_and_victims(
     save_json(key_payloads, metadata_paths["key_payloads"])
     save_json(artifact_manifest, metadata_paths["artifact_manifest"])
     run_started_monotonic = time.monotonic()
+    existing_run_coverage_payload = load_json(metadata_paths["run_coverage"])
     target_registry = ensure_target_registry_prefix(
         context.stats,
         config,
@@ -147,7 +148,7 @@ def run_targets_and_victims(
         metadata_paths=metadata_paths,
         target_registry=target_registry,
         attack_identity_context=attack_identity_context,
-        allow_new_victims=False,
+        allow_new_victims=True,
     )
     execution_log = load_or_init_execution_log(
         config,
@@ -155,9 +156,13 @@ def run_targets_and_victims(
         metadata_paths=metadata_paths,
         attack_identity_context=attack_identity_context,
     )
+    _reconcile_interrupted_execution_records(
+        execution_log,
+        metadata_paths=metadata_paths,
+    )
 
     requested_victims = list(config.victims.enabled)
-    _validate_phase4_victim_request(
+    _validate_phase5_victim_request(
         run_coverage,
         requested_victims=requested_victims,
     )
@@ -181,11 +186,13 @@ def run_targets_and_victims(
         requested_victims=requested_victims,
         planned_cells=planned_cells,
         skipped_completed_cells=skipped_completed_cells,
+        existing_run_coverage_payload=existing_run_coverage_payload,
         metadata_paths=metadata_paths,
     )
     _populate_progress_plan_from_cells(
         progress_payload,
         requested_target_items=requested_target_items,
+        requested_victims=requested_victims,
         planned_cells=planned_cells,
         skipped_completed_cells=skipped_completed_cells,
         elapsed_seconds=time.monotonic() - run_started_monotonic,
@@ -196,6 +203,7 @@ def run_targets_and_victims(
 
     current_run: dict[str, object] | None = None
     current_artifacts: dict[str, Path] | None = None
+    current_cell_committed = False
     plan_by_target = _group_planned_cells_by_target(planned_cells)
     try:
         overall_index = 0
@@ -218,6 +226,7 @@ def run_targets_and_victims(
                     "victim_name": victim_name,
                     "overall_index": int(overall_index),
                 }
+                current_cell_committed = False
                 _mark_progress_run_started(
                     progress_payload,
                     current_run=current_run,
@@ -237,6 +246,20 @@ def run_targets_and_victims(
                 run_dir.mkdir(parents=True, exist_ok=True)
                 if config_path and not artifacts["config_snapshot"].exists():
                     shutil.copyfile(config_path, artifacts["config_snapshot"])
+                _mark_coverage_cell_pending(
+                    run_coverage,
+                    target_item=int(target_item),
+                    victim_name=victim_name,
+                    execution_id=str(execution_record["execution_id"]),
+                )
+                save_run_coverage(run_coverage, metadata_paths["run_coverage"])
+                _record_execution_cell_pending(
+                    execution_log,
+                    execution_record=execution_record,
+                    target_item=int(target_item),
+                    victim_name=victim_name,
+                    metadata_paths=metadata_paths,
+                )
 
                 victim_result, reused = _maybe_reuse_or_execute_victim(
                     config,
@@ -294,8 +317,17 @@ def run_targets_and_victims(
                     target_item=int(target_item),
                     victim_name=victim_name,
                     artifacts=artifacts,
+                    execution_id=str(execution_record["execution_id"]),
                 )
                 save_run_coverage(run_coverage, metadata_paths["run_coverage"])
+                _record_execution_cell_completion(
+                    execution_log,
+                    execution_record=execution_record,
+                    target_item=int(target_item),
+                    victim_name=victim_name,
+                    metadata_paths=metadata_paths,
+                )
+                current_cell_committed = True
 
                 _update_artifact_manifest(
                     artifact_manifest,
@@ -306,31 +338,15 @@ def run_targets_and_victims(
                     reused=reused,
                 )
                 save_json(artifact_manifest, metadata_paths["artifact_manifest"])
-                _record_execution_cell_completion(
-                    execution_log,
-                    execution_record=execution_record,
-                    target_item=int(target_item),
-                    victim_name=victim_name,
-                    metadata_paths=metadata_paths,
-                )
-                summary_current = rebuild_summary_current(
-                    config,
-                    run_type=run_type,
-                    metadata_paths=metadata_paths,
-                    run_coverage=run_coverage,
-                    attack_identity_context=attack_identity_context,
-                )
-                summary = _write_legacy_summary_snapshot(
+                summary = _refresh_summary_snapshots(
                     config,
                     context=context,
                     run_type=run_type,
                     metadata_paths=metadata_paths,
-                    summary_current=summary_current,
+                    run_coverage=run_coverage,
+                    artifact_manifest=artifact_manifest,
+                    attack_identity_context=attack_identity_context,
                 )
-                artifact_manifest["output_files"]["summary"] = _repo_relative_path(
-                    metadata_paths["summary"]
-                )
-                save_json(artifact_manifest, metadata_paths["artifact_manifest"])
                 _mark_progress_run_completed(
                     progress_payload,
                     current_run=current_run,
@@ -339,26 +355,18 @@ def run_targets_and_victims(
                 )
                 save_json(progress_payload, metadata_paths["progress"])
                 current_artifacts = None
+                current_cell_committed = False
             current_run = None
 
-        summary_current = rebuild_summary_current(
-            config,
-            run_type=run_type,
-            metadata_paths=metadata_paths,
-            run_coverage=run_coverage,
-            attack_identity_context=attack_identity_context,
-        )
-        summary = _write_legacy_summary_snapshot(
+        summary = _refresh_summary_snapshots(
             config,
             context=context,
             run_type=run_type,
             metadata_paths=metadata_paths,
-            summary_current=summary_current,
+            run_coverage=run_coverage,
+            artifact_manifest=artifact_manifest,
+            attack_identity_context=attack_identity_context,
         )
-        artifact_manifest["output_files"]["summary"] = _repo_relative_path(
-            metadata_paths["summary"]
-        )
-        save_json(artifact_manifest, metadata_paths["artifact_manifest"])
         _mark_execution_completed(
             execution_log,
             execution_record=execution_record,
@@ -372,14 +380,15 @@ def run_targets_and_victims(
         )
         save_json(progress_payload, metadata_paths["progress"])
         return summary
-    except Exception as exc:
-        if current_run is not None and current_run.get("victim_name"):
+    except BaseException as exc:
+        if current_run is not None and current_run.get("victim_name") and not current_cell_committed:
             _mark_coverage_cell_failed(
                 run_coverage,
                 target_item=int(current_run["target_item"]),
                 victim_name=str(current_run["victim_name"]),
                 artifacts=current_artifacts,
                 error=exc,
+                execution_id=str(execution_record["execution_id"]),
             )
             save_run_coverage(run_coverage, metadata_paths["run_coverage"])
             _record_execution_cell_failure(
@@ -398,20 +407,19 @@ def run_targets_and_victims(
             elapsed_seconds=time.monotonic() - run_started_monotonic,
         )
         save_json(progress_payload, metadata_paths["progress"])
-        rebuild_summary_current(
-            config,
-            run_type=run_type,
-            metadata_paths=metadata_paths,
-            run_coverage=run_coverage,
-            attack_identity_context=attack_identity_context,
-        )
-        _write_legacy_summary_snapshot(
-            config,
-            context=context,
-            run_type=run_type,
-            metadata_paths=metadata_paths,
-            summary_current=load_json(metadata_paths["summary_current"]),
-        )
+        try:
+            _refresh_summary_snapshots(
+                config,
+                context=context,
+                run_type=run_type,
+                metadata_paths=metadata_paths,
+                run_coverage=run_coverage,
+                artifact_manifest=artifact_manifest,
+                attack_identity_context=attack_identity_context,
+            )
+        except Exception:
+            # summary_current/progress remain non-authoritative snapshots; do not mask the main failure
+            pass
         _mark_execution_failed(
             execution_log,
             execution_record=execution_record,
@@ -536,9 +544,9 @@ def _execution_request_metadata(config: Config, *, run_type: str) -> dict[str, o
         else int(len(explicit_targets))
     )
     return {
-        "request_model": "target_append_invocation",
+        "request_model": "append_invocation",
         "run_type": run_type,
-        "execution_semantics": "target_append_against_stable_run_group",
+        "execution_semantics": "append_against_stable_run_group",
         "requested_victims": list(config.victims.enabled),
         "target_request": {
             "mode": config.targets.mode,
@@ -751,7 +759,7 @@ def _load_or_init_artifact_manifest(
     return manifest
 
 
-def _validate_phase4_victim_request(
+def _validate_phase5_victim_request(
     run_coverage: Mapping[str, Any],
     *,
     requested_victims: list[str],
@@ -759,13 +767,19 @@ def _validate_phase4_victim_request(
     existing_victims_payload = run_coverage.get("victims", {})
     if not isinstance(existing_victims_payload, Mapping):
         raise ValueError("run_coverage.json must contain a victims object.")
-    existing_victims = list(existing_victims_payload.keys())
-    if existing_victims != requested_victims:
+    if len(set(requested_victims)) != len(requested_victims):
         raise RuntimeError(
-            "Phase 4 only supports target append for the same requested victim set "
-            "within an existing run group. "
-            f"Existing victims={existing_victims}, requested victims={requested_victims}. "
-            "Victim-append or victim-set changes are not implemented until Phase 5."
+            f"Requested victims must be unique per invocation. Received {requested_victims}."
+        )
+    missing_victims = [
+        victim_name
+        for victim_name in requested_victims
+        if victim_name not in existing_victims_payload
+    ]
+    if missing_victims:
+        raise RuntimeError(
+            "run_coverage.json does not include registry entries for all requested victims "
+            f"after Phase 5 victim-append initialization. Missing victims={missing_victims}."
         )
 
 
@@ -792,6 +806,7 @@ def _append_execution_record(
     requested_victims: list[str],
     planned_cells: list[dict[str, Any]],
     skipped_completed_cells: list[dict[str, Any]],
+    existing_run_coverage_payload: Mapping[str, Any] | None,
     metadata_paths: Mapping[str, Path],
 ) -> dict[str, object]:
     executions = execution_log.get("executions")
@@ -803,18 +818,50 @@ def _append_execution_record(
         if config.targets.mode == "sampled"
         else int(len(requested_target_items))
     )
+    plan_summary = _execution_plan_summary(
+        existing_run_coverage_payload,
+        requested_target_items=requested_target_items,
+        requested_victims=requested_victims,
+        planned_cells=planned_cells,
+    )
     execution_record = {
         "execution_id": uuid4().hex,
-        "mode": "target_append",
+        "mode": plan_summary["mode"],
         "run_type": run_type,
         "requested_target_count": requested_target_count,
         "requested_target_items": [int(item) for item in requested_target_items],
         "requested_victims": list(requested_victims),
-        "planned_cells": [dict(cell) for cell in planned_cells],
+        "added_target_items": [int(item) for item in plan_summary["added_target_items"]],
+        "added_victims": list(plan_summary["added_victims"]),
+        "planned_cells": [
+            {
+                "target_item": int(cell["target_item"]),
+                "victim_name": str(cell["victim_name"]),
+                "status": "requested",
+                "requested_at": timestamp,
+                "started_at": None,
+                "completed_at": None,
+                "failed_at": None,
+                "error_type": None,
+                "error": None,
+            }
+            for cell in planned_cells
+        ],
         "planned_target_items": [int(item) for item in _unique_targets(planned_cells)],
-        "skipped_completed_cells": [dict(cell) for cell in skipped_completed_cells],
+        "planned_cell_count": int(len(planned_cells)),
+        "skipped_completed_cells": [
+            {
+                "target_item": int(cell["target_item"]),
+                "victim_name": str(cell["victim_name"]),
+                "skipped_at": timestamp,
+            }
+            for cell in skipped_completed_cells
+        ],
+        "skipped_completed_cell_count": int(len(skipped_completed_cells)),
         "completed_cells": [],
         "failed_cells": [],
+        "completed_cell_count": 0,
+        "failed_cell_count": 0,
         "status": "running",
         "started_at": timestamp,
         "updated_at": timestamp,
@@ -825,6 +872,54 @@ def _append_execution_record(
     execution_log["updated_at"] = timestamp
     save_execution_log(execution_log, metadata_paths["execution_log"])
     return execution_record
+
+
+def _planned_cell_entry(
+    execution_record: Mapping[str, Any],
+    *,
+    target_item: int,
+    victim_name: str,
+) -> dict[str, Any] | None:
+    planned_cells = execution_record.get("planned_cells")
+    if not isinstance(planned_cells, list):
+        raise ValueError("execution_log execution records must contain planned_cells.")
+    for entry in planned_cells:
+        if not isinstance(entry, dict):
+            continue
+        if int(entry.get("target_item", -1)) != int(target_item):
+            continue
+        if str(entry.get("victim_name")) != victim_name:
+            continue
+        return entry
+    return None
+
+
+def _record_execution_cell_pending(
+    execution_log: dict[str, object],
+    *,
+    execution_record: dict[str, object],
+    target_item: int,
+    victim_name: str,
+    metadata_paths: Mapping[str, Path],
+) -> None:
+    timestamp = _execution_timestamp()
+    planned_entry = _planned_cell_entry(
+        execution_record,
+        target_item=target_item,
+        victim_name=victim_name,
+    )
+    if planned_entry is None:
+        raise ValueError(
+            "execution_log planned_cells must include every scheduled cell before execution starts."
+        )
+    planned_entry["status"] = "pending"
+    if planned_entry.get("started_at") is None:
+        planned_entry["started_at"] = timestamp
+    planned_entry["error_type"] = None
+    planned_entry["error"] = None
+    execution_record["updated_at"] = timestamp
+    execution_log["updated_at"] = timestamp
+    save_execution_log(execution_log, metadata_paths["execution_log"])
 
 
 def _unique_targets(cells: list[dict[str, Any]]) -> list[int]:
@@ -839,6 +934,56 @@ def _unique_targets(cells: list[dict[str, Any]]) -> list[int]:
     return ordered_targets
 
 
+def _execution_plan_summary(
+    existing_run_coverage_payload: Mapping[str, Any] | None,
+    *,
+    requested_target_items: list[int],
+    requested_victims: list[str],
+    planned_cells: list[dict[str, Any]],
+) -> dict[str, object]:
+    existing_targets_order: list[int] = []
+    existing_victims: list[str] = []
+    if isinstance(existing_run_coverage_payload, Mapping):
+        raw_targets_order = existing_run_coverage_payload.get("targets_order", [])
+        if isinstance(raw_targets_order, list):
+            existing_targets_order = [int(item) for item in raw_targets_order]
+        raw_victims = existing_run_coverage_payload.get("victims", {})
+        if isinstance(raw_victims, Mapping):
+            existing_victims = [str(victim_name) for victim_name in raw_victims.keys()]
+
+    existing_target_set = set(existing_targets_order)
+    existing_victim_set = set(existing_victims)
+    added_target_items = [
+        int(target_item)
+        for target_item in requested_target_items
+        if int(target_item) not in existing_target_set
+    ]
+    added_victims = [
+        victim_name
+        for victim_name in requested_victims
+        if victim_name not in existing_victim_set
+    ]
+
+    if not existing_targets_order and not existing_victims:
+        mode = "initial_population"
+    elif added_target_items and added_victims:
+        mode = "target_and_victim_append"
+    elif added_victims:
+        mode = "victim_append"
+    elif added_target_items:
+        mode = "target_append"
+    elif planned_cells:
+        mode = "retry_incomplete_cells"
+    else:
+        mode = "noop"
+
+    return {
+        "mode": mode,
+        "added_target_items": added_target_items,
+        "added_victims": added_victims,
+    }
+
+
 def _record_execution_cell_completion(
     execution_log: dict[str, object],
     *,
@@ -848,6 +993,18 @@ def _record_execution_cell_completion(
     metadata_paths: Mapping[str, Path],
 ) -> None:
     timestamp = _execution_timestamp()
+    planned_entry = _planned_cell_entry(
+        execution_record,
+        target_item=target_item,
+        victim_name=victim_name,
+    )
+    if planned_entry is not None:
+        planned_entry["status"] = "completed"
+        if planned_entry.get("started_at") is None:
+            planned_entry["started_at"] = timestamp
+        planned_entry["completed_at"] = timestamp
+        planned_entry["error_type"] = None
+        planned_entry["error"] = None
     completed_cells = execution_record.get("completed_cells")
     if not isinstance(completed_cells, list):
         raise ValueError("execution_log execution records must contain completed_cells.")
@@ -858,6 +1015,7 @@ def _record_execution_cell_completion(
             "completed_at": timestamp,
         }
     )
+    execution_record["completed_cell_count"] = int(len(completed_cells))
     execution_record["updated_at"] = timestamp
     execution_log["updated_at"] = timestamp
     save_execution_log(execution_log, metadata_paths["execution_log"])
@@ -869,10 +1027,22 @@ def _record_execution_cell_failure(
     execution_record: dict[str, object],
     target_item: int,
     victim_name: str,
-    error: Exception,
+    error: BaseException,
     metadata_paths: Mapping[str, Path],
 ) -> None:
     timestamp = _execution_timestamp()
+    planned_entry = _planned_cell_entry(
+        execution_record,
+        target_item=target_item,
+        victim_name=victim_name,
+    )
+    if planned_entry is not None:
+        planned_entry["status"] = "failed"
+        if planned_entry.get("started_at") is None:
+            planned_entry["started_at"] = timestamp
+        planned_entry["failed_at"] = timestamp
+        planned_entry["error_type"] = type(error).__name__
+        planned_entry["error"] = str(error)
     failed_cells = execution_record.get("failed_cells")
     if not isinstance(failed_cells, list):
         raise ValueError("execution_log execution records must contain failed_cells.")
@@ -885,6 +1055,7 @@ def _record_execution_cell_failure(
             "error": str(error),
         }
     )
+    execution_record["failed_cell_count"] = int(len(failed_cells))
     execution_record["updated_at"] = timestamp
     execution_log["updated_at"] = timestamp
     save_execution_log(execution_log, metadata_paths["execution_log"])
@@ -910,7 +1081,7 @@ def _mark_execution_failed(
     execution_log: dict[str, object],
     *,
     execution_record: dict[str, object],
-    error: Exception,
+    error: BaseException,
     metadata_paths: Mapping[str, Path],
     elapsed_seconds: float,
 ) -> None:
@@ -921,6 +1092,37 @@ def _mark_execution_failed(
     execution_record["elapsed_seconds"] = round(float(elapsed_seconds), 3)
     execution_record["error_type"] = type(error).__name__
     execution_record["error"] = str(error)
+    execution_log["updated_at"] = timestamp
+    save_execution_log(execution_log, metadata_paths["execution_log"])
+
+
+def _reconcile_interrupted_execution_records(
+    execution_log: dict[str, object],
+    *,
+    metadata_paths: Mapping[str, Path],
+) -> None:
+    executions = execution_log.get("executions")
+    if not isinstance(executions, list):
+        raise ValueError("execution_log.json must contain an executions list.")
+    timestamp = _execution_timestamp()
+    changed = False
+    for execution_record in executions:
+        if not isinstance(execution_record, dict):
+            continue
+        if execution_record.get("status") != "running":
+            continue
+        execution_record["status"] = "interrupted"
+        execution_record["updated_at"] = timestamp
+        execution_record["completed_at"] = timestamp
+        if not execution_record.get("error_type"):
+            execution_record["error_type"] = "InterruptedExecution"
+        if not execution_record.get("error"):
+            execution_record["error"] = (
+                "Detected a previously unfinished execution record during a later invocation."
+            )
+        changed = True
+    if not changed:
+        return
     execution_log["updated_at"] = timestamp
     save_execution_log(execution_log, metadata_paths["execution_log"])
 
@@ -976,6 +1178,7 @@ def _mark_coverage_cell_completed(
     target_item: int,
     victim_name: str,
     artifacts: Mapping[str, Path],
+    execution_id: str,
 ) -> None:
     timestamp = _execution_timestamp()
     cell = _coverage_cell(
@@ -986,7 +1189,32 @@ def _mark_coverage_cell_completed(
     cell["status"] = "completed"
     cell["artifacts"] = _coverage_artifact_payload(artifacts)
     cell["error"] = None
+    cell["last_execution_id"] = execution_id
     cell["completed_at"] = timestamp
+    cell["failed_at"] = None
+    cell["last_updated_at"] = timestamp
+    run_coverage["updated_at"] = timestamp
+
+
+def _mark_coverage_cell_pending(
+    run_coverage: dict[str, object],
+    *,
+    target_item: int,
+    victim_name: str,
+    execution_id: str,
+) -> None:
+    timestamp = _execution_timestamp()
+    cell = _coverage_cell(
+        run_coverage,
+        target_item=target_item,
+        victim_name=victim_name,
+    )
+    cell["status"] = "pending"
+    cell["error"] = None
+    cell["last_execution_id"] = execution_id
+    cell["last_started_at"] = timestamp
+    cell["last_requested_at"] = timestamp
+    cell["attempt_count"] = int(cell.get("attempt_count", 0)) + 1
     cell["last_updated_at"] = timestamp
     run_coverage["updated_at"] = timestamp
 
@@ -997,7 +1225,8 @@ def _mark_coverage_cell_failed(
     target_item: int,
     victim_name: str,
     artifacts: Mapping[str, Path] | None,
-    error: Exception,
+    error: BaseException,
+    execution_id: str,
 ) -> None:
     timestamp = _execution_timestamp()
     cell = _coverage_cell(
@@ -1011,6 +1240,7 @@ def _mark_coverage_cell_failed(
         "type": type(error).__name__,
         "message": str(error),
     }
+    cell["last_execution_id"] = execution_id
     cell["failed_at"] = timestamp
     cell["last_updated_at"] = timestamp
     run_coverage["updated_at"] = timestamp
@@ -1053,6 +1283,37 @@ def _write_legacy_summary_snapshot(
     }
     save_metrics(summary_payload, metadata_paths["summary"])
     return summary_payload
+
+
+def _refresh_summary_snapshots(
+    config: Config,
+    *,
+    context: RunContext,
+    run_type: str,
+    metadata_paths: Mapping[str, Path],
+    run_coverage: Mapping[str, Any],
+    artifact_manifest: dict[str, object],
+    attack_identity_context: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    summary_current = rebuild_summary_current(
+        config,
+        run_type=run_type,
+        metadata_paths=metadata_paths,
+        run_coverage=run_coverage,
+        attack_identity_context=attack_identity_context,
+    )
+    summary = _write_legacy_summary_snapshot(
+        config,
+        context=context,
+        run_type=run_type,
+        metadata_paths=metadata_paths,
+        summary_current=summary_current,
+    )
+    artifact_manifest["output_files"]["summary"] = _repo_relative_path(
+        metadata_paths["summary"]
+    )
+    save_json(artifact_manifest, metadata_paths["artifact_manifest"])
+    return summary
 
 
 def _resolved_config_payload(
@@ -1214,6 +1475,7 @@ def _populate_progress_plan_from_cells(
     progress_payload: dict[str, object],
     *,
     requested_target_items: list[int],
+    requested_victims: list[str],
     planned_cells: list[dict[str, Any]],
     skipped_completed_cells: list[dict[str, Any]],
     elapsed_seconds: float,
@@ -1247,10 +1509,11 @@ def _populate_progress_plan_from_cells(
     progress_payload["updated_at"] = timestamp
     progress_payload["elapsed_seconds"] = round(float(elapsed_seconds), 3)
     progress_payload["total_targets"] = int(len(requested_target_items))
-    progress_payload["total_victims"] = int(len({cell["victim_name"] for cell in planned_cells}))
+    progress_payload["total_victims"] = int(len(requested_victims))
     progress_payload["total_runs"] = int(len(runs))
     progress_payload["completed_runs"] = 0
     progress_payload["target_items"] = [int(item) for item in requested_target_items]
+    progress_payload["requested_victims"] = list(requested_victims)
     progress_payload["planned_cells"] = [dict(cell) for cell in planned_cells]
     progress_payload["skipped_completed_cells"] = [dict(cell) for cell in skipped_completed_cells]
     progress_payload["current"] = None

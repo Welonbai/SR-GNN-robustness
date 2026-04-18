@@ -181,9 +181,10 @@ def test_run_coverage_initialization_shape() -> None:
     for target_item in coverage["targets_order"]:
         cell_row = coverage["cells"][str(target_item)]
         for victim_name in config.victims.enabled:
-            assert cell_row[victim_name]["status"] == "pending"
+            assert cell_row[victim_name]["status"] == "requested"
             assert cell_row[victim_name]["artifacts"]["metrics"] is None
             assert cell_row[victim_name]["artifacts"]["predictions"] is None
+            assert cell_row[victim_name]["attempt_count"] == 0
 
 
 def test_execution_log_initialization_shape() -> None:
