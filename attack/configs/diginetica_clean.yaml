@@ -14,6 +14,9 @@ data:
 seeds:
   fake_session_seed: 20260405
   target_selection_seed: 20260405
+  position_opt_seed: 20260405
+  surrogate_train_seed: 20260405
+  victim_train_seed: 20260405
 
 attack:
   size: 0.01
