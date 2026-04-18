@@ -21,6 +21,7 @@ from attack.pipeline.core.orchestrator import (
     TargetPoisonOutput,
     run_targets_and_victims,
 )
+from attack.pipeline.core.position_stats import save_position_stats
 from attack.pipeline.core.pipeline_utils import prepare_shared_attack_artifacts
 
 
@@ -44,10 +45,12 @@ def run_dp_sbr_baseline(
         rng = random.Random(config.seeds.fake_session_seed)
         policy = DPSBRBaselinePolicy(config.attack.replacement_topk_ratio, rng=rng)
         fake_sessions = []
+        selected_positions: list[int] = []
         position_counts: Counter[int] = Counter()
         for session in shared.template_sessions:
             result = policy.apply_with_metadata(session, target_item)
             fake_sessions.append(result.session)
+            selected_positions.append(int(result.position))
             position_counts[int(result.position)] += 1
 
         max_item = max(shared.stats.item_counts)
@@ -70,6 +73,13 @@ def run_dp_sbr_baseline(
         }
         target_root = target_dir(config, target_item, run_type="dpsbr_baseline")
         target_root.mkdir(parents=True, exist_ok=True)
+        position_stats_path = save_position_stats(
+            target_root / "position_stats.json",
+            sessions=shared.template_sessions,
+            positions=selected_positions,
+            run_type="dpsbr_baseline",
+            target_item=int(target_item),
+        )
         positions_path = target_root / "dpsbr_position_metadata.json"
         with positions_path.open("w", encoding="utf-8") as handle:
             json.dump(positions_payload, handle, indent=2, sort_keys=True)
@@ -77,6 +87,7 @@ def run_dp_sbr_baseline(
         return TargetPoisonOutput(
             poisoned=poisoned,
             metadata={
+                "position_stats_path": str(position_stats_path),
                 "dpsbr_position_metadata_path": str(positions_path),
             },
         )

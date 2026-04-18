@@ -21,6 +21,7 @@ from attack.pipeline.core.orchestrator import (
     TargetPoisonOutput,
     run_targets_and_victims,
 )
+from attack.pipeline.core.position_stats import save_position_stats
 from attack.pipeline.core.pipeline_utils import prepare_shared_attack_artifacts
 
 
@@ -48,10 +49,12 @@ def run_prefix_nonzero_when_possible(
             shared.poison_runner, config.attack.replacement_topk_ratio
         )
         fake_sessions = []
+        selected_positions: list[int] = []
         position_meta = []
         for session in shared.template_sessions:
             result = policy.apply_with_metadata(session, target_item)
             fake_sessions.append(result.session)
+            selected_positions.append(int(result.position))
             position_meta.append(
                 {"position": result.position, "target_score": result.target_score}
             )
@@ -70,6 +73,13 @@ def run_prefix_nonzero_when_possible(
             run_type="prefix_nonzero_when_possible",
         )
         target_root.mkdir(parents=True, exist_ok=True)
+        position_stats_path = save_position_stats(
+            target_root / "position_stats.json",
+            sessions=shared.template_sessions,
+            positions=selected_positions,
+            run_type="prefix_nonzero_when_possible",
+            target_item=int(target_item),
+        )
         positions_path = target_root / "prefix_nonzero_when_possible_metadata.pkl"
         with positions_path.open("wb") as handle:
             pickle.dump(position_meta, handle)
@@ -77,6 +87,7 @@ def run_prefix_nonzero_when_possible(
         return TargetPoisonOutput(
             poisoned=poisoned,
             metadata={
+                "position_stats_path": str(position_stats_path),
                 "prefix_nonzero_when_possible_metadata_path": str(positions_path),
             },
         )

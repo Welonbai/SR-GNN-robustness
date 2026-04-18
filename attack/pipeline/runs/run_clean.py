@@ -9,7 +9,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from attack.common.config import Config, load_config
-from attack.common.paths import run_config_dir, shared_artifact_paths
+from attack.common.paths import run_config_dir, shared_artifact_paths, target_dir
 from attack.common.seed import set_seed
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
@@ -20,6 +20,7 @@ from attack.pipeline.core.orchestrator import (
     TargetPoisonOutput,
     run_targets_and_victims,
 )
+from attack.pipeline.core.position_stats import save_position_stats
 from attack.pipeline.core.pipeline_utils import build_clean_pairs
 
 
@@ -52,7 +53,20 @@ def run_clean(
 
     def build_poisoned(target_item: int) -> TargetPoisonOutput:
         poisoned = build_poisoned_dataset(clean_sessions, clean_labels, [])
-        return TargetPoisonOutput(poisoned=poisoned, metadata={})
+        target_root = target_dir(config, target_item, run_type="clean")
+        target_root.mkdir(parents=True, exist_ok=True)
+        position_stats_path = save_position_stats(
+            target_root / "position_stats.json",
+            sessions=[],
+            positions=[],
+            run_type="clean",
+            target_item=int(target_item),
+            note="Clean run injects no fake sessions, so no replacement positions are used.",
+        )
+        return TargetPoisonOutput(
+            poisoned=poisoned,
+            metadata={"position_stats_path": str(position_stats_path)},
+        )
 
     return run_targets_and_victims(
         config,

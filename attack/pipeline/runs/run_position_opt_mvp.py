@@ -12,7 +12,7 @@ if __package__ is None or __package__ == "":
 
 from attack.common.artifact_io import save_json
 from attack.common.config import Config, load_config
-from attack.common.paths import build_position_opt_attack_identity_context
+from attack.common.paths import build_position_opt_attack_identity_context, target_dir
 from attack.common.seed import set_seed
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.inner_train.truncated_finetune import TruncatedFineTuneInnerTrainer
@@ -21,6 +21,7 @@ from attack.pipeline.core.orchestrator import (
     TargetPoisonOutput,
     run_targets_and_victims,
 )
+from attack.pipeline.core.position_stats import save_position_stats
 from attack.pipeline.core.pipeline_utils import SharedAttackArtifacts, prepare_shared_attack_artifacts
 from attack.position_opt import (
     POSITION_OPT_DEFAULTS,
@@ -112,11 +113,25 @@ def run_position_opt_mvp(
             config,
         )
         trainer.save_artifacts(artifact_paths)
+        final_position_results = trainer.export_final_selected_positions()
         optimized_poisoned_sessions = trainer.export_final_poisoned_sessions()
         poisoned = build_poisoned_dataset(
             shared.clean_sessions,
             shared.clean_labels,
             optimized_poisoned_sessions,
+        )
+        target_root = target_dir(
+            config,
+            int(target_item),
+            run_type=POSITION_OPT_RUN_TYPE,
+            attack_identity_context=attack_identity_context,
+        )
+        position_stats_path = save_position_stats(
+            target_root / "position_stats.json",
+            sessions=shared.template_sessions,
+            positions=[int(result.position) for result in final_position_results],
+            run_type=POSITION_OPT_RUN_TYPE,
+            target_item=int(target_item),
         )
         _save_position_opt_run_metadata(
             artifact_paths=artifact_paths,
@@ -134,6 +149,7 @@ def run_position_opt_mvp(
         )
 
         metadata = {
+            "position_stats_path": str(position_stats_path),
             "position_opt_artifact_dir": str(artifact_paths.base_dir),
             "position_opt_clean_surrogate_checkpoint": str(
                 artifact_paths.clean_surrogate_checkpoint

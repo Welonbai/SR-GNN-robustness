@@ -9,6 +9,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from attack.common.config import Config, load_config
+from attack.common.paths import target_dir
 from attack.common.seed import set_seed
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.insertion.always_position0 import AlwaysPositionZeroPolicy
@@ -17,6 +18,7 @@ from attack.pipeline.core.orchestrator import (
     TargetPoisonOutput,
     run_targets_and_victims,
 )
+from attack.pipeline.core.position_stats import save_position_stats
 from attack.pipeline.core.pipeline_utils import prepare_shared_attack_artifacts
 
 
@@ -41,6 +43,7 @@ def run_always_pos0(
         fake_sessions = [
             policy.apply(session, target_item) for session in shared.template_sessions
         ]
+        selected_positions = [0] * len(shared.template_sessions)
 
         max_item = max(shared.stats.item_counts)
         if any(max(session) > max_item for session in fake_sessions):
@@ -50,7 +53,20 @@ def run_always_pos0(
             shared.clean_sessions, shared.clean_labels, fake_sessions
         )
 
-        return TargetPoisonOutput(poisoned=poisoned, metadata={})
+        target_root = target_dir(config, target_item, run_type="always_pos0")
+        target_root.mkdir(parents=True, exist_ok=True)
+        position_stats_path = save_position_stats(
+            target_root / "position_stats.json",
+            sessions=shared.template_sessions,
+            positions=selected_positions,
+            run_type="always_pos0",
+            target_item=int(target_item),
+        )
+
+        return TargetPoisonOutput(
+            poisoned=poisoned,
+            metadata={"position_stats_path": str(position_stats_path)},
+        )
 
     return run_targets_and_victims(
         config,

@@ -37,6 +37,7 @@ table:
       dpsbr_baseline: DPSBR
       prefix_nonzero_when_possible: Prefix-NZ
       random_nonzero_when_possible: Random-NZ
+      position_opt_mvp: PosOptMVP
 
     victim_model:
       miasrec: MIARec

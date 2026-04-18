@@ -21,6 +21,7 @@ from attack.pipeline.core.orchestrator import (
     TargetPoisonOutput,
     run_targets_and_victims,
 )
+from attack.pipeline.core.position_stats import save_position_stats
 from attack.pipeline.core.pipeline_utils import prepare_shared_attack_artifacts
 
 
@@ -46,12 +47,13 @@ def run_random_nonzero(
             config.attack.replacement_topk_ratio, rng=rng
         )
         fake_sessions = []
+        selected_positions: list[int] = []
         position_counts: Counter[int] = Counter()
         for session in shared.template_sessions:
-            updated = policy.apply(session, target_item)
-            fake_sessions.append(updated)
-            replace_index = updated.index(target_item)
-            position_counts[int(replace_index)] += 1
+            result = policy.apply_with_metadata(session, target_item)
+            fake_sessions.append(result.session)
+            selected_positions.append(int(result.position))
+            position_counts[int(result.position)] += 1
 
         max_item = max(shared.stats.item_counts)
         if any(max(session) > max_item for session in fake_sessions):
@@ -77,6 +79,13 @@ def run_random_nonzero(
             run_type="random_nonzero_when_possible",
         )
         target_root.mkdir(parents=True, exist_ok=True)
+        position_stats_path = save_position_stats(
+            target_root / "position_stats.json",
+            sessions=shared.template_sessions,
+            positions=selected_positions,
+            run_type="random_nonzero_when_possible",
+            target_item=int(target_item),
+        )
         positions_path = target_root / "random_nonzero_position_metadata.json"
         with positions_path.open("w", encoding="utf-8") as handle:
             json.dump(positions_payload, handle, indent=2, sort_keys=True)
@@ -84,6 +93,7 @@ def run_random_nonzero(
         return TargetPoisonOutput(
             poisoned=poisoned,
             metadata={
+                "position_stats_path": str(position_stats_path),
                 "random_nonzero_position_metadata_path": str(positions_path),
             },
         )

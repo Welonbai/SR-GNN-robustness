@@ -12,25 +12,26 @@ python analysis/pipeline/long_csv_generator.py `
   --output-name diginetica_dpsbr_example
 ```
 
-2. Merge multiple runs into one comparison table.
+2. Merge multiple runs into one comparison bundle.
 
 ```powershell
 python analysis/pipeline/compare_runs.py `
   --config analysis/configs/comparisons/diginetica_attack_compare.yaml
 ```
 
-3. Build one filtered pivot table view.
+3. Build split view bundles from the comparison bundle.
 
 ```powershell
 python analysis/pipeline/view_table_builder.py `
-  --config analysis/configs/views/attack_vs_victim_metrics_11169.yaml
+  --config analysis/configs/views/attack_vs_victim_metrics_split_by_target_item.yaml
 ```
 
-4. Render the view bundle to PNG.
+4. Render all direct child view bundles to PNG.
 
 ```powershell
 python analysis/pipeline/report_table_renderer.py `
-  --config analysis/configs/render/default_slide_png.yaml
+  --bundle-parent-dir results/comparisons/clean_vs_dpsbr_vs_random_nonzero_vs_prefix_nonzero_diginetica_popular_0.1size `
+  --config analysis/configs/render/attack_vs_victim_metrics_split_by_target_item.yaml
 ```
 
 ## Layout
