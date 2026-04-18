@@ -22,8 +22,8 @@ from attack.position_opt.poison_builder import replace_item_at_position
 from attack.position_opt.selector import sample_position_reinforce, select_position_eval
 from attack.position_opt.types import (
     CandidateMetadata,
+    PositionOptConfig,
     PositionOptArtifactPaths,
-    PositionOptDefaults,
     SelectedPositionResult,
     TruncatedFineTuneConfig,
     resolve_position_opt_config,
@@ -55,7 +55,7 @@ class PositionOptMVPTrainer:
         inner_trainer: InnerTrainer,
         *,
         clean_surrogate_checkpoint_path: str | Path,
-        position_opt_config: PositionOptDefaults | Mapping[str, Any] | None = None,
+        position_opt_config: PositionOptConfig | Mapping[str, Any] | None = None,
     ) -> None:
         if str(clean_surrogate_checkpoint_path).strip() == "":
             raise ValueError("clean_surrogate_checkpoint_path must be provided explicitly.")

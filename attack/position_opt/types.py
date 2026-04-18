@@ -67,40 +67,39 @@ class InnerTrainResult:
 
 
 POSITION_OPT_DEFAULTS = PositionOptConfig()
-PositionOptDefaults = PositionOptConfig
 
 
 def resolve_position_opt_config(
-    config: PositionOptDefaults | Mapping[str, Any] | None = None,
-    overrides: PositionOptDefaults | Mapping[str, Any] | None = None,
-) -> PositionOptDefaults:
+    config: PositionOptConfig | Mapping[str, Any] | None = None,
+    overrides: PositionOptConfig | Mapping[str, Any] | None = None,
+) -> PositionOptConfig:
     merged = asdict(POSITION_OPT_DEFAULTS)
     merged.update(_coerce_position_opt_layer(config, context="attack.position_opt"))
     merged.update(
         _coerce_position_opt_layer(overrides, context="position_opt_config override")
     )
-    return PositionOptDefaults(**merged)
+    return PositionOptConfig(**merged)
 
 
-def position_opt_identity_payload(config: PositionOptDefaults) -> dict[str, Any]:
+def position_opt_identity_payload(config: PositionOptConfig) -> dict[str, Any]:
     payload = asdict(config)
     payload.pop("clean_surrogate_checkpoint", None)
     return payload
 
 
 def _coerce_position_opt_layer(
-    value: PositionOptDefaults | Mapping[str, Any] | None,
+    value: PositionOptConfig | Mapping[str, Any] | None,
     *,
     context: str,
 ) -> dict[str, Any]:
     if value is None:
         return {}
-    if isinstance(value, PositionOptDefaults):
+    if isinstance(value, PositionOptConfig):
         return asdict(value)
     if isinstance(value, Mapping):
         payload = dict(value)
         _consume_deprecated_position_opt_keys(payload, context=context)
-        allowed_fields = {field.name for field in fields(PositionOptDefaults)}
+        allowed_fields = {field.name for field in fields(PositionOptConfig)}
         unknown = set(payload) - allowed_fields
         if unknown:
             raise ValueError(
@@ -160,7 +159,6 @@ __all__ = [
     "InnerTrainResult",
     "PositionOptConfig",
     "PositionOptArtifactPaths",
-    "PositionOptDefaults",
     "SelectedPositionResult",
     "SurrogateScoreResult",
     "TruncatedFineTuneConfig",

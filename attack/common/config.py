@@ -82,12 +82,23 @@ class PositionOptConfig:
                 )
             object.__setattr__(self, "clean_surrogate_checkpoint", checkpoint)
 
-        if _as_int(self.outer_steps, "attack.position_opt.outer_steps") < 0:
+        outer_steps = _as_int(self.outer_steps, "attack.position_opt.outer_steps")
+        if outer_steps < 0:
             raise ValueError("attack.position_opt.outer_steps must be non-negative.")
-        if _as_float(self.policy_lr, "attack.position_opt.policy_lr") <= 0.0:
+        object.__setattr__(self, "outer_steps", outer_steps)
+
+        policy_lr = _as_float(self.policy_lr, "attack.position_opt.policy_lr")
+        if policy_lr <= 0.0:
             raise ValueError("attack.position_opt.policy_lr must be positive.")
-        if _as_int(self.fine_tune_steps, "attack.position_opt.fine_tune_steps") < 0:
+        object.__setattr__(self, "policy_lr", policy_lr)
+
+        fine_tune_steps = _as_int(
+            self.fine_tune_steps,
+            "attack.position_opt.fine_tune_steps",
+        )
+        if fine_tune_steps < 0:
             raise ValueError("attack.position_opt.fine_tune_steps must be non-negative.")
+        object.__setattr__(self, "fine_tune_steps", fine_tune_steps)
 
         subset_size = self.validation_subset_size
         if subset_size is not None:
@@ -99,6 +110,7 @@ class PositionOptConfig:
                 raise ValueError(
                     "attack.position_opt.validation_subset_size must be positive when provided."
                 )
+        object.__setattr__(self, "validation_subset_size", subset_size)
 
         momentum = _as_float(
             self.reward_baseline_momentum,
@@ -108,18 +120,31 @@ class PositionOptConfig:
             raise ValueError(
                 "attack.position_opt.reward_baseline_momentum must be in [0, 1]."
             )
+        object.__setattr__(self, "reward_baseline_momentum", momentum)
 
-        _as_bool(self.enable_gt_penalty, "attack.position_opt.enable_gt_penalty")
+        enable_gt_penalty = _as_bool(
+            self.enable_gt_penalty,
+            "attack.position_opt.enable_gt_penalty",
+        )
+        object.__setattr__(self, "enable_gt_penalty", enable_gt_penalty)
 
-        if _as_float(
+        gt_penalty_weight = _as_float(
             self.gt_penalty_weight,
             "attack.position_opt.gt_penalty_weight",
-        ) < 0.0:
+        )
+        if gt_penalty_weight < 0.0:
             raise ValueError(
                 "attack.position_opt.gt_penalty_weight must be non-negative."
             )
-        if _as_float(self.gt_tolerance, "attack.position_opt.gt_tolerance") < 0.0:
+        object.__setattr__(self, "gt_penalty_weight", gt_penalty_weight)
+
+        gt_tolerance = _as_float(
+            self.gt_tolerance,
+            "attack.position_opt.gt_tolerance",
+        )
+        if gt_tolerance < 0.0:
             raise ValueError("attack.position_opt.gt_tolerance must be non-negative.")
+        object.__setattr__(self, "gt_tolerance", gt_tolerance)
 
         final_selection = _as_str(
             self.final_selection,
