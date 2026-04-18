@@ -10,7 +10,6 @@ if __package__ is None or __package__ == "":
 
 from attack.common.config import Config, load_config
 from attack.common.paths import run_config_dir, shared_artifact_paths, target_dir
-from attack.common.seed import set_seed
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.data.session_stats import compute_session_stats
@@ -28,8 +27,6 @@ def run_clean(
     config: Config,
     config_path: str | Path | None = None,
 ) -> dict[str, float]:
-    set_seed(config.seeds.fake_session_seed)
-
     canonical_dataset = ensure_canonical_dataset(config)
     stats = compute_session_stats(canonical_dataset.train_sub)
     shared_paths = shared_artifact_paths(config, run_type="clean")

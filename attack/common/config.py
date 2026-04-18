@@ -47,6 +47,9 @@ class DataConfig:
 class SeedsConfig:
     fake_session_seed: int
     target_selection_seed: int
+    position_opt_seed: int
+    surrogate_train_seed: int
+    victim_train_seed: int
 
 
 @dataclass(frozen=True)
@@ -434,6 +437,18 @@ def _normalize_config_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
         "target_selection_seed": _as_int(
             _require(seeds, "target_selection_seed", "seeds"),
             "seeds.target_selection_seed",
+        ),
+        "position_opt_seed": _as_int(
+            seeds.get("position_opt_seed", _require(seeds, "fake_session_seed", "seeds")),
+            "seeds.position_opt_seed",
+        ),
+        "surrogate_train_seed": _as_int(
+            seeds.get("surrogate_train_seed", _require(seeds, "fake_session_seed", "seeds")),
+            "seeds.surrogate_train_seed",
+        ),
+        "victim_train_seed": _as_int(
+            seeds.get("victim_train_seed", _require(seeds, "fake_session_seed", "seeds")),
+            "seeds.victim_train_seed",
         ),
     }
 
@@ -968,6 +983,18 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
             target_selection_seed=_as_int(
                 _require(seeds, "target_selection_seed", "seeds"),
                 "seeds.target_selection_seed",
+            ),
+            position_opt_seed=_as_int(
+                _require(seeds, "position_opt_seed", "seeds"),
+                "seeds.position_opt_seed",
+            ),
+            surrogate_train_seed=_as_int(
+                _require(seeds, "surrogate_train_seed", "seeds"),
+                "seeds.surrogate_train_seed",
+            ),
+            victim_train_seed=_as_int(
+                _require(seeds, "victim_train_seed", "seeds"),
+                "seeds.victim_train_seed",
             ),
         ),
         attack=AttackConfig(

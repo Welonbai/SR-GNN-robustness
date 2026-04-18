@@ -9,6 +9,7 @@ import pickle
 import torch
 
 from attack.common.config import Config
+from attack.common.seed import derive_seed, set_seed
 from attack.data.poisoned_dataset_builder import (
     build_poisoned_dataset,
     expand_session_to_samples,
@@ -153,6 +154,7 @@ class PositionOptMVPTrainer:
                 target_item=target_id,
                 fine_tune_config=fine_tune_config,
                 clean_gt_utility=clean_gt_utility,
+                outer_step=outer_step,
             )
             step_state["policy_loss_tensor"].backward()
             optimizer.step()
@@ -199,6 +201,8 @@ class PositionOptMVPTrainer:
                     "selected_candidate_indices": [
                         int(idx) for idx in step_state["selected_candidate_indices"]
                     ],
+                    "position_opt_step_seed": int(step_state["position_opt_step_seed"]),
+                    "surrogate_train_step_seed": int(step_state["surrogate_train_step_seed"]),
                     "inner_train": step_state["inner_train_summary"],
                 }
             )
@@ -273,6 +277,11 @@ class PositionOptMVPTrainer:
             payload = {
                 "target_item": self._target_item,
                 "position_opt_config": asdict(self.position_opt_config),
+                "resolved_seeds": (
+                    None
+                    if self._trained_config is None
+                    else asdict(self._trained_config.seeds)
+                ),
                 "policy_update": "reinforce",
                 "reward_baseline_final": self._reward_baseline,
                 "outer_eval_source": "real_validation_sessions",
@@ -319,15 +328,25 @@ class PositionOptMVPTrainer:
         target_item: int,
         fine_tune_config: TruncatedFineTuneConfig,
         clean_gt_utility: float | None,
+        outer_step: int,
     ) -> dict[str, Any]:
         if self.policy is None:
             raise RuntimeError("Policy is not initialized.")
+        if self._trained_config is None:
+            raise RuntimeError("train() must be called with a Config before running steps.")
 
         selected_candidate_indices: list[int] = []
         selected_positions: list[int] = []
         selected_poisoned_sessions: list[list[int]] = []
         log_prob_terms: list[torch.Tensor] = []
         entropy_terms: list[torch.Tensor] = []
+        position_opt_step_seed = derive_seed(
+            self._trained_config.seeds.position_opt_seed,
+            "position_opt",
+            int(target_item),
+            int(outer_step),
+        )
+        set_seed(position_opt_step_seed)
 
         for session_idx, session_state in enumerate(self._session_states):
             logits = self.policy.get_logits(session_idx)
@@ -349,11 +368,18 @@ class PositionOptMVPTrainer:
             clean_labels,
             selected_poisoned_sessions,
         )
+        surrogate_train_step_seed = derive_seed(
+            self._trained_config.seeds.surrogate_train_seed,
+            "surrogate_train",
+            int(target_item),
+            int(outer_step),
+        )
         inner_result = self.inner_trainer.run(
             self.surrogate_backend,
             self.clean_surrogate_checkpoint_path,
             poisoned_train_data,
             config=fine_tune_config,
+            seed=surrogate_train_step_seed,
         )
         surrogate_model = inner_result.model
 
@@ -402,6 +428,8 @@ class PositionOptMVPTrainer:
             "poisoned_gt_utility": poisoned_gt_utility,
             "selected_positions": selected_positions,
             "selected_candidate_indices": selected_candidate_indices,
+            "position_opt_step_seed": int(position_opt_step_seed),
+            "surrogate_train_step_seed": int(surrogate_train_step_seed),
             "inner_train_summary": _summarize_inner_history(inner_result.history),
         }
 

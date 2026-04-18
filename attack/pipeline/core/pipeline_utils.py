@@ -19,6 +19,7 @@ from attack.common.artifact_io import (
     save_target_info,
 )
 from attack.common.paths import shared_artifact_paths, split_key, target_selection_key
+from attack.common.seed import derive_seed, set_seed
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.poisoned_dataset_builder import expand_session_to_samples
@@ -294,6 +295,7 @@ def prepare_shared_attack_artifacts(
     require_poison_runner: bool,
     config_path: str | Path | None = None,
 ) -> SharedAttackArtifacts:
+    generation_seed = int(config.seeds.fake_session_seed)
     canonical_dataset = ensure_canonical_dataset(config)
     shared_paths = shared_artifact_paths(config, run_type=run_type)
     shared_paths["attack_shared_dir"].mkdir(parents=True, exist_ok=True)
@@ -320,6 +322,7 @@ def prepare_shared_attack_artifacts(
     poison_runner = None
     if template_sessions is None:
         print("No fake sessions found. Generating new fake sessions.")
+        set_seed(derive_seed(generation_seed, "poison_model_generation"))
         poison_runner = _load_or_train_poison_runner(
             config,
             shared_paths=shared_paths,
@@ -332,6 +335,7 @@ def prepare_shared_attack_artifacts(
             topk=config.attack.fake_session_generation_topk,
         )
         fake_count = _fake_session_count(config.attack.size, len(clean_sessions))
+        set_seed(derive_seed(generation_seed, "fake_session_generation"))
         template_sessions = [s.items for s in generator.generate_many(fake_count)]
         save_fake_sessions(template_sessions, shared_paths["fake_sessions"])
         print(f"Saved fake sessions to {shared_paths['fake_sessions']}")
@@ -340,6 +344,7 @@ def prepare_shared_attack_artifacts(
         fake_count = len(template_sessions)
 
     if require_poison_runner and poison_runner is None:
+        set_seed(derive_seed(generation_seed, "poison_model_generation"))
         poison_runner = _load_or_train_poison_runner(
             config,
             shared_paths=shared_paths,

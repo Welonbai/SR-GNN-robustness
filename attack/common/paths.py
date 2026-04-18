@@ -85,6 +85,7 @@ def build_position_opt_attack_identity_context(
     *,
     position_opt_config: Mapping[str, Any],
     clean_surrogate_checkpoint: str | Path,
+    runtime_seeds: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the position-opt-specific runtime identity payload.
 
@@ -95,6 +96,11 @@ def build_position_opt_attack_identity_context(
     return {
         "position_opt": {
             "config": _normalize_identity_value(position_opt_config),
+            "seeds": (
+                None
+                if runtime_seeds is None
+                else _normalize_identity_value(runtime_seeds)
+            ),
             "clean_surrogate": checkpoint_identity_payload(clean_surrogate_checkpoint),
         }
     }
@@ -261,6 +267,7 @@ def victim_prediction_key_payload(
     return {
         **base_context,
         "victim_name": victim_name,
+        "victim_train_seed": int(config.seeds.victim_train_seed),
         "victim_params": victim_params,
     }
 

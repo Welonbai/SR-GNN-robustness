@@ -39,6 +39,7 @@ class MiaSRecRunner(VictimRunnerBase):
         export_topk_path = kwargs.get("export_topk_path")
         topk = kwargs.get("topk")
         max_epochs = kwargs.get("max_epochs")
+        victim_train_seed = kwargs.get("victim_train_seed")
         if (
             export_root is None
             or dataset_name is None
@@ -56,6 +57,9 @@ class MiaSRecRunner(VictimRunnerBase):
             export_topk_path=Path(export_topk_path),
             topk=int(topk),
             max_epochs=int(max_epochs) if max_epochs is not None else None,
+            victim_train_seed=(
+                int(victim_train_seed) if victim_train_seed is not None else None
+            ),
         )
 
     def evaluate(self, *args, **kwargs):
@@ -94,6 +98,7 @@ class MiaSRecRunner(VictimRunnerBase):
         export_topk_path: Path,
         topk: int,
         max_epochs: int | None = None,
+        victim_train_seed: int | None = None,
     ) -> dict[str, str | int]:
         if not self.repo_root.exists():
             raise FileNotFoundError(f"MiaSRec repository not found: {self.repo_root}")
@@ -120,6 +125,11 @@ class MiaSRecRunner(VictimRunnerBase):
         saved_snapshot = _snapshot_files(saved_root)
         effective_epochs = int(max_epochs) if max_epochs is not None else int(self.train_config["epochs"])
         requested_gpu_id = _resolve_requested_gpu_id(self.device_config)
+        effective_seed = (
+            int(victim_train_seed)
+            if victim_train_seed is not None
+            else int(self.config.seeds.victim_train_seed)
+        )
 
         override_path = run_dir / "miasrec_override.yaml"
         override_path.parent.mkdir(parents=True, exist_ok=True)
@@ -127,6 +137,8 @@ class MiaSRecRunner(VictimRunnerBase):
             handle.write(f"epochs: {effective_epochs}\n")
             handle.write(f"use_gpu: {json.dumps(bool(self.device_config['use_gpu']))}\n")
             handle.write(f"gpu_id: {json.dumps(requested_gpu_id)}\n")
+            handle.write(f"seed: {effective_seed}\n")
+            handle.write("reproducibility: true\n")
             handle.write(
                 f"show_progress: {json.dumps(bool(self.logging_config['show_progress']))}\n"
             )
@@ -154,6 +166,7 @@ class MiaSRecRunner(VictimRunnerBase):
             str(checkpoint_dir.resolve()),
         ]
         env = os.environ.copy()
+        env["PYTHONHASHSEED"] = str(effective_seed)
         if bool(self.device_config["use_gpu"]):
             env["CUDA_VISIBLE_DEVICES"] = requested_gpu_id
         else:
@@ -199,6 +212,7 @@ class MiaSRecRunner(VictimRunnerBase):
             "config_path": str(override_path),
             "checkpoint_dir": str(checkpoint_dir),
             "export_topk_path": str(export_topk_path),
+            "victim_train_seed": int(effective_seed),
         }
 
 

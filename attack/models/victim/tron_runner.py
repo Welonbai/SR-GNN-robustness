@@ -38,6 +38,7 @@ class TRONRunner(VictimRunnerBase):
         export_topk_path = kwargs.get("export_topk_path")
         topk = kwargs.get("topk")
         max_epochs = kwargs.get("max_epochs")
+        victim_train_seed = kwargs.get("victim_train_seed")
         if (
             export_root is None
             or dataset_name is None
@@ -55,6 +56,9 @@ class TRONRunner(VictimRunnerBase):
             export_topk_path=Path(export_topk_path),
             topk=int(topk),
             max_epochs=int(max_epochs) if max_epochs is not None else None,
+            victim_train_seed=(
+                int(victim_train_seed) if victim_train_seed is not None else None
+            ),
         )
 
     def evaluate(self, *args, **kwargs):
@@ -93,6 +97,7 @@ class TRONRunner(VictimRunnerBase):
         export_topk_path: Path,
         topk: int,
         max_epochs: int | None = None,
+        victim_train_seed: int | None = None,
     ) -> dict[str, str | int]:
         if not self.repo_root.exists():
             raise FileNotFoundError(f"TRON repository not found: {self.repo_root}")
@@ -107,6 +112,12 @@ class TRONRunner(VictimRunnerBase):
             config = json.load(handle)
 
         config["dataset"] = dataset_name
+        effective_seed = (
+            int(victim_train_seed)
+            if victim_train_seed is not None
+            else int(self.config.seeds.victim_train_seed)
+        )
+        config["seed"] = int(effective_seed)
         config["export_topk_path"] = str(export_topk_path.resolve())
         config["export_topk_k"] = int(topk)
         config["log_dir"] = str((run_dir / "tron_logs").resolve())
@@ -138,6 +149,7 @@ class TRONRunner(VictimRunnerBase):
         log_path = run_dir / "tron_stdout.log"
         env = os.environ.copy()
         env["PYTHONPATH"] = _prepend_pythonpath(env.get("PYTHONPATH"), self.repo_root)
+        env["PYTHONHASHSEED"] = str(effective_seed)
         if bool(self.device_config["use_gpu"]):
             env["CUDA_VISIBLE_DEVICES"] = str(self.device_config["gpu_id"]).strip()
         else:
@@ -178,6 +190,7 @@ class TRONRunner(VictimRunnerBase):
             "export_topk_path": str(export_topk_path),
             "config_path": str(config_path),
             "log_dir": config["log_dir"],
+            "victim_train_seed": int(effective_seed),
         }
 
 

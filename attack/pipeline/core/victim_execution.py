@@ -6,6 +6,7 @@ from typing import Sequence
 
 from attack.common.artifact_io import save_json
 from attack.common.config import Config
+from attack.common.seed import derive_seed, set_seed
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
@@ -38,6 +39,13 @@ def execute_single_victim(
     srg_nn_export_paths: dict[str, Path] | None = None,
     predictions_path: Path | None = None,
 ) -> VictimExecutionResult:
+    victim_stage_seed = derive_seed(
+        config.seeds.victim_train_seed,
+        "victim_train",
+        victim_name,
+        int(target_item),
+    )
+    set_seed(victim_stage_seed)
     max_topk = max(eval_topk)
     if victim_name == "srgnn":
         victim_train_config = _require_victim_train_config(config, victim_name)
@@ -59,6 +67,7 @@ def execute_single_victim(
                 "predictions_path": predictions_path,
                 "poisoned_train_path": poisoned_train_path,
                 "run_dir": run_dir,
+                "victim_train_seed": int(victim_stage_seed),
             },
         )
 
@@ -131,6 +140,7 @@ def execute_single_victim(
             "run_dir": run_dir,
             "checkpoint_dir": run_dir / "miasrec_checkpoints",
             "log_path": run_dir / "miasrec_stdout.log",
+            "victim_train_seed": int(victim_stage_seed),
         }
         _write_victim_resolved_config(
             config,
@@ -145,6 +155,7 @@ def execute_single_victim(
             export_topk_path=raw_predictions_path,
             topk=max_topk,
             max_epochs=int(victim_train_config["epochs"]),
+            victim_train_seed=int(victim_stage_seed),
         )
         _write_victim_resolved_config(
             config,
@@ -196,6 +207,7 @@ def execute_single_victim(
             "config_dir": run_dir / "tron_config",
             "log_path": run_dir / "tron_stdout.log",
             "log_dir": run_dir / "tron_logs",
+            "victim_train_seed": int(victim_stage_seed),
         }
         _write_victim_resolved_config(
             config,
@@ -210,6 +222,7 @@ def execute_single_victim(
             export_topk_path=raw_predictions_path,
             topk=max_topk,
             max_epochs=int(victim_train_config["max_epochs"]),
+            victim_train_seed=int(victim_stage_seed),
         )
         _write_victim_resolved_config(
             config,
@@ -261,6 +274,9 @@ def _write_victim_resolved_config(
     runtime = (config.victims.runtime or {}).get(victim_name, {})
     payload = {
         "victim_name": victim_name,
+        "seeds": {
+            "victim_train_seed": int(config.seeds.victim_train_seed),
+        },
         "params": _primitive_value(config.victims.params.get(victim_name, {})),
         "runtime": _primitive_value(runtime),
         "pipeline_injected": _primitive_value(pipeline_injected),

@@ -13,7 +13,6 @@ if __package__ is None or __package__ == "":
 from attack.common.artifact_io import save_json
 from attack.common.config import Config, load_config
 from attack.common.paths import build_position_opt_attack_identity_context, target_dir
-from attack.common.seed import set_seed
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.inner_train.truncated_finetune import TruncatedFineTuneInnerTrainer
 from attack.pipeline.core.orchestrator import (
@@ -47,7 +46,6 @@ def run_position_opt_mvp(
 ) -> dict[str, object]:
     if not config.data.poison_train_only:
         raise ValueError("Position-opt MVP expects data.poison_train_only to be true.")
-    set_seed(config.seeds.fake_session_seed)
     shared = prepare_shared_attack_artifacts(
         config,
         run_type=POSITION_OPT_RUN_TYPE,
@@ -80,6 +78,10 @@ def run_position_opt_mvp(
     attack_identity_context = build_position_opt_attack_identity_context(
         position_opt_config=position_opt_identity_payload(resolved_position_opt_config),
         clean_surrogate_checkpoint=clean_checkpoint,
+        runtime_seeds={
+            "position_opt_seed": int(config.seeds.position_opt_seed),
+            "surrogate_train_seed": int(config.seeds.surrogate_train_seed),
+        },
     )
     candidate_summary = _candidate_size_summary(
         shared.template_sessions,
@@ -248,6 +250,7 @@ def _save_position_opt_run_metadata(
         "fake_session_count": int(len(shared.template_sessions)),
         "clean_train_prefix_count": int(len(shared.clean_sessions)),
         "validation_session_count": int(len(shared.canonical_dataset.valid)),
+        "resolved_seeds": asdict(config.seeds),
         "replacement_topk_ratio": float(config.attack.replacement_topk_ratio),
         "position_opt_config": asdict(trainer.position_opt_config),
         "trainer_result": trainer_result,

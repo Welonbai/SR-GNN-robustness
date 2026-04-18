@@ -11,7 +11,6 @@ if __package__ is None or __package__ == "":
 
 from attack.common.config import Config, load_config
 from attack.common.paths import target_dir
-from attack.common.seed import set_seed
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.insertion.prefix_nonzero_when_possible import (
     PrefixNonzeroWhenPossiblePolicy,
@@ -31,7 +30,6 @@ def run_prefix_nonzero_when_possible(
 ) -> dict[str, object]:
     if not config.data.poison_train_only:
         raise ValueError("Batch 6 expects data.poison_train_only to be true.")
-    set_seed(config.seeds.fake_session_seed)
     shared = prepare_shared_attack_artifacts(
         config,
         run_type="prefix_nonzero_when_possible",

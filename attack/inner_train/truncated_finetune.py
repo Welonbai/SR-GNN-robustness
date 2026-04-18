@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from attack.common.seed import set_seed
 from attack.position_opt.types import InnerTrainResult, TruncatedFineTuneConfig
 from attack.surrogate.base import PoisonedTrainInput, SurrogateBackend
 
@@ -26,8 +27,11 @@ class TruncatedFineTuneInnerTrainer:
         *,
         config: TruncatedFineTuneConfig | None = None,
         eval_data: Any | None = None,
+        seed: int | None = None,
     ) -> InnerTrainResult:
         effective_config = config or self.default_config
+        if seed is not None:
+            set_seed(int(seed))
         # Phase 1 keeps checkpoint resolution outside the trainer. The caller must
         # provide the clean surrogate checkpoint explicitly until later artifact or
         # config wiring is added.
