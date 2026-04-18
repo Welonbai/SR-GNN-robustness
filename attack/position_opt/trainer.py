@@ -220,6 +220,10 @@ class PositionOptMVPTrainer:
         results: list[SelectedPositionResult] = []
         for session_idx, session_state in enumerate(self._session_states):
             logits = self.policy.get_logits(session_idx)
+            if self.position_opt_config.final_selection != "argmax":
+                raise ValueError(
+                    "Unsupported final_selection for the current position-opt MVP."
+                )
             candidate_index = select_position_eval(logits)
             position = session_state.metadata.positions[candidate_index]
             results.append(

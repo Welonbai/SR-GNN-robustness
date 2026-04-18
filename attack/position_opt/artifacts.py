@@ -18,14 +18,26 @@ def resolve_clean_surrogate_checkpoint_path(
     run_type: str = POSITION_OPT_RUN_TYPE,
     override: str | Path | None = None,
 ) -> Path:
-    del config, run_type
+    del run_type
     if override is not None:
-        return Path(override)
+        override_text = str(override).strip()
+        if not override_text:
+            raise ValueError(
+                "Clean surrogate checkpoint override must be a non-empty path."
+            )
+        return Path(override_text)
+
+    position_opt_config = config.attack.position_opt
+    if (
+        position_opt_config is not None
+        and position_opt_config.clean_surrogate_checkpoint is not None
+    ):
+        return Path(position_opt_config.clean_surrogate_checkpoint)
+
     raise ValueError(
-        "Position optimization MVP Phase 1 requires an explicit clean surrogate "
-        "checkpoint path. The existing poison-model checkpoint is used by the "
-        "fake-session generation scaffold and must not be reused as the clean "
-        "surrogate checkpoint."
+        "Position optimization requires a clean surrogate checkpoint from either "
+        "attack.position_opt.clean_surrogate_checkpoint or "
+        "--clean-surrogate-checkpoint."
     )
 
 
@@ -37,9 +49,6 @@ def build_position_opt_artifact_paths(
     clean_checkpoint_override: str | Path | None = None,
     attack_identity_context: Mapping[str, Any] | None = None,
 ) -> PositionOptArtifactPaths:
-    # Position-opt artifacts live beside the existing scaffold artifacts, but the
-    # clean surrogate checkpoint is a separate role and must be supplied explicitly
-    # until dedicated artifact/config plumbing is added in a later phase.
     if target_item is None:
         base_dir = shared_attack_dir(config, run_type=run_type) / "position_opt"
     else:

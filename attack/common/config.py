@@ -56,11 +56,89 @@ class PoisonModelConfig:
 
 
 @dataclass(frozen=True)
+class PositionOptConfig:
+    clean_surrogate_checkpoint: str | None = None
+    outer_steps: int = 30
+    policy_lr: float = 0.05
+    fine_tune_steps: int = 20
+    validation_subset_size: int | None = None
+    reward_baseline_momentum: float = 0.9
+    enable_gt_penalty: bool = False
+    gt_penalty_weight: float = 0.0
+    gt_tolerance: float = 0.0
+    final_selection: str = "argmax"
+
+    def __post_init__(self) -> None:
+        checkpoint = self.clean_surrogate_checkpoint
+        if checkpoint is not None:
+            checkpoint = _as_str(
+                checkpoint,
+                "attack.position_opt.clean_surrogate_checkpoint",
+            ).strip()
+            if not checkpoint:
+                raise ValueError(
+                    "attack.position_opt.clean_surrogate_checkpoint must be a non-empty "
+                    "string when provided."
+                )
+            object.__setattr__(self, "clean_surrogate_checkpoint", checkpoint)
+
+        if _as_int(self.outer_steps, "attack.position_opt.outer_steps") < 0:
+            raise ValueError("attack.position_opt.outer_steps must be non-negative.")
+        if _as_float(self.policy_lr, "attack.position_opt.policy_lr") <= 0.0:
+            raise ValueError("attack.position_opt.policy_lr must be positive.")
+        if _as_int(self.fine_tune_steps, "attack.position_opt.fine_tune_steps") < 0:
+            raise ValueError("attack.position_opt.fine_tune_steps must be non-negative.")
+
+        subset_size = self.validation_subset_size
+        if subset_size is not None:
+            subset_size = _as_int(
+                subset_size,
+                "attack.position_opt.validation_subset_size",
+            )
+            if subset_size <= 0:
+                raise ValueError(
+                    "attack.position_opt.validation_subset_size must be positive when provided."
+                )
+
+        momentum = _as_float(
+            self.reward_baseline_momentum,
+            "attack.position_opt.reward_baseline_momentum",
+        )
+        if not 0.0 <= momentum <= 1.0:
+            raise ValueError(
+                "attack.position_opt.reward_baseline_momentum must be in [0, 1]."
+            )
+
+        _as_bool(self.enable_gt_penalty, "attack.position_opt.enable_gt_penalty")
+
+        if _as_float(
+            self.gt_penalty_weight,
+            "attack.position_opt.gt_penalty_weight",
+        ) < 0.0:
+            raise ValueError(
+                "attack.position_opt.gt_penalty_weight must be non-negative."
+            )
+        if _as_float(self.gt_tolerance, "attack.position_opt.gt_tolerance") < 0.0:
+            raise ValueError("attack.position_opt.gt_tolerance must be non-negative.")
+
+        final_selection = _as_str(
+            self.final_selection,
+            "attack.position_opt.final_selection",
+        ).strip().lower()
+        if final_selection != "argmax":
+            raise ValueError(
+                "attack.position_opt.final_selection must be 'argmax' for the current MVP."
+            )
+        object.__setattr__(self, "final_selection", final_selection)
+
+
+@dataclass(frozen=True)
 class AttackConfig:
     size: float
     fake_session_generation_topk: int
     replacement_topk_ratio: float
     poison_model: PoisonModelConfig
+    position_opt: PositionOptConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -429,6 +507,14 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
                 model_name=poison_model_name,
             ),
         },
+        "position_opt": (
+            _normalize_position_opt_config(
+                attack["position_opt"],
+                "attack.position_opt",
+            )
+            if "position_opt" in attack and attack["position_opt"] is not None
+            else None
+        ),
     }
 
     if not 0.0 < normalized["size"] <= 1.0:
@@ -438,6 +524,71 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
     if not 0.0 < normalized["replacement_topk_ratio"] <= 1.0:
         raise ValueError("attack.replacement_topk_ratio must be in (0, 1].")
     return normalized
+
+
+def _normalize_position_opt_config(value: Any, context: str) -> dict[str, Any]:
+    mapping = _as_mapping(value, context)
+    allowed_fields = {field.name for field in fields(PositionOptConfig)}
+    unknown = set(mapping) - allowed_fields
+    if unknown:
+        raise ValueError(
+            "Unknown position-opt config keys: " + ", ".join(sorted(map(str, unknown)))
+        )
+
+    payload: dict[str, Any] = {}
+    if "clean_surrogate_checkpoint" in mapping:
+        raw_checkpoint = mapping["clean_surrogate_checkpoint"]
+        payload["clean_surrogate_checkpoint"] = (
+            None
+            if raw_checkpoint is None
+            else _as_str(
+                raw_checkpoint,
+                f"{context}.clean_surrogate_checkpoint",
+            )
+        )
+    if "outer_steps" in mapping:
+        payload["outer_steps"] = _as_int(mapping["outer_steps"], f"{context}.outer_steps")
+    if "policy_lr" in mapping:
+        payload["policy_lr"] = _as_float(mapping["policy_lr"], f"{context}.policy_lr")
+    if "fine_tune_steps" in mapping:
+        payload["fine_tune_steps"] = _as_int(
+            mapping["fine_tune_steps"],
+            f"{context}.fine_tune_steps",
+        )
+    if "validation_subset_size" in mapping:
+        subset_size = mapping["validation_subset_size"]
+        payload["validation_subset_size"] = (
+            None
+            if subset_size is None
+            else _as_int(subset_size, f"{context}.validation_subset_size")
+        )
+    if "reward_baseline_momentum" in mapping:
+        payload["reward_baseline_momentum"] = _as_float(
+            mapping["reward_baseline_momentum"],
+            f"{context}.reward_baseline_momentum",
+        )
+    if "enable_gt_penalty" in mapping:
+        payload["enable_gt_penalty"] = _as_bool(
+            mapping["enable_gt_penalty"],
+            f"{context}.enable_gt_penalty",
+        )
+    if "gt_penalty_weight" in mapping:
+        payload["gt_penalty_weight"] = _as_float(
+            mapping["gt_penalty_weight"],
+            f"{context}.gt_penalty_weight",
+        )
+    if "gt_tolerance" in mapping:
+        payload["gt_tolerance"] = _as_float(
+            mapping["gt_tolerance"],
+            f"{context}.gt_tolerance",
+        )
+    if "final_selection" in mapping:
+        payload["final_selection"] = _as_str(
+            mapping["final_selection"],
+            f"{context}.final_selection",
+        )
+
+    return _primitive_from_obj(PositionOptConfig(**payload))
 
 
 def _normalize_poison_model_params(
@@ -828,6 +979,18 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
                     "attack.poison_model.params",
                 ),
             ),
+            position_opt=(
+                PositionOptConfig(
+                    **dict(
+                        _as_mapping(
+                            attack["position_opt"],
+                            "attack.position_opt",
+                        )
+                    )
+                )
+                if attack.get("position_opt") is not None
+                else None
+            ),
         ),
         targets=TargetsConfig(
             mode=_as_str(_require(targets, "mode", "targets"), "targets.mode"),
@@ -887,6 +1050,7 @@ def load_config(path: str | Path) -> Config:
 __all__ = [
     "CanonicalSplitConfig",
     "Config",
+    "PositionOptConfig",
     "load_config",
     "normalize_config_mapping",
     "parse_config",

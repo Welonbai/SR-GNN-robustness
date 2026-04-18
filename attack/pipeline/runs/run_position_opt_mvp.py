@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 if __package__ is None or __package__ == "":
     import sys
@@ -24,14 +24,14 @@ from attack.pipeline.core.orchestrator import (
 from attack.pipeline.core.position_stats import save_position_stats
 from attack.pipeline.core.pipeline_utils import SharedAttackArtifacts, prepare_shared_attack_artifacts
 from attack.position_opt import (
-    POSITION_OPT_DEFAULTS,
     POSITION_OPT_RUN_TYPE,
+    PositionOptConfig,
     PositionOptArtifactPaths,
-    PositionOptDefaults,
     PositionOptMVPTrainer,
     build_candidate_positions,
     build_position_opt_artifact_paths,
     ensure_position_opt_artifact_dirs,
+    position_opt_identity_payload,
     resolve_clean_surrogate_checkpoint_path,
     resolve_position_opt_config,
 )
@@ -41,9 +41,9 @@ from attack.surrogate.srgnn_backend import SRGNNBackend
 def run_position_opt_mvp(
     config: Config,
     *,
-    clean_surrogate_checkpoint_path: str | Path,
+    clean_surrogate_checkpoint_path: str | Path | None = None,
     config_path: str | Path | None = None,
-    position_opt_config: PositionOptDefaults | dict[str, Any] | None = None,
+    position_opt_config: PositionOptConfig | Mapping[str, Any] | None = None,
 ) -> dict[str, object]:
     if not config.data.poison_train_only:
         raise ValueError("Position-opt MVP expects data.poison_train_only to be true.")
@@ -56,19 +56,29 @@ def run_position_opt_mvp(
     )
     context = RunContext.from_shared(shared)
 
+    cli_overrides = _coerce_position_opt_overrides(position_opt_config)
+    if clean_surrogate_checkpoint_path is not None:
+        cli_overrides["clean_surrogate_checkpoint"] = str(clean_surrogate_checkpoint_path)
+    resolved_position_opt_config = resolve_position_opt_config(
+        config.attack.position_opt,
+        cli_overrides or None,
+    )
     clean_checkpoint = resolve_clean_surrogate_checkpoint_path(
         config,
         run_type=POSITION_OPT_RUN_TYPE,
-        override=clean_surrogate_checkpoint_path,
+        override=resolved_position_opt_config.clean_surrogate_checkpoint,
     ).resolve()
     if not clean_checkpoint.exists():
         raise FileNotFoundError(
-            "Explicit clean surrogate checkpoint not found: "
+            "Clean surrogate checkpoint not found: "
             f"{clean_checkpoint}"
         )
-    resolved_position_opt_config = resolve_position_opt_config(position_opt_config)
+    resolved_position_opt_config = replace(
+        resolved_position_opt_config,
+        clean_surrogate_checkpoint=str(clean_checkpoint),
+    )
     attack_identity_context = build_position_opt_attack_identity_context(
-        position_opt_config=asdict(resolved_position_opt_config),
+        position_opt_config=position_opt_identity_payload(resolved_position_opt_config),
         clean_surrogate_checkpoint=clean_checkpoint,
     )
     candidate_summary = _candidate_size_summary(
@@ -260,103 +270,134 @@ def _save_position_opt_run_metadata(
                 else str(artifact_paths.learned_logits)
             ),
         },
-        "notes": (
-            "Phase 3 keeps position-opt options in Python-side defaults/CLI overrides only. "
-            "YAML/config integration is a later TODO."
-        ),
+        "config_resolution_order": [
+            "cli_overrides",
+            "attack.position_opt",
+            "code_defaults",
+        ],
     }
     save_json(payload, artifact_paths.run_metadata)
 
 
 def _resolve_position_opt_overrides(args: argparse.Namespace) -> dict[str, Any]:
-    # Phase 3 still keeps position-opt config outside YAML. CLI overrides feed the
-    # Python-side defaults directly until later config integration is added.
     overrides: dict[str, Any] = {}
-    default_cfg = POSITION_OPT_DEFAULTS
-    if args.outer_steps != default_cfg.outer_steps:
+    if hasattr(args, "outer_steps"):
         overrides["outer_steps"] = int(args.outer_steps)
-    if args.policy_lr != default_cfg.policy_lr:
+    if hasattr(args, "policy_lr"):
         overrides["policy_lr"] = float(args.policy_lr)
-    if args.fine_tune_steps != default_cfg.fine_tune_steps:
+    if hasattr(args, "fine_tune_steps"):
         overrides["fine_tune_steps"] = int(args.fine_tune_steps)
-    if args.validation_subset_size != default_cfg.validation_subset_size:
+    if hasattr(args, "validation_subset_size"):
         overrides["validation_subset_size"] = args.validation_subset_size
-    if args.reward_baseline_momentum != default_cfg.reward_baseline_momentum:
+    if hasattr(args, "reward_baseline_momentum"):
         overrides["reward_baseline_momentum"] = float(args.reward_baseline_momentum)
-    if bool(args.enable_gt_penalty) != bool(default_cfg.enable_gt_penalty):
+    if hasattr(args, "enable_gt_penalty"):
         overrides["enable_gt_penalty"] = bool(args.enable_gt_penalty)
-    if args.gt_penalty_weight != default_cfg.gt_penalty_weight:
+    if hasattr(args, "gt_penalty_weight"):
         overrides["gt_penalty_weight"] = float(args.gt_penalty_weight)
-    if args.gt_tolerance != default_cfg.gt_tolerance:
+    if hasattr(args, "gt_tolerance"):
         overrides["gt_tolerance"] = float(args.gt_tolerance)
+    if hasattr(args, "final_selection"):
+        overrides["final_selection"] = str(args.final_selection)
     return overrides
+
+
+def _coerce_position_opt_overrides(
+    value: PositionOptConfig | Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, PositionOptConfig):
+        return asdict(value)
+    return dict(value)
+
+
+def _parse_optional_int(value: str) -> int | None:
+    stripped = value.strip()
+    if stripped.lower() == "none":
+        return None
+    return int(stripped)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config",
-        default="attack/configs/diginetica_attack_dpsbr.yaml",
+        default="attack/configs/diginetica_attack_position_optimization_reward.yaml",
         help="Path to YAML config.",
     )
     parser.add_argument(
         "--clean-surrogate-checkpoint",
-        required=True,
-        help="Explicit clean surrogate checkpoint path for truncated fine-tuning.",
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.clean_surrogate_checkpoint.",
     )
     parser.add_argument(
         "--outer-steps",
         type=int,
-        default=POSITION_OPT_DEFAULTS.outer_steps,
-        help="Joint REINFORCE outer steps.",
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.outer_steps.",
     )
     parser.add_argument(
         "--policy-lr",
         type=float,
-        default=POSITION_OPT_DEFAULTS.policy_lr,
-        help="Policy optimizer learning rate.",
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.policy_lr.",
     )
     parser.add_argument(
         "--fine-tune-steps",
         type=int,
-        default=POSITION_OPT_DEFAULTS.fine_tune_steps,
-        help="Truncated surrogate fine-tuning steps per outer step.",
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.fine_tune_steps.",
     )
     parser.add_argument(
         "--validation-subset-size",
-        type=int,
-        default=POSITION_OPT_DEFAULTS.validation_subset_size,
-        help="Optional deterministic prefix subset from real validation data.",
+        type=_parse_optional_int,
+        default=argparse.SUPPRESS,
+        help=(
+            "Optional CLI override for attack.position_opt.validation_subset_size. "
+            "Use an integer or 'none'."
+        ),
     )
     parser.add_argument(
         "--reward-baseline-momentum",
         type=float,
-        default=POSITION_OPT_DEFAULTS.reward_baseline_momentum,
-        help="EMA baseline momentum for REINFORCE.",
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.reward_baseline_momentum.",
     )
     parser.add_argument(
         "--enable-gt-penalty",
-        action="store_true",
-        help="Enable asymmetric GT penalty during outer optimization.",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.enable_gt_penalty.",
     )
     parser.add_argument(
         "--gt-penalty-weight",
         type=float,
-        default=POSITION_OPT_DEFAULTS.gt_penalty_weight,
-        help="Weight for the asymmetric GT penalty when enabled.",
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.gt_penalty_weight.",
     )
     parser.add_argument(
         "--gt-tolerance",
         type=float,
-        default=POSITION_OPT_DEFAULTS.gt_tolerance,
-        help="Allowed GT drop before penalty activates.",
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.gt_tolerance.",
+    )
+    parser.add_argument(
+        "--final-selection",
+        choices=["argmax"],
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.final_selection.",
     )
     args = parser.parse_args()
 
     config = load_config(args.config)
     run_position_opt_mvp(
         config,
-        clean_surrogate_checkpoint_path=args.clean_surrogate_checkpoint,
+        clean_surrogate_checkpoint_path=(
+            args.clean_surrogate_checkpoint
+            if hasattr(args, "clean_surrogate_checkpoint")
+            else None
+        ),
         config_path=args.config,
         position_opt_config=_resolve_position_opt_overrides(args),
     )

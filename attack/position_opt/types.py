@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+import warnings
+
+from attack.common.config import PositionOptConfig
 
 
 @dataclass(frozen=True)
@@ -47,22 +50,6 @@ class TruncatedFineTuneConfig:
 
 
 @dataclass(frozen=True)
-class PositionOptDefaults:
-    enabled: bool = True
-    training_selector: str = "categorical_reinforce"
-    eval_selector: str = "argmax"
-    outer_steps: int = 30
-    policy_lr: float = 0.05
-    gumbel_temperature: float = 1.0
-    fine_tune_steps: int = 20
-    enable_gt_penalty: bool = False
-    gt_penalty_weight: float = 0.0
-    gt_tolerance: float = 0.0
-    reward_baseline_momentum: float = 0.9
-    validation_subset_size: int | None = None
-
-
-@dataclass(frozen=True)
 class PositionOptArtifactPaths:
     base_dir: Path
     clean_surrogate_checkpoint: Path
@@ -79,65 +66,104 @@ class InnerTrainResult:
     history: Mapping[str, Any] | None = None
 
 
-POSITION_OPT_DEFAULTS = PositionOptDefaults()
+POSITION_OPT_DEFAULTS = PositionOptConfig()
+PositionOptDefaults = PositionOptConfig
 
 
 def resolve_position_opt_config(
-    overrides: PositionOptDefaults | Mapping[str, Any] | None,
+    config: PositionOptDefaults | Mapping[str, Any] | None = None,
+    overrides: PositionOptDefaults | Mapping[str, Any] | None = None,
 ) -> PositionOptDefaults:
-    # Position-opt config still uses Python defaults plus explicit runtime
-    # overrides. YAML/config parser wiring is intentionally deferred.
-    if overrides is None:
-        resolved = replace(POSITION_OPT_DEFAULTS)
-    elif isinstance(overrides, PositionOptDefaults):
-        resolved = overrides
-    elif isinstance(overrides, Mapping):
+    merged = asdict(POSITION_OPT_DEFAULTS)
+    merged.update(_coerce_position_opt_layer(config, context="attack.position_opt"))
+    merged.update(
+        _coerce_position_opt_layer(overrides, context="position_opt_config override")
+    )
+    return PositionOptDefaults(**merged)
+
+
+def position_opt_identity_payload(config: PositionOptDefaults) -> dict[str, Any]:
+    payload = asdict(config)
+    payload.pop("clean_surrogate_checkpoint", None)
+    return payload
+
+
+def _coerce_position_opt_layer(
+    value: PositionOptDefaults | Mapping[str, Any] | None,
+    *,
+    context: str,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, PositionOptDefaults):
+        return asdict(value)
+    if isinstance(value, Mapping):
+        payload = dict(value)
+        _consume_deprecated_position_opt_keys(payload, context=context)
         allowed_fields = {field.name for field in fields(PositionOptDefaults)}
-        unknown = set(overrides) - allowed_fields
+        unknown = set(payload) - allowed_fields
         if unknown:
             raise ValueError(
                 "Unknown position-opt config keys: " + ", ".join(sorted(map(str, unknown)))
             )
-        resolved = replace(POSITION_OPT_DEFAULTS, **dict(overrides))
-    else:
-        raise TypeError(
-            "position_opt_config must be a PositionOptDefaults instance, a mapping, or None."
+        return payload
+    raise TypeError(
+        "position_opt_config must be a PositionOptConfig instance, a mapping, or None."
+    )
+
+
+def _consume_deprecated_position_opt_keys(
+    payload: dict[str, Any],
+    *,
+    context: str,
+) -> None:
+    training_selector = payload.pop("training_selector", None)
+    if training_selector is not None:
+        if training_selector != "categorical_reinforce":
+            raise ValueError(
+                f"{context}.training_selector is deprecated. The active position-opt "
+                "trainer is fixed to joint REINFORCE and no longer supports "
+                "selector-family switching."
+            )
+        warnings.warn(
+            f"{context}.training_selector is deprecated and ignored.",
+            DeprecationWarning,
+            stacklevel=3,
         )
 
-    if resolved.training_selector not in {"categorical_reinforce", "st_gumbel"}:
-        raise ValueError(
-            "Phase 2.5 only supports training_selector='categorical_reinforce' "
-            "or the legacy 'st_gumbel' compatibility value."
+    eval_selector = payload.pop("eval_selector", None)
+    if eval_selector is not None:
+        if eval_selector != "argmax":
+            raise ValueError(
+                f"{context}.eval_selector is deprecated. The current MVP only supports "
+                "final_selection='argmax'."
+            )
+        warnings.warn(
+            f"{context}.eval_selector is deprecated and ignored.",
+            DeprecationWarning,
+            stacklevel=3,
         )
-    if resolved.eval_selector != "argmax":
-        raise ValueError("Phase 2.5 only supports eval_selector='argmax'.")
-    if int(resolved.outer_steps) < 0:
-        raise ValueError("outer_steps must be non-negative.")
-    if float(resolved.policy_lr) <= 0.0:
-        raise ValueError("policy_lr must be positive.")
-    if float(resolved.gumbel_temperature) <= 0.0:
-        raise ValueError("gumbel_temperature must be positive.")
-    if int(resolved.fine_tune_steps) < 0:
-        raise ValueError("fine_tune_steps must be non-negative.")
-    if float(resolved.gt_penalty_weight) < 0.0:
-        raise ValueError("gt_penalty_weight must be non-negative.")
-    if float(resolved.gt_tolerance) < 0.0:
-        raise ValueError("gt_tolerance must be non-negative.")
-    if not 0.0 <= float(resolved.reward_baseline_momentum) <= 1.0:
-        raise ValueError("reward_baseline_momentum must be in [0, 1].")
-    if resolved.validation_subset_size is not None and int(resolved.validation_subset_size) <= 0:
-        raise ValueError("validation_subset_size must be positive when provided.")
-    return resolved
+
+    if "gumbel_temperature" in payload:
+        payload.pop("gumbel_temperature")
+        warnings.warn(
+            f"{context}.gumbel_temperature is deprecated and ignored. Gumbel is no "
+            "longer part of the active joint-REINFORCE config path.",
+            DeprecationWarning,
+            stacklevel=3,
+        )
 
 
 __all__ = [
     "POSITION_OPT_DEFAULTS",
     "CandidateMetadata",
     "InnerTrainResult",
+    "PositionOptConfig",
     "PositionOptArtifactPaths",
     "PositionOptDefaults",
     "SelectedPositionResult",
     "SurrogateScoreResult",
     "TruncatedFineTuneConfig",
+    "position_opt_identity_payload",
     "resolve_position_opt_config",
 ]
