@@ -1,0 +1,68 @@
+style_name: six_run_slice_srgnn_target11169_diginetica
+output_format: png
+
+title:
+  template: "Diginetica | victim={victim_model} | target={target_item} | {target_type} | attack_size={attack_size}"
+  align: center
+  font_size: 12
+  color: black
+
+figure:
+  width: 14
+  height: 6
+  dpi: 220
+  background_color: white
+
+table:
+  font_size: 12
+  round_digits: 6
+  text_color: black
+  show_grid: true
+  auto_shrink: false
+  wrap_text: false
+  cell_align: center
+  top_level_group_separators: true
+
+  display_alias:
+    labels:
+      victim_model: Victim
+      attack_method: Attack
+      replacement_topk_ratio: Ratio
+      metric_name: Metric
+      metric_scope: Scope
+      k: K
+
+    attack_method:
+      clean: Clean
+      dpsbr_baseline: DPSBR
+      prefix_nonzero_when_possible: Prefix-NZ
+      random_nonzero_when_possible: Random-NZ
+      position_opt_mvp: PosOptMVP
+
+    victim_model:
+      srgnn: SR-GNN
+
+    metric_name:
+      recall: Recall
+      mrr: MRR
+
+    metric_scope:
+      ground_truth: GT
+      targeted: Target
+
+    replacement_topk_ratio:
+      0.2: "r=0.2"
+      1.0: "r=1.0"
+
+  value_alias: {}
+
+  scope_colors:
+    metric_scope:
+      ground_truth: "#E8F1FF"
+      targeted: "#FFF0E1"
+
+  best_value_bolding:
+    compare_along: rows
+    mode: max
+    partition_by_levels:
+      - victim_model
