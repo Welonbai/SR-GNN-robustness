@@ -306,6 +306,32 @@ def _expected_target_registry_payload(
     }
 
 
+def _target_registry_identity_payload(
+    payload: Mapping[str, Any],
+    *,
+    imported_from_legacy: bool,
+) -> dict[str, Any]:
+    base_fields = (
+        "target_cohort_key",
+        "split_key",
+        "mode",
+        "bucket",
+        "seed",
+        "explicit_list",
+        "ordered_targets",
+    )
+    strict_only_fields = (
+        "selection_policy_version",
+        "candidate_pool_hash",
+        "candidate_pool_size",
+    )
+    selected_fields = base_fields if imported_from_legacy else base_fields + strict_only_fields
+    return {
+        field_name: payload.get(field_name)
+        for field_name in selected_fields
+    }
+
+
 def load_or_init_target_registry(
     stats: SessionStats,
     config: Config,
@@ -326,12 +352,15 @@ def load_or_init_target_registry(
         save_target_registry(payload, registry_path)
         return payload
 
-    expected_identity = dict(expected_payload)
-    expected_identity.pop("current_count", None)
-    existing_identity = dict(existing)
-    existing_identity.pop("current_count", None)
-    existing_identity.pop("created_at", None)
-    existing_identity.pop("updated_at", None)
+    imported_from_legacy = bool(existing.get("imported_from_legacy"))
+    expected_identity = _target_registry_identity_payload(
+        expected_payload,
+        imported_from_legacy=imported_from_legacy,
+    )
+    existing_identity = _target_registry_identity_payload(
+        existing,
+        imported_from_legacy=imported_from_legacy,
+    )
     if existing_identity != expected_identity:
         raise ValueError(
             "Existing target_registry.json does not match the expected stable cohort identity."

@@ -2,85 +2,57 @@
 
 Run all commands from the repository root.
 
-## Quick Start
+This pipeline now assumes the appendable run-group architecture:
 
-1. Generate one per-run long table.
+- run-time state is stored under `outputs/runs/<dataset>/<experiment>/<run_group_key>/`
+- analysis resolves a comparable slice before rendering
+- comparison validates slice compatibility by default
+- rendering consumes propagated metadata and stays presentation-only
 
-```powershell
-python analysis/pipeline/long_csv_generator.py `
-  --summary outputs/runs/diginetica/attack_dpsbr/eval_ea7308a8e0/summary_dpsbr_baseline.json `
-  --output-name diginetica_dpsbr_example
-```
+## 1. Inputs and Trust Model
 
-2. Merge multiple runs into one comparison bundle.
+Authoritative runtime inputs:
 
-```powershell
-python analysis/pipeline/compare_runs.py `
-  --config analysis/configs/comparisons/diginetica_attack_compare.yaml
-```
+- `summary_current.json` for metric payload flattening
+- `run_coverage.json` for cell completion truth
+- `target_registry.json` for canonical target order
 
-3. Build split view bundles from the comparison bundle.
+Authoritative analysis metadata:
 
-```powershell
-python analysis/pipeline/view_table_builder.py `
-  --config analysis/configs/views/attack_vs_victim_metrics_split_by_target_item.yaml
-```
+- `slice_manifest.json` for one generated slice
 
-4. Render all direct child view bundles to PNG.
+Non-authoritative runtime/debug artifacts:
 
-```powershell
-python analysis/pipeline/report_table_renderer.py `
-  --bundle-parent-dir results/comparisons/clean_vs_dpsbr_vs_random_nonzero_vs_prefix_nonzero_diginetica_popular_0.1size `
-  --config analysis/configs/render/attack_vs_victim_metrics_split_by_target_item.yaml
-```
+- `progress.json`
+- legacy-style `summary_<run_type>.json`
 
-## Layout
-
-- `analysis/pipeline/`: implementation files for the CLI stages
-- `analysis/utils/`: shared helpers
-- `analysis/configs/`: YAML configs
-
-## Example Inputs
-
-- `outputs/runs/diginetica/attack_dpsbr/eval_ea7308a8e0/summary_dpsbr_baseline.json`
-- `outputs/runs/diginetica/attack_random_nonzero_when_possible/eval_1b8a0c10c9/summary_random_nonzero_when_possible.json`
-
-## 1. Generate Per-Run Long Tables
-
-`long_csv_generator.py` is not YAML-driven. It reads:
-
-- one `summary*.json` under `outputs/`
-- the sibling `resolved_config.json` in the same run directory
+## 2. Generate A Slice-Aware Long Table
 
 ```powershell
 python analysis/pipeline/long_csv_generator.py `
-  --summary outputs/runs/diginetica/attack_dpsbr/eval_ea7308a8e0/summary_dpsbr_baseline.json
+  --summary outputs/runs/<dataset>/<experiment>/<run_group_key>/summary_current.json
 ```
 
-```powershell
-python analysis/pipeline/long_csv_generator.py `
-  --summary outputs/runs/diginetica/attack_random_nonzero_when_possible/eval_1b8a0c10c9/summary_random_nonzero_when_possible.json
-```
+Optional flags:
 
-Optional custom folder name:
+- `--slice-policy largest_complete_prefix|intersection_complete|all_available`
+- `--victim <victim_name>` repeated for explicit victim subsets
+- `--target-count <N>`
+- `--output-name <bundle_name>`
 
-```powershell
-python analysis/pipeline/long_csv_generator.py `
-  --summary outputs/runs/diginetica/attack_dpsbr/eval_ea7308a8e0/summary_dpsbr_baseline.json `
-  --output-name my_custom_run_name
-```
+Default slice policy:
 
-`--name` is kept as a backward-compatible alias for `--output-name`.
-If `--output-name` is omitted, the folder name is derived from the summary path under `outputs/`.
+- `largest_complete_prefix`
 
-Outputs are written to `results/runs/<output_name>/` and include:
+Outputs under `results/runs/<bundle_name>/`:
 
 - `long_table.csv`
 - `inventory.json`
 - `manifest.json`
+- `slice_manifest.json`
 - `source_resolved_config.json`
 
-`long_table.csv` uses the canonical columns:
+`long_table.csv` keeps the canonical row schema:
 
 - `run_id`
 - `dataset`
@@ -96,198 +68,90 @@ Outputs are written to `results/runs/<output_name>/` and include:
 - `k`
 - `value`
 
-`inventory.json` records column-level availability and unique values for inspection, including fields
-such as `target_item`, `metric`, and `k`. `manifest.json` records the source summary path, the
-source `resolved_config.json` path, the generated files, and the row count.
-
-## 2. Merge Runs For Comparison
+## 3. Compare Compatible Bundles
 
 ```powershell
 python analysis/pipeline/compare_runs.py `
-  --config analysis/configs/comparisons/diginetica_attack_compare.yaml
+  --config analysis/configs/comparisons/<comparison>.yaml
 ```
 
-This writes:
+Comparison now loads each source bundle's sibling `slice_manifest.json`.
 
-- `results/comparisons/<comparison_id>/merged_long_table.csv`
-- `results/comparisons/<comparison_id>/manifest.json`
-- `results/comparisons/<comparison_id>/inventory.json`
+Default behavior:
 
-## 3. Build A View Table
+- strict slice compatibility
+- reject mismatched `slice_policy`
+- reject mismatched `fairness_safe`
+- reject mismatched `requested_victims`
+- reject mismatched `selected_targets`
+- reject mismatched `selected_target_count`
+
+Relaxed comparison exists only for debug workflows and must be requested explicitly in the comparison spec.
+
+Outputs under `results/comparisons/<comparison_id>/`:
+
+- `merged_long_table.csv`
+- `inventory.json`
+- `manifest.json`
+- `slice_manifest.json`
+
+## 4. Build View Bundles
 
 ```powershell
 python analysis/pipeline/view_table_builder.py `
-  --config analysis/configs/views/attack_vs_victim_metrics_11169.yaml
+  --config analysis/configs/views/<view>.yaml
 ```
 
-This writes:
+The view builder:
 
-- `results/comparisons/<comparison_id>/<view_name>/table.csv`
-- `results/comparisons/<comparison_id>/<view_name>/meta.json`
-- The view config uses one `output` field for the final bundle directory.
-- When `split_by` is set, the builder writes multiple sibling bundles such as
-  `results/comparisons/<comparison_id>/<view_name>__target_item_11169/`.
+- reads run or comparison bundles
+- loads sibling `manifest.json` / `slice_manifest.json`
+- propagates normalized slice metadata into bundle `meta.json`
+- adds flattened `slice_context` for rendering
+- does not recompute slice/fairness decisions
 
-Optional view YAML fields:
-
-- `auto_context: true|false`
-  Adds singleton hidden columns to `meta.json["context"]` after filtering. Default: `false`.
-- `require_unique_cells: true|false`
-  Fails before pivoting if one output cell would aggregate multiple source rows. Default: `false`.
-- `split_by: [<column_1>, <column_2>, ...]`
-  After applying `filters`, splits the remaining rows by unique combinations of those columns and
-  writes one bundle per split assignment.
-
-For split-generated bundles, `meta.json` keeps both:
-
-- `filters`
-  The original filters from the view spec.
-- `effective_filters`
-  The actual per-bundle filters, i.e. `filters` plus the bundle's `split_values`.
-
-Example:
-
-```yaml
-input: results/comparisons/<comparison_id>/merged_long_table.csv
-output: results/comparisons/<comparison_id>/attack_vs_victim_metrics_target_11169
-
-filters:
-  target_item: 11169
-  metric: [precision, recall, mrr, ndcg]
-  k: [5, 10, 15, 20, 25, 30, 40, 50]
-
-rows:
-  - attack_method
-
-cols:
-  - victim_model
-  - metric
-  - k
-
-value_col: value
-agg: first
-auto_context: true
-require_unique_cells: true
-```
-
-Split example:
-
-```yaml
-input: results/comparisons/<comparison_id>/merged_long_table.csv
-output: results/comparisons/<comparison_id>/attack_vs_victim_metrics
-
-filters:
-  metric: [precision, recall, mrr, ndcg]
-  k: [5, 10, 15, 20, 25]
-
-split_by:
-  - target_item
-
-rows:
-  - victim_model
-
-cols:
-  - metric_name
-  - metric_scope
-  - attack_method
-
-value_col: value
-agg: first
-auto_context: true
-require_unique_cells: true
-```
-
-This produces bundles like:
-
-- `results/comparisons/<comparison_id>/attack_vs_victim_metrics__target_item_11169/`
-- `results/comparisons/<comparison_id>/attack_vs_victim_metrics__target_item_23467/`
-
-Each bundle still contains:
+Typical outputs:
 
 - `table.csv`
 - `meta.json`
 
-## 4. Render The PNG
+When `split_by` is configured, multiple sibling bundles are written.
+
+## 5. Render From Propagated Metadata
+
+Single bundle:
 
 ```powershell
 python analysis/pipeline/report_table_renderer.py `
-  --config analysis/configs/render/default_slide_png.yaml
+  --bundle-dir results/<...>/<view_bundle> `
+  --config analysis/configs/render/<render>.yaml
 ```
 
-This writes:
-
-- `results/comparisons/<comparison_id>/<view_name>/render.png`
-
-Single-bundle CLI:
+Batch render all direct child bundles:
 
 ```powershell
 python analysis/pipeline/report_table_renderer.py `
-  --bundle-dir results/comparisons/<comparison_id>/<view_name> `
-  --config analysis/configs/render/default_slide_png.yaml
+  --bundle-parent-dir results/<...>/<parent_dir> `
+  --config analysis/configs/render/<render>.yaml
 ```
 
-Batch render all direct child bundles under one parent directory:
+The renderer:
 
-```powershell
-python analysis/pipeline/report_table_renderer.py `
-  --bundle-parent-dir results/comparisons/<comparison_id> `
-  --config analysis/configs/render/default_slide_png.yaml
-```
+- reads `table.csv` and `meta.json`
+- can display slice metadata from `context` / `slice_context`
+- does not load `run_coverage.json` or `target_registry.json`
+- does not recompute fairness
 
-Batch mode only inspects direct child directories. A valid bundle is any child directory containing
-both `table.csv` and `meta.json`. Each rendered bundle writes its own `render.png`.
+## 6. Recommended End-to-End Flow
 
-Example for `split_by: [target_item]` bundles:
+1. Produce or append a run group with the attack pipeline.
+2. Generate one slice-aware long-table bundle from `summary_current.json`.
+3. Compare only strict-compatible bundles.
+4. Build one or more view bundles from the comparison output.
+5. Render final PNGs from the view bundles.
 
-```powershell
-python analysis/pipeline/report_table_renderer.py `
-  --bundle-parent-dir results/comparisons/clean_vs_dpsbr_vs_random_nonzero_diginetica_popular_0.1size `
-  --config analysis/configs/render/attack_vs_victim_metrics_split_by_target_item.yaml
-```
+## 7. Related Docs
 
-This renders sibling bundles such as:
-
-- `attack_vs_victim_metrics_split_by_target_item__target_item_11169/`
-- `attack_vs_victim_metrics_split_by_target_item__target_item_23467/`
-- `attack_vs_victim_metrics_split_by_target_item__target_item_26471/`
-
-Optional render YAML fields:
-
-- `input_dir`
-  Path to the view bundle directory containing `table.csv` and `meta.json`.
-- `table.display_alias`
-  Maps raw `table.csv` column names to display-only header labels in the rendered PNG.
-- `table.value_alias`
-  Maps raw cell values to display-only aliases per column in the rendered PNG.
-
-Backward-compatible CLI override:
-
-- `--bundle-dir`
-  Overrides the single-bundle input directory from the render YAML when needed.
-- `--input-dir`
-  Legacy alias for `--bundle-dir`.
-- `--bundle-parent-dir`
-  Renders every valid direct child bundle under one parent directory with the same render config.
-
-Example:
-
-```yaml
-input_dir: results/comparisons/<comparison_id>/<view_name>
-
-table:
-  font_size: 12
-  round_digits: 6
-  text_color: black
-  show_grid: true
-  auto_shrink: false
-  wrap_text: false
-  cell_align: center
-  display_alias:
-    "attack_method": "Attack"
-    "miasrec | precision | 5": "MIA | P@5"
-    "srgnn | mrr | 25": "SRGNN | MRR@25"
-  value_alias:
-    attack_method:
-      dpsbr_baseline: "DP-SBR"
-      random_nonzero_when_possible: "RND-NZ"
-```
+- [Appendable Experiment Operator Guide](../docs/operator_workflow_guide.md)
+- [Analysis Slice Rules](../docs/analysis_slice_rules.md)
+- [Legacy Migration Tool Usage](../docs/migration_tool_usage.md)

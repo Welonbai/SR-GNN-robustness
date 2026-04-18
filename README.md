@@ -1,5 +1,18 @@
 # SR-GNN
 
+## Appendable Experiment Docs
+
+This repository now also contains an appendable experiment container workflow for targeted SBR poisoning experiments.
+
+Operator-facing docs:
+
+- [docs/appendable_experiment_architecture.md](docs/appendable_experiment_architecture.md)
+- [docs/operator_workflow_guide.md](docs/operator_workflow_guide.md)
+- [docs/migration_tool_usage.md](docs/migration_tool_usage.md)
+- [analysis/README.md](analysis/README.md)
+
+The original SR-GNN upstream model notes remain below for base-model reference.
+
 ## Paper data and code
 
 This is the code for the AAAI 2019 Paper: [Session-based Recommendation with Graph Neural Networks](https://arxiv.org/abs/1811.00855). We have implemented our methods in both **Tensorflow** and **Pytorch**.
