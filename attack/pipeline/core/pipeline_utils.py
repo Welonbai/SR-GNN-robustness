@@ -371,6 +371,16 @@ def ensure_target_registry_prefix(
     return registry
 
 
+def requested_target_prefix(target_registry: Mapping[str, Any]) -> list[int]:
+    ordered_targets = target_registry.get("ordered_targets")
+    if not isinstance(ordered_targets, list):
+        raise ValueError("target_registry.json is missing ordered_targets.")
+    current_count = int(target_registry.get("current_count", 0))
+    if current_count < 0 or current_count > len(ordered_targets):
+        raise ValueError("target_registry.json has an invalid current_count.")
+    return [int(item) for item in ordered_targets[:current_count]]
+
+
 def _default_victim_coverage_entry(timestamp: str) -> dict[str, Any]:
     return {
         "status": "requested",
@@ -400,12 +410,10 @@ def load_or_init_run_coverage(
     metadata_paths: Mapping[str, Path],
     target_registry: Mapping[str, Any],
     attack_identity_context: Mapping[str, Any] | None = None,
+    allow_new_victims: bool = True,
 ) -> dict[str, Any]:
     coverage_path = metadata_paths["run_coverage"]
-    expected_targets_order = [
-        int(item)
-        for item in list(target_registry["ordered_targets"])[: int(target_registry["current_count"])]
-    ]
+    expected_targets_order = requested_target_prefix(target_registry)
     expected_run_group_key = run_group_key(
         config,
         run_type=run_type,
@@ -453,9 +461,21 @@ def load_or_init_run_coverage(
 
     changed = False
     for victim_name in config.victims.enabled:
-        if victim_name not in victims_payload:
+        victim_entry = victims_payload.get(victim_name)
+        if victim_entry is None:
+            if not allow_new_victims:
+                raise RuntimeError(
+                    "Existing run_coverage.json does not include the currently requested "
+                    f"victim '{victim_name}'. Phase 4 supports target append only for the "
+                    "same victim set. Victim-append or victim-set changes are not "
+                    "implemented until Phase 5."
+                )
             victims_payload[victim_name] = _default_victim_coverage_entry(now)
             changed = True
+            continue
+        if not isinstance(victim_entry, dict):
+            raise ValueError(f"run_coverage.json victims[{victim_name}] must be an object.")
+        victim_entry["last_requested_at"] = now
 
     existing_targets_order = [int(item) for item in coverage.get("targets_order", [])]
     if existing_targets_order:
@@ -482,6 +502,43 @@ def load_or_init_run_coverage(
         coverage["updated_at"] = now
         save_run_coverage(coverage, coverage_path)
     return coverage
+
+
+def plan_target_append_cells(
+    run_coverage: Mapping[str, Any],
+    *,
+    requested_target_items: list[int],
+    requested_victims: list[str],
+) -> dict[str, list[dict[str, Any]]]:
+    cells_payload = run_coverage.get("cells", {})
+    if not isinstance(cells_payload, Mapping):
+        raise ValueError("run_coverage.json must contain a cells object.")
+
+    planned_cells: list[dict[str, Any]] = []
+    skipped_completed_cells: list[dict[str, Any]] = []
+    for target_item in requested_target_items:
+        target_key = str(target_item)
+        target_cells = cells_payload.get(target_key)
+        if not isinstance(target_cells, Mapping):
+            raise ValueError(f"run_coverage.json cells[{target_key}] must be an object.")
+        for victim_name in requested_victims:
+            cell = target_cells.get(victim_name)
+            if not isinstance(cell, Mapping):
+                raise ValueError(
+                    f"run_coverage.json cells[{target_key}][{victim_name}] must be an object."
+                )
+            cell_ref = {
+                "target_item": int(target_item),
+                "victim_name": victim_name,
+            }
+            if cell.get("status") == "completed":
+                skipped_completed_cells.append(cell_ref)
+            else:
+                planned_cells.append(cell_ref)
+    return {
+        "planned_cells": planned_cells,
+        "skipped_completed_cells": skipped_completed_cells,
+    }
 
 
 def load_or_init_execution_log(
@@ -821,7 +878,9 @@ __all__ = [
     "load_or_init_execution_log",
     "load_or_init_run_coverage",
     "load_or_init_target_registry",
+    "plan_target_append_cells",
     "prepare_shared_attack_artifacts",
+    "requested_target_prefix",
     "rebuild_summary_current",
     "resolve_target_items",
 ]

@@ -6,9 +6,15 @@ from pathlib import Path
 import shutil
 import time
 from typing import Any, Callable, Mapping
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from attack.common.artifact_io import load_json, save_json
+from attack.common.artifact_io import (
+    load_json,
+    save_execution_log,
+    save_json,
+    save_run_coverage,
+)
 from attack.common.config import Config
 from attack.common.paths import (
     attack_key,
@@ -36,12 +42,21 @@ from attack.data.poisoned_dataset_builder import PoisonedDataset
 from attack.data.session_stats import SessionStats
 from attack.pipeline.core.evaluator import evaluate_prediction_metrics, save_metrics
 from attack.pipeline.core.ground_truth_alignment import resolve_ground_truth_labels
-from attack.pipeline.core.pipeline_utils import SharedAttackArtifacts, resolve_target_items
+from attack.pipeline.core.pipeline_utils import (
+    SharedAttackArtifacts,
+    ensure_target_registry_prefix,
+    load_or_init_execution_log,
+    load_or_init_run_coverage,
+    plan_target_append_cells,
+    rebuild_summary_current,
+    requested_target_prefix,
+)
 from attack.pipeline.core.victim_execution import VictimExecutionResult, execute_single_victim
 
 
 PROGRESS_TIMEZONE = "Asia/Taipei"
 _PROGRESS_ZONE = ZoneInfo(PROGRESS_TIMEZONE)
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @dataclass(frozen=True)
@@ -93,17 +108,6 @@ def run_targets_and_victims(
         metadata_paths=metadata_paths,
         attack_identity_context=attack_identity_context,
     )
-    run_root = metadata_paths["run_root"]
-    summary_path = metadata_paths["summary"]
-    if summary_path.exists():
-        print(f"[run] Existing summary found at {summary_path}. Aborting to avoid overwrite.")
-        raise RuntimeError("Run output already exists for this config/run_type.")
-    if run_root.exists():
-        existing_metrics = list(run_root.rglob("metrics.json"))
-        if existing_metrics:
-            print(f"[run] Existing outputs found under {run_root}. Aborting to avoid overwrite.")
-            raise RuntimeError("Run output already exists for this config/run_type.")
-
     metadata_paths["run_root"].mkdir(parents=True, exist_ok=True)
     context.shared_paths["target_shared_dir"].mkdir(parents=True, exist_ok=True)
     if config_path:
@@ -120,7 +124,7 @@ def run_targets_and_victims(
         run_type=run_type,
         attack_identity_context=attack_identity_context,
     )
-    artifact_manifest = _initial_artifact_manifest(
+    artifact_manifest = _load_or_init_artifact_manifest(
         config,
         context=context,
         run_type=run_type,
@@ -131,37 +135,71 @@ def run_targets_and_victims(
     save_json(key_payloads, metadata_paths["key_payloads"])
     save_json(artifact_manifest, metadata_paths["artifact_manifest"])
     run_started_monotonic = time.monotonic()
-    progress_payload = _initial_progress_payload(config, run_type=run_type)
-    save_json(progress_payload, metadata_paths["progress"])
-
-    target_items = resolve_target_items(
+    target_registry = ensure_target_registry_prefix(
         context.stats,
         config,
         shared_paths=context.shared_paths,
     )
-    _populate_progress_plan(
+    requested_target_items = requested_target_prefix(target_registry)
+    run_coverage = load_or_init_run_coverage(
+        config,
+        run_type=run_type,
+        metadata_paths=metadata_paths,
+        target_registry=target_registry,
+        attack_identity_context=attack_identity_context,
+        allow_new_victims=False,
+    )
+    execution_log = load_or_init_execution_log(
+        config,
+        run_type=run_type,
+        metadata_paths=metadata_paths,
+        attack_identity_context=attack_identity_context,
+    )
+
+    requested_victims = list(config.victims.enabled)
+    _validate_phase4_victim_request(
+        run_coverage,
+        requested_victims=requested_victims,
+    )
+    plan = plan_target_append_cells(
+        run_coverage,
+        requested_target_items=requested_target_items,
+        requested_victims=requested_victims,
+    )
+    planned_cells = list(plan["planned_cells"])
+    skipped_completed_cells = list(plan["skipped_completed_cells"])
+    progress_payload = _initial_progress_payload(
+        config,
+        run_type=run_type,
+        metadata_paths=metadata_paths,
+    )
+    execution_record = _append_execution_record(
+        execution_log,
+        config,
+        run_type=run_type,
+        requested_target_items=requested_target_items,
+        requested_victims=requested_victims,
+        planned_cells=planned_cells,
+        skipped_completed_cells=skipped_completed_cells,
+        metadata_paths=metadata_paths,
+    )
+    _populate_progress_plan_from_cells(
         progress_payload,
-        target_items=[int(item) for item in target_items],
-        victim_names=list(config.victims.enabled),
+        requested_target_items=requested_target_items,
+        planned_cells=planned_cells,
+        skipped_completed_cells=skipped_completed_cells,
         elapsed_seconds=time.monotonic() - run_started_monotonic,
     )
     save_json(progress_payload, metadata_paths["progress"])
-    summary: dict[str, object] = {
-        "run_type": run_type,
-        "target_items": [int(item) for item in target_items],
-        "victims": list(config.victims.enabled),
-        "fake_session_count": int(context.fake_session_count),
-        "clean_session_count": int(len(context.clean_sessions)),
-        "training": _training_summary(config, run_type=run_type),
-        "targets": {},
-    }
-    if "srgnn" in config.victims.enabled and context.export_paths is None:
+    if "srgnn" in requested_victims and planned_cells and context.export_paths is None:
         raise ValueError("SRGNN victim execution requires export paths for valid/test.")
 
     current_run: dict[str, object] | None = None
-    victim_names = list(config.victims.enabled)
+    current_artifacts: dict[str, Path] | None = None
+    plan_by_target = _group_planned_cells_by_target(planned_cells)
     try:
-        for target_index, target_item in enumerate(target_items, start=1):
+        overall_index = 0
+        for target_index, (target_item, victim_cells) in enumerate(plan_by_target.items(), start=1):
             current_run = {
                 "target_index": int(target_index),
                 "target_item": int(target_item),
@@ -170,14 +208,9 @@ def run_targets_and_victims(
                 "overall_index": None,
             }
             target_payload = build_poisoned(int(target_item))
-            target_summary = {
-                "target_item": int(target_item),
-                "victims": {},
-            }
-            if target_payload.metadata:
-                target_summary["metadata"] = dict(target_payload.metadata)
-            for victim_index, victim_name in enumerate(victim_names, start=1):
-                overall_index = ((target_index - 1) * len(victim_names)) + victim_index
+            for victim_index, cell in enumerate(victim_cells, start=1):
+                overall_index += 1
+                victim_name = str(cell["victim_name"])
                 current_run = {
                     "target_index": int(target_index),
                     "target_item": int(target_item),
@@ -199,9 +232,10 @@ def run_targets_and_victims(
                     victim_name=victim_name,
                     attack_identity_context=attack_identity_context,
                 )
+                current_artifacts = artifacts
                 run_dir = artifacts["run_dir"]
                 run_dir.mkdir(parents=True, exist_ok=True)
-                if config_path:
+                if config_path and not artifacts["config_snapshot"].exists():
                     shutil.copyfile(config_path, artifacts["config_snapshot"])
 
                 victim_result, reused = _maybe_reuse_or_execute_victim(
@@ -244,23 +278,25 @@ def run_targets_and_victims(
                     "training": _victim_training_summary(config, victim_name),
                     "metrics_available": bool(available),
                     "metrics": metrics,
-                    "predictions_path": str(artifacts["predictions"]),
+                    "predictions_path": _repo_relative_path(artifacts["predictions"]),
+                    "reused_predictions": bool(reused),
                 }
                 if victim_result.poisoned_train_path is not None:
-                    payload["poisoned_train_path"] = str(victim_result.poisoned_train_path)
+                    payload["poisoned_train_path"] = _repo_relative_path(victim_result.poisoned_train_path)
                 if target_payload.metadata:
                     payload.update(target_payload.metadata)
                 if victim_result.extra:
                     payload.update(victim_result.extra)
                 save_metrics(payload, artifacts["metrics"])
+                _validate_completed_local_artifacts(artifacts)
+                _mark_coverage_cell_completed(
+                    run_coverage,
+                    target_item=int(target_item),
+                    victim_name=victim_name,
+                    artifacts=artifacts,
+                )
+                save_run_coverage(run_coverage, metadata_paths["run_coverage"])
 
-                target_summary["victims"][victim_name] = {
-                    "metrics_path": str(artifacts["metrics"]),
-                    "predictions_path": str(artifacts["predictions"]),
-                    "metrics": metrics,
-                    "metrics_available": bool(available),
-                    "reused_predictions": bool(reused),
-                }
                 _update_artifact_manifest(
                     artifact_manifest,
                     target_item=int(target_item),
@@ -270,6 +306,31 @@ def run_targets_and_victims(
                     reused=reused,
                 )
                 save_json(artifact_manifest, metadata_paths["artifact_manifest"])
+                _record_execution_cell_completion(
+                    execution_log,
+                    execution_record=execution_record,
+                    target_item=int(target_item),
+                    victim_name=victim_name,
+                    metadata_paths=metadata_paths,
+                )
+                summary_current = rebuild_summary_current(
+                    config,
+                    run_type=run_type,
+                    metadata_paths=metadata_paths,
+                    run_coverage=run_coverage,
+                    attack_identity_context=attack_identity_context,
+                )
+                summary = _write_legacy_summary_snapshot(
+                    config,
+                    context=context,
+                    run_type=run_type,
+                    metadata_paths=metadata_paths,
+                    summary_current=summary_current,
+                )
+                artifact_manifest["output_files"]["summary"] = _repo_relative_path(
+                    metadata_paths["summary"]
+                )
+                save_json(artifact_manifest, metadata_paths["artifact_manifest"])
                 _mark_progress_run_completed(
                     progress_payload,
                     current_run=current_run,
@@ -277,13 +338,33 @@ def run_targets_and_victims(
                     elapsed_seconds=time.monotonic() - run_started_monotonic,
                 )
                 save_json(progress_payload, metadata_paths["progress"])
-
-            summary["targets"][str(target_item)] = target_summary
+                current_artifacts = None
             current_run = None
 
-        save_metrics(summary, summary_path)
-        artifact_manifest["output_files"]["summary"] = str(summary_path)
+        summary_current = rebuild_summary_current(
+            config,
+            run_type=run_type,
+            metadata_paths=metadata_paths,
+            run_coverage=run_coverage,
+            attack_identity_context=attack_identity_context,
+        )
+        summary = _write_legacy_summary_snapshot(
+            config,
+            context=context,
+            run_type=run_type,
+            metadata_paths=metadata_paths,
+            summary_current=summary_current,
+        )
+        artifact_manifest["output_files"]["summary"] = _repo_relative_path(
+            metadata_paths["summary"]
+        )
         save_json(artifact_manifest, metadata_paths["artifact_manifest"])
+        _mark_execution_completed(
+            execution_log,
+            execution_record=execution_record,
+            metadata_paths=metadata_paths,
+            elapsed_seconds=time.monotonic() - run_started_monotonic,
+        )
         _mark_progress_finished(
             progress_payload,
             status="completed",
@@ -292,6 +373,23 @@ def run_targets_and_victims(
         save_json(progress_payload, metadata_paths["progress"])
         return summary
     except Exception as exc:
+        if current_run is not None and current_run.get("victim_name"):
+            _mark_coverage_cell_failed(
+                run_coverage,
+                target_item=int(current_run["target_item"]),
+                victim_name=str(current_run["victim_name"]),
+                artifacts=current_artifacts,
+                error=exc,
+            )
+            save_run_coverage(run_coverage, metadata_paths["run_coverage"])
+            _record_execution_cell_failure(
+                execution_log,
+                execution_record=execution_record,
+                target_item=int(current_run["target_item"]),
+                victim_name=str(current_run["victim_name"]),
+                error=exc,
+                metadata_paths=metadata_paths,
+            )
         _mark_progress_finished(
             progress_payload,
             status="failed",
@@ -300,6 +398,27 @@ def run_targets_and_victims(
             elapsed_seconds=time.monotonic() - run_started_monotonic,
         )
         save_json(progress_payload, metadata_paths["progress"])
+        rebuild_summary_current(
+            config,
+            run_type=run_type,
+            metadata_paths=metadata_paths,
+            run_coverage=run_coverage,
+            attack_identity_context=attack_identity_context,
+        )
+        _write_legacy_summary_snapshot(
+            config,
+            context=context,
+            run_type=run_type,
+            metadata_paths=metadata_paths,
+            summary_current=load_json(metadata_paths["summary_current"]),
+        )
+        _mark_execution_failed(
+            execution_log,
+            execution_record=execution_record,
+            error=exc,
+            metadata_paths=metadata_paths,
+            elapsed_seconds=time.monotonic() - run_started_monotonic,
+        )
         raise
 
 
@@ -308,6 +427,14 @@ def _identity_object(*, key: str, payload: Mapping[str, Any]) -> dict[str, objec
         "key": key,
         "payload": dict(payload),
     }
+
+
+def _repo_relative_path(path: str | Path) -> str:
+    path_obj = Path(path).resolve()
+    try:
+        return path_obj.relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path_obj)
 
 
 def _canonical_identity_sections(
@@ -375,6 +502,55 @@ def _canonical_identity_sections(
                 ),
             )
             for victim_name in config.victims.enabled
+        },
+    }
+
+
+def _stable_run_group_metadata(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "container_model": "appendable_experiment_container",
+        **_canonical_identity_sections(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ),
+        "legacy_identities": _legacy_identity_sections(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ),
+    }
+
+
+def _execution_request_metadata(config: Config, *, run_type: str) -> dict[str, object]:
+    sampled_mode = config.targets.mode == "sampled"
+    explicit_targets = [int(item) for item in config.targets.explicit_list]
+    requested_target_count = (
+        int(config.targets.count)
+        if sampled_mode
+        else int(len(explicit_targets))
+    )
+    return {
+        "request_model": "target_append_invocation",
+        "run_type": run_type,
+        "execution_semantics": "target_append_against_stable_run_group",
+        "requested_victims": list(config.victims.enabled),
+        "target_request": {
+            "mode": config.targets.mode,
+            "bucket": config.targets.bucket if sampled_mode else None,
+            "explicit_list": explicit_targets,
+            "requested_target_count": requested_target_count,
+            "count_interpretation": (
+                "prefix_length" if sampled_mode else "explicit_cohort_size"
+            ),
+        },
+        "legacy_runtime_flags": {
+            "reuse_saved_targets": bool(config.targets.reuse_saved_targets),
         },
     }
 
@@ -447,7 +623,11 @@ def _extract_existing_phase1_legacy_batch_state(
     if not isinstance(run_type, str):
         return None
 
-    legacy_identities = derived.get("legacy_identities")
+    stable_run_group = derived.get("stable_run_group")
+    if isinstance(stable_run_group, Mapping):
+        legacy_identities = stable_run_group.get("legacy_identities")
+    else:
+        legacy_identities = derived.get("legacy_identities")
     if isinstance(legacy_identities, Mapping):
         target_selection_key_value = _extract_identity_key(
             legacy_identities.get("target_selection_identity", legacy_identities.get("target_selection_key"))
@@ -481,6 +661,9 @@ def _guard_phase1_run_group_reuse(
 
     existing_entries = list(run_root.iterdir())
     if not existing_entries:
+        return
+
+    if metadata_paths["run_coverage"].exists() and metadata_paths["execution_log"].exists():
         return
 
     current_state = _current_phase1_legacy_batch_state(
@@ -537,6 +720,341 @@ def _guard_phase1_run_group_reuse(
     )
 
 
+def _load_or_init_artifact_manifest(
+    config: Config,
+    *,
+    context: RunContext,
+    run_type: str,
+    metadata_paths: Mapping[str, Path],
+    attack_identity_context: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    manifest = _initial_artifact_manifest(
+        config,
+        context=context,
+        run_type=run_type,
+        metadata_paths=dict(metadata_paths),
+        attack_identity_context=attack_identity_context,
+    )
+    existing = load_json(metadata_paths["artifact_manifest"])
+    if not isinstance(existing, dict):
+        return manifest
+
+    for key in ("victims", "generated_configs"):
+        existing_value = existing.get(key)
+        if isinstance(existing_value, dict):
+            manifest[key] = existing_value
+    existing_output_files = existing.get("output_files")
+    if isinstance(existing_output_files, dict):
+        summary_output = existing_output_files.get("summary")
+        if isinstance(summary_output, str) and summary_output.strip():
+            manifest["output_files"]["summary"] = summary_output
+    return manifest
+
+
+def _validate_phase4_victim_request(
+    run_coverage: Mapping[str, Any],
+    *,
+    requested_victims: list[str],
+) -> None:
+    existing_victims_payload = run_coverage.get("victims", {})
+    if not isinstance(existing_victims_payload, Mapping):
+        raise ValueError("run_coverage.json must contain a victims object.")
+    existing_victims = list(existing_victims_payload.keys())
+    if existing_victims != requested_victims:
+        raise RuntimeError(
+            "Phase 4 only supports target append for the same requested victim set "
+            "within an existing run group. "
+            f"Existing victims={existing_victims}, requested victims={requested_victims}. "
+            "Victim-append or victim-set changes are not implemented until Phase 5."
+        )
+
+
+def _group_planned_cells_by_target(
+    planned_cells: list[dict[str, Any]],
+) -> dict[int, list[dict[str, Any]]]:
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for cell in planned_cells:
+        target_item = int(cell["target_item"])
+        grouped.setdefault(target_item, []).append(dict(cell))
+    return grouped
+
+
+def _execution_timestamp() -> str:
+    return datetime.now(_PROGRESS_ZONE).isoformat()
+
+
+def _append_execution_record(
+    execution_log: dict[str, object],
+    config: Config,
+    *,
+    run_type: str,
+    requested_target_items: list[int],
+    requested_victims: list[str],
+    planned_cells: list[dict[str, Any]],
+    skipped_completed_cells: list[dict[str, Any]],
+    metadata_paths: Mapping[str, Path],
+) -> dict[str, object]:
+    executions = execution_log.get("executions")
+    if not isinstance(executions, list):
+        raise ValueError("execution_log.json must contain an executions list.")
+    timestamp = _execution_timestamp()
+    requested_target_count = (
+        int(config.targets.count)
+        if config.targets.mode == "sampled"
+        else int(len(requested_target_items))
+    )
+    execution_record = {
+        "execution_id": uuid4().hex,
+        "mode": "target_append",
+        "run_type": run_type,
+        "requested_target_count": requested_target_count,
+        "requested_target_items": [int(item) for item in requested_target_items],
+        "requested_victims": list(requested_victims),
+        "planned_cells": [dict(cell) for cell in planned_cells],
+        "planned_target_items": [int(item) for item in _unique_targets(planned_cells)],
+        "skipped_completed_cells": [dict(cell) for cell in skipped_completed_cells],
+        "completed_cells": [],
+        "failed_cells": [],
+        "status": "running",
+        "started_at": timestamp,
+        "updated_at": timestamp,
+        "completed_at": None,
+        "elapsed_seconds": 0.0,
+    }
+    executions.append(execution_record)
+    execution_log["updated_at"] = timestamp
+    save_execution_log(execution_log, metadata_paths["execution_log"])
+    return execution_record
+
+
+def _unique_targets(cells: list[dict[str, Any]]) -> list[int]:
+    ordered_targets: list[int] = []
+    seen: set[int] = set()
+    for cell in cells:
+        target_item = int(cell["target_item"])
+        if target_item in seen:
+            continue
+        seen.add(target_item)
+        ordered_targets.append(target_item)
+    return ordered_targets
+
+
+def _record_execution_cell_completion(
+    execution_log: dict[str, object],
+    *,
+    execution_record: dict[str, object],
+    target_item: int,
+    victim_name: str,
+    metadata_paths: Mapping[str, Path],
+) -> None:
+    timestamp = _execution_timestamp()
+    completed_cells = execution_record.get("completed_cells")
+    if not isinstance(completed_cells, list):
+        raise ValueError("execution_log execution records must contain completed_cells.")
+    completed_cells.append(
+        {
+            "target_item": int(target_item),
+            "victim_name": victim_name,
+            "completed_at": timestamp,
+        }
+    )
+    execution_record["updated_at"] = timestamp
+    execution_log["updated_at"] = timestamp
+    save_execution_log(execution_log, metadata_paths["execution_log"])
+
+
+def _record_execution_cell_failure(
+    execution_log: dict[str, object],
+    *,
+    execution_record: dict[str, object],
+    target_item: int,
+    victim_name: str,
+    error: Exception,
+    metadata_paths: Mapping[str, Path],
+) -> None:
+    timestamp = _execution_timestamp()
+    failed_cells = execution_record.get("failed_cells")
+    if not isinstance(failed_cells, list):
+        raise ValueError("execution_log execution records must contain failed_cells.")
+    failed_cells.append(
+        {
+            "target_item": int(target_item),
+            "victim_name": victim_name,
+            "failed_at": timestamp,
+            "error_type": type(error).__name__,
+            "error": str(error),
+        }
+    )
+    execution_record["updated_at"] = timestamp
+    execution_log["updated_at"] = timestamp
+    save_execution_log(execution_log, metadata_paths["execution_log"])
+
+
+def _mark_execution_completed(
+    execution_log: dict[str, object],
+    *,
+    execution_record: dict[str, object],
+    metadata_paths: Mapping[str, Path],
+    elapsed_seconds: float,
+) -> None:
+    timestamp = _execution_timestamp()
+    execution_record["status"] = "completed"
+    execution_record["updated_at"] = timestamp
+    execution_record["completed_at"] = timestamp
+    execution_record["elapsed_seconds"] = round(float(elapsed_seconds), 3)
+    execution_log["updated_at"] = timestamp
+    save_execution_log(execution_log, metadata_paths["execution_log"])
+
+
+def _mark_execution_failed(
+    execution_log: dict[str, object],
+    *,
+    execution_record: dict[str, object],
+    error: Exception,
+    metadata_paths: Mapping[str, Path],
+    elapsed_seconds: float,
+) -> None:
+    timestamp = _execution_timestamp()
+    execution_record["status"] = "failed"
+    execution_record["updated_at"] = timestamp
+    execution_record["completed_at"] = timestamp
+    execution_record["elapsed_seconds"] = round(float(elapsed_seconds), 3)
+    execution_record["error_type"] = type(error).__name__
+    execution_record["error"] = str(error)
+    execution_log["updated_at"] = timestamp
+    save_execution_log(execution_log, metadata_paths["execution_log"])
+
+
+def _artifact_path_if_exists(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    path_obj = Path(path)
+    if not path_obj.exists():
+        return None
+    return _repo_relative_path(path_obj)
+
+
+def _coverage_artifact_payload(artifacts: Mapping[str, Path] | None) -> dict[str, str | None]:
+    if artifacts is None:
+        return {
+            "metrics": None,
+            "predictions": None,
+            "train_history": None,
+            "poisoned_train": None,
+        }
+    return {
+        "metrics": _artifact_path_if_exists(artifacts.get("metrics")),
+        "predictions": _artifact_path_if_exists(artifacts.get("predictions")),
+        "train_history": _artifact_path_if_exists(artifacts.get("train_history")),
+        "poisoned_train": _artifact_path_if_exists(artifacts.get("poisoned_train")),
+    }
+
+
+def _coverage_cell(
+    run_coverage: dict[str, object],
+    *,
+    target_item: int,
+    victim_name: str,
+) -> dict[str, object]:
+    cells_payload = run_coverage.get("cells")
+    if not isinstance(cells_payload, dict):
+        raise ValueError("run_coverage.json must contain a cells object.")
+    target_cells = cells_payload.get(str(target_item))
+    if not isinstance(target_cells, dict):
+        raise ValueError(f"run_coverage.json cells[{target_item}] must be an object.")
+    cell = target_cells.get(victim_name)
+    if not isinstance(cell, dict):
+        raise ValueError(
+            f"run_coverage.json cells[{target_item}][{victim_name}] must be an object."
+        )
+    return cell
+
+
+def _mark_coverage_cell_completed(
+    run_coverage: dict[str, object],
+    *,
+    target_item: int,
+    victim_name: str,
+    artifacts: Mapping[str, Path],
+) -> None:
+    timestamp = _execution_timestamp()
+    cell = _coverage_cell(
+        run_coverage,
+        target_item=target_item,
+        victim_name=victim_name,
+    )
+    cell["status"] = "completed"
+    cell["artifacts"] = _coverage_artifact_payload(artifacts)
+    cell["error"] = None
+    cell["completed_at"] = timestamp
+    cell["last_updated_at"] = timestamp
+    run_coverage["updated_at"] = timestamp
+
+
+def _mark_coverage_cell_failed(
+    run_coverage: dict[str, object],
+    *,
+    target_item: int,
+    victim_name: str,
+    artifacts: Mapping[str, Path] | None,
+    error: Exception,
+) -> None:
+    timestamp = _execution_timestamp()
+    cell = _coverage_cell(
+        run_coverage,
+        target_item=target_item,
+        victim_name=victim_name,
+    )
+    cell["status"] = "failed"
+    cell["artifacts"] = _coverage_artifact_payload(artifacts)
+    cell["error"] = {
+        "type": type(error).__name__,
+        "message": str(error),
+    }
+    cell["failed_at"] = timestamp
+    cell["last_updated_at"] = timestamp
+    run_coverage["updated_at"] = timestamp
+
+
+def _validate_completed_local_artifacts(artifacts: Mapping[str, Path]) -> None:
+    missing = [
+        artifact_name
+        for artifact_name in ("metrics", "predictions")
+        if not Path(artifacts[artifact_name]).exists()
+    ]
+    if missing:
+        raise RuntimeError(
+            "Cell completion requires persisted local artifacts before coverage can be "
+            f"marked completed. Missing artifacts: {', '.join(missing)}."
+        )
+
+
+def _write_legacy_summary_snapshot(
+    config: Config,
+    *,
+    context: RunContext,
+    run_type: str,
+    metadata_paths: Mapping[str, Path],
+    summary_current: Mapping[str, Any] | None,
+) -> dict[str, object]:
+    summary_current_payload = summary_current if isinstance(summary_current, Mapping) else {}
+    summary_payload = {
+        "run_type": run_type,
+        "run_group_key": summary_current_payload.get("run_group_key"),
+        "target_cohort_key": summary_current_payload.get("target_cohort_key"),
+        "is_snapshot": True,
+        "snapshot_source": "summary_current",
+        "target_items": list(summary_current_payload.get("target_items", [])),
+        "victims": list(summary_current_payload.get("victims", [])),
+        "fake_session_count": int(context.fake_session_count),
+        "clean_session_count": int(len(context.clean_sessions)),
+        "training": _training_summary(config, run_type=run_type),
+        "targets": dict(summary_current_payload.get("targets", {})),
+    }
+    save_metrics(summary_payload, metadata_paths["summary"])
+    return summary_payload
+
+
 def _resolved_config_payload(
     config: Config,
     *,
@@ -548,15 +1066,14 @@ def _resolved_config_payload(
         "runtime_config": config.runtime_config_dict(),
         "derived": {
             "run_type": run_type,
-            **_canonical_identity_sections(
+            "stable_run_group": _stable_run_group_metadata(
                 config,
                 run_type=run_type,
                 attack_identity_context=attack_identity_context,
             ),
-            "legacy_identities": _legacy_identity_sections(
+            "execution_request": _execution_request_metadata(
                 config,
                 run_type=run_type,
-                attack_identity_context=attack_identity_context,
             ),
         },
     }
@@ -569,16 +1086,14 @@ def _key_payloads(
     attack_identity_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     return {
-        "run_type": run_type,
-        **_canonical_identity_sections(
+        "stable_run_group": _stable_run_group_metadata(
             config,
             run_type=run_type,
             attack_identity_context=attack_identity_context,
         ),
-        "legacy_identities": _legacy_identity_sections(
+        "execution_request": _execution_request_metadata(
             config,
             run_type=run_type,
-            attack_identity_context=attack_identity_context,
         ),
     }
 
@@ -593,20 +1108,20 @@ def _initial_artifact_manifest(
 ) -> dict[str, object]:
     canonical_paths = canonical_split_paths(config)
     target_selection_artifact = {
-        "shared_dir": str(context.shared_paths["target_shared_dir"]),
-        "config_snapshot": str(context.shared_paths["target_config_snapshot"]),
-        "selected_targets": str(context.shared_paths["selected_targets"]),
-        "target_selection_meta": str(context.shared_paths["target_selection_meta"]),
-        "legacy_target_info": str(context.shared_paths["target_info"]),
+        "shared_dir": _repo_relative_path(context.shared_paths["target_shared_dir"]),
+        "config_snapshot": _repo_relative_path(context.shared_paths["target_config_snapshot"]),
+        "selected_targets": _repo_relative_path(context.shared_paths["selected_targets"]),
+        "target_selection_meta": _repo_relative_path(context.shared_paths["target_selection_meta"]),
+        "legacy_target_info": _repo_relative_path(context.shared_paths["target_info"]),
     }
     poison_artifact: dict[str, object] | None = None
     if run_type != "clean":
         poison_artifact = {
-            "shared_dir": str(context.shared_paths["attack_shared_dir"]),
-            "poison_model": str(context.shared_paths["poison_model"]),
-            "fake_sessions": str(context.shared_paths["fake_sessions"]),
-            "poison_train_history": str(context.shared_paths["poison_train_history"]),
-            "config_snapshot": str(context.shared_paths["attack_config_snapshot"]),
+            "shared_dir": _repo_relative_path(context.shared_paths["attack_shared_dir"]),
+            "poison_model": _repo_relative_path(context.shared_paths["poison_model"]),
+            "fake_sessions": _repo_relative_path(context.shared_paths["fake_sessions"]),
+            "poison_train_history": _repo_relative_path(context.shared_paths["poison_train_history"]),
+            "config_snapshot": _repo_relative_path(context.shared_paths["attack_config_snapshot"]),
         }
     derived_identity: dict[str, object] | None = None
     if attack_identity_context is not None:
@@ -615,60 +1130,71 @@ def _initial_artifact_manifest(
         }
     return {
         "run_type": run_type,
-        "identities": {
-            **_canonical_identity_sections(
-                config,
-                run_type=run_type,
-                attack_identity_context=attack_identity_context,
-            ),
-            "legacy_identities": _legacy_identity_sections(
-                config,
-                run_type=run_type,
-                attack_identity_context=attack_identity_context,
-            ),
-        },
+        "identities": _stable_run_group_metadata(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ),
+        "execution_request": _execution_request_metadata(
+            config,
+            run_type=run_type,
+        ),
         "shared_artifacts": {
-            "canonical_split": {key: str(path) for key, path in canonical_paths.items()},
+            "canonical_split": {
+                key: _repo_relative_path(path)
+                for key, path in canonical_paths.items()
+            },
             "target_cohort": {
-                "shared_dir": str(context.shared_paths["target_cohort_dir"]),
-                "target_registry": str(context.shared_paths["target_registry"]),
+                "shared_dir": _repo_relative_path(context.shared_paths["target_cohort_dir"]),
+                "target_registry": _repo_relative_path(context.shared_paths["target_registry"]),
             },
             "legacy_target_selection": target_selection_artifact,
             "poison_artifact": poison_artifact,
         },
         "run_group_artifacts": {
-            "run_root": str(metadata_paths["run_root"]),
-            "resolved_config": str(metadata_paths["resolved_config"]),
-            "key_payloads": str(metadata_paths["key_payloads"]),
-            "artifact_manifest": str(metadata_paths["artifact_manifest"]),
-            "run_coverage": str(metadata_paths["run_coverage"]),
-            "execution_log": str(metadata_paths["execution_log"]),
-            "summary_current": str(metadata_paths["summary_current"]),
-            "progress": str(metadata_paths["progress"]),
-            "legacy_summary": str(metadata_paths["summary"]),
+            "run_root": _repo_relative_path(metadata_paths["run_root"]),
+            "resolved_config": _repo_relative_path(metadata_paths["resolved_config"]),
+            "key_payloads": _repo_relative_path(metadata_paths["key_payloads"]),
+            "artifact_manifest": _repo_relative_path(metadata_paths["artifact_manifest"]),
+            "run_coverage": _repo_relative_path(metadata_paths["run_coverage"]),
+            "execution_log": _repo_relative_path(metadata_paths["execution_log"]),
+            "summary_current": _repo_relative_path(metadata_paths["summary_current"]),
+            "progress": _repo_relative_path(metadata_paths["progress"]),
+            "legacy_summary": _repo_relative_path(metadata_paths["summary"]),
         },
         "derived_identity": derived_identity,
         "victims": {},
         "generated_configs": {},
         "output_files": {
-            "run_root": str(metadata_paths["run_root"]),
-            "resolved_config": str(metadata_paths["resolved_config"]),
-            "key_payloads": str(metadata_paths["key_payloads"]),
-            "artifact_manifest": str(metadata_paths["artifact_manifest"]),
-            "run_coverage": str(metadata_paths["run_coverage"]),
-            "execution_log": str(metadata_paths["execution_log"]),
-            "summary_current": str(metadata_paths["summary_current"]),
-            "progress": str(metadata_paths["progress"]),
-            "summary": str(metadata_paths["summary"]),
+            "run_root": _repo_relative_path(metadata_paths["run_root"]),
+            "resolved_config": _repo_relative_path(metadata_paths["resolved_config"]),
+            "key_payloads": _repo_relative_path(metadata_paths["key_payloads"]),
+            "artifact_manifest": _repo_relative_path(metadata_paths["artifact_manifest"]),
+            "run_coverage": _repo_relative_path(metadata_paths["run_coverage"]),
+            "execution_log": _repo_relative_path(metadata_paths["execution_log"]),
+            "summary_current": _repo_relative_path(metadata_paths["summary_current"]),
+            "progress": _repo_relative_path(metadata_paths["progress"]),
+            "summary": _repo_relative_path(metadata_paths["summary"]),
         },
     }
 
 
-def _initial_progress_payload(config: Config, *, run_type: str) -> dict[str, object]:
+def _initial_progress_payload(
+    config: Config,
+    *,
+    run_type: str,
+    metadata_paths: Mapping[str, Path],
+) -> dict[str, object]:
     timestamp = _progress_timestamp()
     return {
         "run_type": run_type,
         "timezone": PROGRESS_TIMEZONE,
+        "is_authoritative": False,
+        "purpose": "debug_progress_only",
+        "authoritative_state": {
+            "run_coverage": _repo_relative_path(metadata_paths["run_coverage"]),
+            "execution_log": _repo_relative_path(metadata_paths["execution_log"]),
+        },
         "status": "initializing",
         "started_at": timestamp,
         "updated_at": timestamp,
@@ -684,40 +1210,49 @@ def _initial_progress_payload(config: Config, *, run_type: str) -> dict[str, obj
     }
 
 
-def _populate_progress_plan(
+def _populate_progress_plan_from_cells(
     progress_payload: dict[str, object],
     *,
-    target_items: list[int],
-    victim_names: list[str],
+    requested_target_items: list[int],
+    planned_cells: list[dict[str, Any]],
+    skipped_completed_cells: list[dict[str, Any]],
     elapsed_seconds: float,
 ) -> None:
     timestamp = _progress_timestamp()
     runs: list[dict[str, object]] = []
-    overall_index = 1
-    for target_index, target_item in enumerate(target_items, start=1):
-        for victim_index, victim_name in enumerate(victim_names, start=1):
-            runs.append(
-                {
-                    "overall_index": int(overall_index),
-                    "target_index": int(target_index),
-                    "target_item": int(target_item),
-                    "victim_index": int(victim_index),
-                    "victim_name": victim_name,
-                    "status": "pending",
-                    "started_at": None,
-                    "completed_at": None,
-                    "reused_predictions": None,
-                }
-            )
-            overall_index += 1
+    target_index_lookup = {
+        int(target_item): int(index)
+        for index, target_item in enumerate(requested_target_items, start=1)
+    }
+    victim_index_by_target: dict[int, int] = {}
+    for overall_index, cell in enumerate(planned_cells, start=1):
+        target_item = int(cell["target_item"])
+        victim_name = str(cell["victim_name"])
+        victim_index = victim_index_by_target.get(target_item, 0) + 1
+        victim_index_by_target[target_item] = victim_index
+        runs.append(
+            {
+                "overall_index": int(overall_index),
+                "target_index": target_index_lookup.get(target_item, 0),
+                "target_item": target_item,
+                "victim_index": int(victim_index),
+                "victim_name": victim_name,
+                "status": "pending",
+                "started_at": None,
+                "completed_at": None,
+                "reused_predictions": None,
+            }
+        )
     progress_payload["status"] = "running"
     progress_payload["updated_at"] = timestamp
     progress_payload["elapsed_seconds"] = round(float(elapsed_seconds), 3)
-    progress_payload["total_targets"] = int(len(target_items))
-    progress_payload["total_victims"] = int(len(victim_names))
+    progress_payload["total_targets"] = int(len(requested_target_items))
+    progress_payload["total_victims"] = int(len({cell["victim_name"] for cell in planned_cells}))
     progress_payload["total_runs"] = int(len(runs))
     progress_payload["completed_runs"] = 0
-    progress_payload["target_items"] = [int(item) for item in target_items]
+    progress_payload["target_items"] = [int(item) for item in requested_target_items]
+    progress_payload["planned_cells"] = [dict(cell) for cell in planned_cells]
+    progress_payload["skipped_completed_cells"] = [dict(cell) for cell in skipped_completed_cells]
     progress_payload["current"] = None
     progress_payload["runs"] = runs
 
@@ -972,20 +1507,20 @@ def _update_artifact_manifest(
     target_payload[victim_name] = {
         "reused_predictions": bool(reused),
         "local": {
-            "run_dir": str(artifacts["run_dir"]),
-            "resolved_config": str(artifacts["resolved_config"]),
-            "config_snapshot": str(artifacts["config_snapshot"]),
-            "predictions": str(artifacts["predictions"]),
-            "metrics": str(artifacts["metrics"]),
-            "train_history": str(artifacts["train_history"]),
-            "poisoned_train": str(artifacts["poisoned_train"]),
+            "run_dir": _repo_relative_path(artifacts["run_dir"]),
+            "resolved_config": _repo_relative_path(artifacts["resolved_config"]),
+            "config_snapshot": _repo_relative_path(artifacts["config_snapshot"]),
+            "predictions": _repo_relative_path(artifacts["predictions"]),
+            "metrics": _repo_relative_path(artifacts["metrics"]),
+            "train_history": _repo_relative_path(artifacts["train_history"]),
+            "poisoned_train": _repo_relative_path(artifacts["poisoned_train"]),
         },
         "shared": {
-            "shared_dir": str(artifacts["shared_dir"]),
-            "predictions": str(artifacts["shared_predictions"]),
-            "train_history": str(artifacts["shared_train_history"]),
-            "execution_result": str(artifacts["shared_execution_result"]),
-            "poisoned_train": str(artifacts["shared_poisoned_train"]),
+            "shared_dir": _repo_relative_path(artifacts["shared_dir"]),
+            "predictions": _repo_relative_path(artifacts["shared_predictions"]),
+            "train_history": _repo_relative_path(artifacts["shared_train_history"]),
+            "execution_result": _repo_relative_path(artifacts["shared_execution_result"]),
+            "poisoned_train": _repo_relative_path(artifacts["shared_poisoned_train"]),
         },
     }
     generated_configs = artifact_manifest.setdefault("generated_configs", {})

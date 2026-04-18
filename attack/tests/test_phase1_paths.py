@@ -148,31 +148,33 @@ def test_canonical_identity_metadata_uses_explicit_key_payload_objects() -> None
 
     resolved_payload = _resolved_config_payload(config, run_type="clean")
     derived = resolved_payload["derived"]
-    assert derived["split_identity"]["key"].startswith("split_")
-    assert "payload" in derived["split_identity"]
-    assert derived["target_cohort_identity"]["key"].startswith("target_cohort_")
-    assert derived["run_group_identity"]["key"].startswith("run_group_")
-    assert derived["attack_identity"]["key"].startswith("attack_")
-    assert "shared_attack_artifact_identity" in derived["attack_identity"]
-    assert set(derived["victim_prediction_identities"]) == set(config.victims.enabled)
+    stable_run_group = derived["stable_run_group"]
+    assert stable_run_group["split_identity"]["key"].startswith("split_")
+    assert "payload" in stable_run_group["split_identity"]
+    assert stable_run_group["target_cohort_identity"]["key"].startswith("target_cohort_")
+    assert stable_run_group["run_group_identity"]["key"].startswith("run_group_")
+    assert stable_run_group["attack_identity"]["key"].startswith("attack_")
+    assert "shared_attack_artifact_identity" in stable_run_group["attack_identity"]
+    assert set(stable_run_group["victim_prediction_identities"]) == set(config.victims.enabled)
     assert "split_key" not in derived
     assert "target_cohort_key" not in derived
     assert "run_group_key" not in derived
     assert "attack_key" not in derived
     assert "victim_prediction_keys" not in derived
-    assert "legacy_identities" in derived
-    assert "target_selection_identity" in derived["legacy_identities"]
-    assert "evaluation_identity" in derived["legacy_identities"]
+    assert "legacy_identities" in stable_run_group
+    assert "target_selection_identity" in stable_run_group["legacy_identities"]
+    assert "evaluation_identity" in stable_run_group["legacy_identities"]
 
     key_payloads = _key_payloads(config, run_type="clean")
-    assert key_payloads["split_identity"]["key"].startswith("split_")
-    assert "payload" in key_payloads["split_identity"]
+    stable_key_payloads = key_payloads["stable_run_group"]
+    assert stable_key_payloads["split_identity"]["key"].startswith("split_")
+    assert "payload" in stable_key_payloads["split_identity"]
     assert "split_key_payload" not in key_payloads
     assert "target_cohort_key_payload" not in key_payloads
     assert "run_group_key_payload" not in key_payloads
     assert "attack_key_payload" not in key_payloads
     assert "victim_prediction_key_payloads" not in key_payloads
-    assert "legacy_identities" in key_payloads
+    assert "legacy_identities" in stable_key_payloads
 
 
 def test_phase1_guardrail_rejects_incompatible_existing_run_group_root() -> None:
