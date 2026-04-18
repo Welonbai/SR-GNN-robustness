@@ -1235,6 +1235,11 @@ def build_title_render_context(meta_payload: Mapping[str, Any]) -> dict[str, str
     )
     merge_render_context(
         render_context,
+        meta_payload.get("slice_context"),
+        label="meta.json slice_context",
+    )
+    merge_render_context(
+        render_context,
         meta_payload.get("effective_filters"),
         label="meta.json effective_filters",
     )

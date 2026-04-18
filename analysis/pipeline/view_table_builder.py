@@ -113,31 +113,8 @@ def main() -> None:
             source_spec_path=config_path,
         )
 
-        dataframe = prepare_view_dataframe(pd.read_csv(spec.input_csv), spec)
-        validate_required_columns(
-            dataframe,
-            required_columns=(
-                spec.rows + spec.cols + spec.split_by + [spec.value_col] + list(spec.filters.keys())
-            ),
-            label="view input CSV",
-        )
-
-        filtered_dataframe = apply_filters(dataframe, spec.filters)
-        if filtered_dataframe.empty:
-            raise AnalysisError(
-                f"The filters in '{config_path}' produced an empty table from '{spec.input_csv}'."
-            )
-
-        bundle_count = 0
-        for split_values, bundle_dataframe in iter_view_bundle_inputs(filtered_dataframe, spec):
-            bundle_dir = resolve_bundle_dir(spec=spec, split_values=split_values)
-            write_view_bundle(
-                dataframe=bundle_dataframe,
-                spec=spec,
-                bundle_dir=bundle_dir,
-                split_values=split_values,
-            )
-            bundle_count += 1
+        output_bundle_dirs = build_view_bundles(spec)
+        bundle_count = len(output_bundle_dirs)
 
         print(
             f"Wrote {bundle_count} report bundle(s) under '{spec.output_bundle_dir.parent}' "
@@ -145,6 +122,38 @@ def main() -> None:
         )
     except AnalysisError as exc:
         raise SystemExit(f"Error: {exc}") from exc
+
+
+def build_view_bundles(spec: ViewSpec) -> list[Path]:
+    """Build one or more view bundles from a validated view spec."""
+    dataframe = prepare_view_dataframe(pd.read_csv(spec.input_csv), spec)
+    validate_required_columns(
+        dataframe,
+        required_columns=(
+            spec.rows + spec.cols + spec.split_by + [spec.value_col] + list(spec.filters.keys())
+        ),
+        label="view input CSV",
+    )
+
+    filtered_dataframe = apply_filters(dataframe, spec.filters)
+    if filtered_dataframe.empty:
+        raise AnalysisError(
+            f"The filters produced an empty table from '{spec.input_csv}'."
+        )
+
+    input_analysis_metadata = load_input_analysis_metadata(spec.input_csv)
+    output_bundle_dirs: list[Path] = []
+    for split_values, bundle_dataframe in iter_view_bundle_inputs(filtered_dataframe, spec):
+        bundle_dir = resolve_bundle_dir(spec=spec, split_values=split_values)
+        write_view_bundle(
+            dataframe=bundle_dataframe,
+            spec=spec,
+            bundle_dir=bundle_dir,
+            split_values=split_values,
+            input_analysis_metadata=input_analysis_metadata,
+        )
+        output_bundle_dirs.append(bundle_dir)
+    return output_bundle_dirs
 
 
 def parse_view_spec(payload: Mapping[str, Any], *, source_spec_path: Path) -> ViewSpec:
@@ -377,6 +386,7 @@ def write_view_bundle(
     spec: ViewSpec,
     bundle_dir: Path,
     split_values: Mapping[str, Any],
+    input_analysis_metadata: Mapping[str, Any],
 ) -> None:
     """Write one fully-renderable view bundle."""
     hidden_column_summary = summarize_hidden_columns(dataframe, spec)
@@ -392,12 +402,22 @@ def write_view_bundle(
 
     normalized_split_values = normalize_split_value_mapping(spec.split_by, split_values)
     json_split_values = normalize_for_json(normalized_split_values)
+    slice_metadata = input_analysis_metadata.get("slice")
+    if not isinstance(slice_metadata, Mapping):
+        slice_metadata = None
+    slice_context = input_analysis_metadata.get("slice_context")
+    if not isinstance(slice_context, Mapping):
+        slice_context = {}
+    forced_context = dict(json_split_values)
+    forced_context.update(normalize_for_json(slice_context))
     meta = {
         "mode": infer_optional_mode(dataframe, spec),
         "input_csv": to_repo_relative(spec.input_csv),
         "source_view_spec_path": to_repo_relative(spec.source_spec_path),
         "output_bundle_dir": to_repo_relative(bundle_dir),
         "bundle_output_dir": to_repo_relative(bundle_dir),
+        "source_manifest_path": input_analysis_metadata.get("source_manifest_path"),
+        "source_slice_manifest_path": input_analysis_metadata.get("source_slice_manifest_path"),
         "parent_spec_name": spec.parent_spec_name,
         "bundle_name": bundle_dir.name,
         "filters": normalize_for_json(spec.filters),
@@ -421,11 +441,13 @@ def write_view_bundle(
         "output_row_count": int(len(report_dataframe)),
         "output_column_count": int(len(report_dataframe.columns)),
         "generation_timestamp": utc_now_iso(),
+        "slice": normalize_for_json(slice_metadata) if slice_metadata is not None else None,
+        "slice_context": normalize_for_json(slice_context),
         "context": build_context(
             dataframe,
             hidden_column_summary=hidden_column_summary,
             auto_context=spec.auto_context,
-            forced_context=json_split_values,
+            forced_context=forced_context,
         ),
     }
     write_json(meta_path, meta)
@@ -741,6 +763,85 @@ def normalize_split_value_mapping(
     return normalized
 
 
+def load_input_analysis_metadata(input_csv: Path) -> dict[str, Any]:
+    """Load optional sibling manifest and slice metadata for one long-table input."""
+    bundle_dir = input_csv.parent
+    manifest_path = bundle_dir / "manifest.json"
+    slice_manifest_path = bundle_dir / "slice_manifest.json"
+
+    manifest_payload = None
+    if manifest_path.is_file():
+        manifest_payload = load_json_mapping(manifest_path, label="input manifest")
+    slice_payload = None
+    if slice_manifest_path.is_file():
+        slice_payload = load_json_mapping(slice_manifest_path, label="input slice manifest")
+    elif isinstance(manifest_payload, Mapping):
+        manifest_slice = manifest_payload.get("slice")
+        if isinstance(manifest_slice, Mapping):
+            slice_payload = manifest_slice
+
+    normalized_slice = normalize_input_slice_metadata(slice_payload)
+    return {
+        "source_manifest_path": (
+            to_repo_relative(manifest_path) if manifest_path.is_file() else None
+        ),
+        "source_slice_manifest_path": (
+            to_repo_relative(slice_manifest_path) if slice_manifest_path.is_file() else None
+        ),
+        "slice": normalized_slice,
+        "slice_context": build_slice_context(normalized_slice),
+    }
+
+
+def normalize_input_slice_metadata(slice_payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Normalize slice metadata from either a run bundle or a comparison bundle."""
+    if slice_payload is None:
+        return None
+
+    normalized: dict[str, Any] = {}
+    for field_name in (
+        "slice_policy",
+        "fairness_safe",
+        "selected_target_count",
+        "selected_targets",
+        "requested_victims",
+        "requested_victims_source",
+        "source_run_group_key",
+        "source_run_group_keys",
+        "source_run_ids",
+        "compatibility_mode",
+        "debug_only",
+        "compatible",
+    ):
+        if field_name in slice_payload:
+            normalized[field_name] = normalize_for_json(slice_payload[field_name])
+    return normalized or None
+
+
+def build_slice_context(slice_metadata: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Flatten key slice metadata fields for render-friendly context."""
+    if slice_metadata is None:
+        return {}
+
+    context: dict[str, Any] = {}
+    for field_name in (
+        "slice_policy",
+        "fairness_safe",
+        "selected_target_count",
+        "requested_victims",
+        "requested_victims_source",
+        "source_run_group_key",
+        "source_run_group_keys",
+        "source_run_ids",
+        "compatibility_mode",
+        "debug_only",
+        "compatible",
+    ):
+        if field_name in slice_metadata:
+            context[field_name] = normalize_for_json(slice_metadata[field_name])
+    return context
+
+
 def normalize_optional_string_list(value: Any, *, label: str) -> list[str]:
     """Normalize an optional list of strings."""
     if value is None:
@@ -819,6 +920,18 @@ def load_yaml_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise AnalysisError(f"The {label} at '{path}' is not valid YAML: {exc}.") from exc
+
+    if not isinstance(payload, Mapping):
+        raise AnalysisError(f"The {label} at '{path}' must contain a top-level mapping.")
+    return payload
+
+
+def load_json_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
+    """Load a JSON file and require a top-level mapping."""
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise AnalysisError(f"The {label} at '{path}' is not valid JSON: {exc}.") from exc
 
     if not isinstance(payload, Mapping):
         raise AnalysisError(f"The {label} at '{path}' must contain a top-level mapping.")
