@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import shutil
 import time
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping
 from zoneinfo import ZoneInfo
 
 from attack.common.artifact_io import load_json, save_json
@@ -16,10 +16,16 @@ from attack.common.paths import (
     canonical_split_paths,
     evaluation_key,
     evaluation_key_payload,
+    run_group_key,
+    run_group_key_payload,
     run_artifact_paths,
     run_metadata_paths,
+    shared_attack_artifact_key,
+    shared_attack_artifact_key_payload,
     split_key,
     split_key_payload,
+    target_cohort_key,
+    target_cohort_key_payload,
     target_selection_key,
     target_selection_key_payload,
     victim_prediction_key,
@@ -79,6 +85,12 @@ def run_targets_and_victims(
     metadata_paths = run_metadata_paths(
         config,
         run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    _guard_phase1_run_group_reuse(
+        config,
+        run_type=run_type,
+        metadata_paths=metadata_paths,
         attack_identity_context=attack_identity_context,
     )
     run_root = metadata_paths["run_root"]
@@ -291,35 +303,257 @@ def run_targets_and_victims(
         raise
 
 
+def _identity_object(*, key: str, payload: Mapping[str, Any]) -> dict[str, object]:
+    return {
+        "key": key,
+        "payload": dict(payload),
+    }
+
+
+def _canonical_identity_sections(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    attack_key_value = attack_key(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    return {
+        "split_identity": _identity_object(
+            key=split_key(config),
+            payload=split_key_payload(config),
+        ),
+        "target_cohort_identity": _identity_object(
+            key=target_cohort_key(config),
+            payload=target_cohort_key_payload(config),
+        ),
+        "run_group_identity": _identity_object(
+            key=run_group_key(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+            payload=run_group_key_payload(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+        ),
+        "attack_identity": {
+            **_identity_object(
+                key=attack_key_value,
+                payload=attack_key_payload(
+                    config,
+                    run_type=run_type,
+                    attack_identity_context=attack_identity_context,
+                ),
+            ),
+            "shared_attack_artifact_identity": _identity_object(
+                key=shared_attack_artifact_key(config, run_type=run_type),
+                payload=shared_attack_artifact_key_payload(
+                    config,
+                    run_type=run_type,
+                ),
+            ),
+        },
+        "victim_prediction_identities": {
+            victim_name: _identity_object(
+                key=victim_prediction_key(
+                    config,
+                    victim_name,
+                    run_type=run_type,
+                    attack_identity_context=attack_identity_context,
+                ),
+                payload=victim_prediction_key_payload(
+                    config,
+                    victim_name,
+                    run_type=run_type,
+                    attack_identity_context=attack_identity_context,
+                ),
+            )
+            for victim_name in config.victims.enabled
+        },
+    }
+
+
+def _legacy_identity_sections(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "target_selection_identity": _identity_object(
+            key=target_selection_key(config),
+            payload=target_selection_key_payload(config),
+        ),
+        "evaluation_identity": _identity_object(
+            key=evaluation_key(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+            payload=evaluation_key_payload(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+        ),
+    }
+
+
+def _current_phase1_legacy_batch_state(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, object] | None = None,
+) -> dict[str, str]:
+    legacy_identities = _legacy_identity_sections(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    target_selection_identity = legacy_identities["target_selection_identity"]
+    evaluation_identity = legacy_identities["evaluation_identity"]
+    if not isinstance(target_selection_identity, dict) or not isinstance(evaluation_identity, dict):
+        raise TypeError("Legacy identity payloads must be mappings.")
+    return {
+        "run_type": run_type,
+        "target_selection_key": str(target_selection_identity["key"]),
+        "evaluation_key": str(evaluation_identity["key"]),
+    }
+
+
+def _extract_identity_key(identity_payload: object) -> str | None:
+    if isinstance(identity_payload, dict):
+        value = identity_payload.get("key")
+        if isinstance(value, str):
+            return value
+    if isinstance(identity_payload, str):
+        return identity_payload
+    return None
+
+
+def _extract_existing_phase1_legacy_batch_state(
+    resolved_payload: Mapping[str, Any],
+) -> dict[str, str] | None:
+    derived = resolved_payload.get("derived")
+    if not isinstance(derived, Mapping):
+        return None
+    run_type = derived.get("run_type")
+    if not isinstance(run_type, str):
+        return None
+
+    legacy_identities = derived.get("legacy_identities")
+    if isinstance(legacy_identities, Mapping):
+        target_selection_key_value = _extract_identity_key(
+            legacy_identities.get("target_selection_identity", legacy_identities.get("target_selection_key"))
+        )
+        evaluation_key_value = _extract_identity_key(
+            legacy_identities.get("evaluation_identity", legacy_identities.get("evaluation_key"))
+        )
+    else:
+        target_selection_key_value = _extract_identity_key(derived.get("target_selection_key"))
+        evaluation_key_value = _extract_identity_key(derived.get("evaluation_key"))
+
+    if target_selection_key_value is None or evaluation_key_value is None:
+        return None
+    return {
+        "run_type": run_type,
+        "target_selection_key": target_selection_key_value,
+        "evaluation_key": evaluation_key_value,
+    }
+
+
+def _guard_phase1_run_group_reuse(
+    config: Config,
+    *,
+    run_type: str,
+    metadata_paths: Mapping[str, Path],
+    attack_identity_context: Mapping[str, object] | None = None,
+) -> None:
+    run_root = metadata_paths["run_root"]
+    if not run_root.exists():
+        return
+
+    existing_entries = list(run_root.iterdir())
+    if not existing_entries:
+        return
+
+    current_state = _current_phase1_legacy_batch_state(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    resolved_config_path = metadata_paths["resolved_config"]
+    if not resolved_config_path.exists():
+        raise RuntimeError(
+            "Existing run-group root detected at "
+            f"{run_root}, but no resolved_config.json was found to confirm the prior "
+            "batch-era request. Phase 1 does not implement append/resume semantics yet, "
+            "so ambiguous run-group reuse is forbidden."
+        )
+
+    resolved_payload = load_json(resolved_config_path)
+    if not isinstance(resolved_payload, dict):
+        raise RuntimeError(
+            "Existing run-group root detected at "
+            f"{run_root}, but resolved_config.json is malformed. Phase 1 does not "
+            "implement append/resume semantics yet, so ambiguous run-group reuse is forbidden."
+        )
+
+    existing_state = _extract_existing_phase1_legacy_batch_state(resolved_payload)
+    if existing_state is None:
+        raise RuntimeError(
+            "Existing run-group root detected at "
+            f"{run_root}, but the stored metadata does not expose the legacy batch-era "
+            "identities needed to verify compatibility. Phase 1 does not implement "
+            "append/resume semantics yet, so ambiguous run-group reuse is forbidden."
+        )
+
+    if existing_state != current_state:
+        raise RuntimeError(
+            "Run-group root collision detected at "
+            f"{run_root}. The existing root belongs to a different batch-era request "
+            f"(existing run_type={existing_state['run_type']}, "
+            f"target_selection_key={existing_state['target_selection_key']}, "
+            f"evaluation_key={existing_state['evaluation_key']}; current "
+            f"run_type={current_state['run_type']}, "
+            f"target_selection_key={current_state['target_selection_key']}, "
+            f"evaluation_key={current_state['evaluation_key']}). Phase 1 has moved "
+            "run roots to run_group_key, but append semantics are not implemented until later phases."
+        )
+
+    raise RuntimeError(
+        "Existing run-group root detected at "
+        f"{run_root} for the same batch-era request "
+        f"(run_type={current_state['run_type']}, "
+        f"target_selection_key={current_state['target_selection_key']}, "
+        f"evaluation_key={current_state['evaluation_key']}). Phase 1 does not yet "
+        "implement resume, overwrite, or append semantics within a run-group root."
+    )
+
+
 def _resolved_config_payload(
     config: Config,
     *,
     run_type: str,
     attack_identity_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    victim_prediction_keys = {
-        victim_name: victim_prediction_key(
-            config,
-            victim_name,
-            run_type=run_type,
-            attack_identity_context=attack_identity_context,
-        )
-        for victim_name in config.victims.enabled
-    }
     return {
         "result_config": config.result_config_dict(),
         "runtime_config": config.runtime_config_dict(),
         "derived": {
             "run_type": run_type,
-            "split_key": split_key(config),
-            "target_selection_key": target_selection_key(config),
-            "attack_key": attack_key(
+            **_canonical_identity_sections(
                 config,
                 run_type=run_type,
                 attack_identity_context=attack_identity_context,
             ),
-            "victim_prediction_keys": victim_prediction_keys,
-            "evaluation_key": evaluation_key(
+            "legacy_identities": _legacy_identity_sections(
                 config,
                 run_type=run_type,
                 attack_identity_context=attack_identity_context,
@@ -335,23 +569,13 @@ def _key_payloads(
     attack_identity_context: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     return {
-        "split_key_payload": split_key_payload(config),
-        "target_selection_key_payload": target_selection_key_payload(config),
-        "attack_key_payload": attack_key_payload(
+        "run_type": run_type,
+        **_canonical_identity_sections(
             config,
             run_type=run_type,
             attack_identity_context=attack_identity_context,
         ),
-        "victim_prediction_key_payloads": {
-            victim_name: victim_prediction_key_payload(
-                config,
-                victim_name,
-                run_type=run_type,
-                attack_identity_context=attack_identity_context,
-            )
-            for victim_name in config.victims.enabled
-        },
-        "evaluation_key_payload": evaluation_key_payload(
+        "legacy_identities": _legacy_identity_sections(
             config,
             run_type=run_type,
             attack_identity_context=attack_identity_context,
@@ -391,16 +615,49 @@ def _initial_artifact_manifest(
         }
     return {
         "run_type": run_type,
-        "canonical_split_artifact": {key: str(path) for key, path in canonical_paths.items()},
-        "target_selection_artifact": target_selection_artifact,
-        "poison_artifact": poison_artifact,
+        "identities": {
+            **_canonical_identity_sections(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+            "legacy_identities": _legacy_identity_sections(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+        },
+        "shared_artifacts": {
+            "canonical_split": {key: str(path) for key, path in canonical_paths.items()},
+            "target_cohort": {
+                "shared_dir": str(context.shared_paths["target_cohort_dir"]),
+                "target_registry": str(context.shared_paths["target_registry"]),
+            },
+            "legacy_target_selection": target_selection_artifact,
+            "poison_artifact": poison_artifact,
+        },
+        "run_group_artifacts": {
+            "run_root": str(metadata_paths["run_root"]),
+            "resolved_config": str(metadata_paths["resolved_config"]),
+            "key_payloads": str(metadata_paths["key_payloads"]),
+            "artifact_manifest": str(metadata_paths["artifact_manifest"]),
+            "run_coverage": str(metadata_paths["run_coverage"]),
+            "execution_log": str(metadata_paths["execution_log"]),
+            "summary_current": str(metadata_paths["summary_current"]),
+            "progress": str(metadata_paths["progress"]),
+            "legacy_summary": str(metadata_paths["summary"]),
+        },
         "derived_identity": derived_identity,
         "victims": {},
         "generated_configs": {},
         "output_files": {
+            "run_root": str(metadata_paths["run_root"]),
             "resolved_config": str(metadata_paths["resolved_config"]),
             "key_payloads": str(metadata_paths["key_payloads"]),
             "artifact_manifest": str(metadata_paths["artifact_manifest"]),
+            "run_coverage": str(metadata_paths["run_coverage"]),
+            "execution_log": str(metadata_paths["execution_log"]),
+            "summary_current": str(metadata_paths["summary_current"]),
             "progress": str(metadata_paths["progress"]),
             "summary": str(metadata_paths["summary"]),
         },

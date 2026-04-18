@@ -9,6 +9,7 @@ from .config import Config
 
 
 POSITION_OPT_RUN_TYPE = "position_opt_mvp"
+TARGET_COHORT_SELECTION_POLICY_VERSION = "appendable_target_cohort_v1"
 
 
 def output_root(config: Config) -> Path:
@@ -139,6 +140,11 @@ def split_key(config: Config) -> str:
 
 
 def target_selection_key_payload(config: Config) -> dict[str, Any]:
+    """Legacy batch-era target-selection identity.
+
+    Keep this payload for compatibility and future migration tooling, but do
+    not treat it as the authoritative target-cohort identity.
+    """
     # Target selection cache is target-choice-only. It depends on the split and
     # the target sampling/selection settings, but not on downstream attacks.
     return {
@@ -158,6 +164,31 @@ def target_selection_key(config: Config) -> str:
     return f"targets_{_hash_token(_stable_json(target_selection_key_payload(config)))}"
 
 
+def target_cohort_key_payload(config: Config) -> dict[str, Any]:
+    mode = config.targets.mode
+    bucket: str | None = None
+    explicit_list: list[int] = []
+    target_selection_seed: int | None = None
+    if mode == "sampled":
+        bucket = config.targets.bucket
+        target_selection_seed = int(config.seeds.target_selection_seed)
+    elif mode == "explicit_list":
+        explicit_list = [int(item) for item in config.targets.explicit_list]
+    return {
+        "split_key": split_key(config),
+        "selection_policy_version": TARGET_COHORT_SELECTION_POLICY_VERSION,
+        "mode": mode,
+        "bucket": bucket,
+        "explicit_list": explicit_list,
+        "target_selection_seed": target_selection_seed,
+    }
+
+
+def target_cohort_key(config: Config) -> str:
+    payload = target_cohort_key_payload(config)
+    return f"target_cohort_{_hash_token(_stable_json(payload))}"
+
+
 def attack_key_payload(
     config: Config,
     *,
@@ -173,8 +204,8 @@ def attack_key_payload(
             "split_key": split_key(config),
         }
     payload = {
+        "run_type": run_type,
         "split_key": split_key(config),
-        "target_selection_key": target_selection_key(config),
         "fake_session_seed": int(config.seeds.fake_session_seed),
         "attack": {
             "size": float(config.attack.size),
@@ -288,12 +319,55 @@ def victim_prediction_key(
     return f"victim_{victim_name}_{_hash_token(_stable_json(payload))}"
 
 
+def run_group_key_payload(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "run_type": run_type,
+        "split_key": split_key(config),
+        "target_cohort_key": target_cohort_key(config),
+        "shared_attack_artifact_key": shared_attack_artifact_key(config, run_type=run_type),
+        "final_attack_key": attack_key(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ),
+        "evaluation_schema": {
+            "topk": [int(k) for k in config.evaluation.topk],
+            "targeted_metrics": list(config.evaluation.targeted_metrics),
+            "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
+        },
+    }
+
+
+def run_group_key(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> str:
+    payload = run_group_key_payload(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    return f"run_group_{_hash_token(_stable_json(payload))}"
+
+
 def evaluation_key_payload(
     config: Config,
     *,
     run_type: str,
     attack_identity_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Legacy batch-era evaluation identity.
+
+    Keep this payload for compatibility and future migration tooling, but do
+    not use it as the primary run-group identity.
+    """
     # Final reporting identity composes the upstream final attack identity, the
     # victim-training-result identities, and the evaluation metric settings.
     return {
@@ -356,7 +430,17 @@ def canonical_split_paths(
 
 
 def target_selection_dir(config: Config) -> Path:
+    # Deprecated authoritative identity path. Keep for compatibility with the
+    # batch-era selected-target artifacts until target_registry.json lands.
     return shared_root(config) / "targets" / target_selection_key(config)
+
+
+def target_cohort_dir(config: Config) -> Path:
+    return shared_root(config) / "target_cohorts" / target_cohort_key(config)
+
+
+def target_registry_path(config: Config) -> Path:
+    return target_cohort_dir(config) / "target_registry.json"
 
 
 def shared_attack_dir(config: Config, *, run_type: str) -> Path:
@@ -399,13 +483,28 @@ def runs_root(config: Config) -> Path:
     )
 
 
+def run_group_dir(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> Path:
+    return runs_root(config) / run_group_key(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+
+
 def run_config_dir(
     config: Config,
     *,
     run_type: str,
     attack_identity_context: Mapping[str, Any] | None = None,
 ) -> Path:
-    return runs_root(config) / evaluation_key(
+    # Deprecated compatibility alias. The primary execution identity is now the
+    # run-group key, not the batch-era evaluation key.
+    return run_group_dir(
         config,
         run_type=run_type,
         attack_identity_context=attack_identity_context,
@@ -457,18 +556,21 @@ def victim_dir(
 
 def shared_artifact_paths(config: Config, *, run_type: str) -> dict[str, Path]:
     attack_dir = shared_attack_dir(config, run_type=run_type)
-    target_dir_path = target_selection_dir(config)
+    legacy_target_dir_path = target_selection_dir(config)
+    cohort_dir_path = target_cohort_dir(config)
     return {
         "attack_shared_dir": attack_dir,
         "attack_config_snapshot": attack_dir / "config.yaml",
         "poison_model": attack_dir / "poison_model.pt",
         "fake_sessions": attack_dir / "fake_sessions.pkl",
         "poison_train_history": attack_dir / "poison_train_history.json",
-        "target_shared_dir": target_dir_path,
-        "target_config_snapshot": target_dir_path / "config.yaml",
-        "selected_targets": target_dir_path / "selected_targets.json",
-        "target_selection_meta": target_dir_path / "target_selection_meta.json",
-        "target_info": target_dir_path / "target_info.json",
+        "target_cohort_dir": cohort_dir_path,
+        "target_registry": cohort_dir_path / "target_registry.json",
+        "target_shared_dir": legacy_target_dir_path,
+        "target_config_snapshot": legacy_target_dir_path / "config.yaml",
+        "selected_targets": legacy_target_dir_path / "selected_targets.json",
+        "target_selection_meta": legacy_target_dir_path / "target_selection_meta.json",
+        "target_info": legacy_target_dir_path / "target_info.json",
     }
 
 
@@ -478,7 +580,7 @@ def run_metadata_paths(
     run_type: str,
     attack_identity_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Path]:
-    run_root = run_config_dir(
+    run_root = run_group_dir(
         config,
         run_type=run_type,
         attack_identity_context=attack_identity_context,
@@ -488,6 +590,9 @@ def run_metadata_paths(
         "resolved_config": run_root / "resolved_config.json",
         "key_payloads": run_root / "key_payloads.json",
         "artifact_manifest": run_root / "artifact_manifest.json",
+        "run_coverage": run_root / "run_coverage.json",
+        "execution_log": run_root / "execution_log.json",
+        "summary_current": run_root / "summary_current.json",
         "progress": run_root / "progress.json",
         "summary": run_root / f"summary_{run_type}.json",
     }
@@ -550,6 +655,9 @@ __all__ = [
     "evaluation_key",
     "evaluation_key_payload",
     "output_root",
+    "run_group_dir",
+    "run_group_key",
+    "run_group_key_payload",
     "run_artifact_paths",
     "run_config_dir",
     "run_metadata_paths",
@@ -561,6 +669,10 @@ __all__ = [
     "split_key",
     "split_key_payload",
     "target_dir",
+    "target_cohort_dir",
+    "target_cohort_key",
+    "target_cohort_key_payload",
+    "target_registry_path",
     "target_selection_dir",
     "target_selection_key",
     "target_selection_key_payload",
