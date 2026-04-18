@@ -1,5 +1,5 @@
 experiment:
-  name: attack_position_optimization_reward_mvp_explicit11169_ratio1
+  name: attack_position_optimization_reward_mvp_ratio1
 
 data:
   dataset_name: diginetica
@@ -49,11 +49,11 @@ attack:
         nonhybrid: false
 
 targets:
-  mode: explicit_list
-  explicit_list: [11169]
+  mode: sampled
+  explicit_list: []
   bucket: popular
   count: 3
-  reuse_saved_targets: false
+  reuse_saved_targets: true
 
 victims:
   enabled: [srgnn]
