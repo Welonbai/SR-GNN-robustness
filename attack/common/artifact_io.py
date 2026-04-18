@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import pickle
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 def save_json(payload: Any, path: str | Path) -> None:
@@ -19,6 +19,24 @@ def load_json(path: str | Path) -> Any | None:
         return None
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _require_json_object(payload: Any, *, label: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must contain a JSON object.")
+    return payload
+
+
+def _validate_required_fields(
+    payload: Mapping[str, Any],
+    *,
+    label: str,
+    required_fields: tuple[str, ...],
+) -> dict[str, Any]:
+    missing = [field for field in required_fields if field not in payload]
+    if missing:
+        raise ValueError(f"{label} is missing required fields: {', '.join(missing)}")
+    return dict(payload)
 
 
 def save_poison_model(runner, path: str | Path) -> None:
@@ -60,6 +78,7 @@ def save_target_info(
     count: int | None = None,
     explicit_list: list[int] | None = None,
 ) -> None:
+    """Legacy-only helper for batch-era target-selection artifacts."""
     target_items = [int(item) for item in target_items]
     payload = {
         "target_items": target_items,
@@ -75,24 +94,24 @@ def save_target_info(
 
 
 def load_target_info(path: str | Path) -> dict[str, Any] | None:
+    """Legacy-only helper for batch-era target-selection artifacts."""
     payload = load_json(path)
     if payload is None:
         return None
-    if not isinstance(payload, dict):
-        raise ValueError("target_info.json must contain a JSON object.")
-    return payload
+    return _require_json_object(payload, label="target_info.json")
 
 
 def save_selected_targets(path: str | Path, target_items: list[int]) -> None:
+    """Legacy-only helper for batch-era target-selection artifacts."""
     save_json({"target_items": [int(item) for item in target_items]}, path)
 
 
 def load_selected_targets(path: str | Path) -> list[int] | None:
+    """Legacy-only helper for batch-era target-selection artifacts."""
     payload = load_json(path)
     if payload is None:
         return None
-    if not isinstance(payload, dict):
-        raise ValueError("selected_targets.json must contain a JSON object.")
+    payload = _require_json_object(payload, label="selected_targets.json")
     target_items = payload.get("target_items")
     if not isinstance(target_items, list):
         raise ValueError("selected_targets.json is missing target_items.")
@@ -100,29 +119,166 @@ def load_selected_targets(path: str | Path) -> list[int] | None:
 
 
 def save_target_selection_meta(path: str | Path, payload: dict[str, Any]) -> None:
+    """Legacy-only helper for batch-era target-selection artifacts."""
     save_json(payload, path)
 
 
 def load_target_selection_meta(path: str | Path) -> dict[str, Any] | None:
+    """Legacy-only helper for batch-era target-selection artifacts."""
     payload = load_json(path)
     if payload is None:
         return None
-    if not isinstance(payload, dict):
-        raise ValueError("target_selection_meta.json must contain a JSON object.")
-    return payload
+    return _require_json_object(payload, label="target_selection_meta.json")
+
+
+_TARGET_REGISTRY_FIELDS = (
+    "target_cohort_key",
+    "split_key",
+    "selection_policy_version",
+    "mode",
+    "bucket",
+    "seed",
+    "explicit_list",
+    "candidate_pool_hash",
+    "candidate_pool_size",
+    "ordered_targets",
+    "current_count",
+    "created_at",
+    "updated_at",
+)
+_RUN_COVERAGE_FIELDS = (
+    "run_group_key",
+    "target_cohort_key",
+    "targets_order",
+    "victims",
+    "cells",
+    "created_at",
+    "updated_at",
+)
+_EXECUTION_LOG_FIELDS = (
+    "run_group_key",
+    "target_cohort_key",
+    "executions",
+    "created_at",
+    "updated_at",
+)
+_SUMMARY_CURRENT_FIELDS = (
+    "run_group_key",
+    "target_cohort_key",
+    "run_type",
+    "targets",
+    "created_at",
+    "updated_at",
+)
+
+
+def save_target_registry(payload: Mapping[str, Any], path: str | Path) -> None:
+    save_json(
+        _validate_required_fields(
+            _require_json_object(payload, label="target_registry.json"),
+            label="target_registry.json",
+            required_fields=_TARGET_REGISTRY_FIELDS,
+        ),
+        path,
+    )
+
+
+def load_target_registry(path: str | Path) -> dict[str, Any] | None:
+    payload = load_json(path)
+    if payload is None:
+        return None
+    return _validate_required_fields(
+        _require_json_object(payload, label="target_registry.json"),
+        label="target_registry.json",
+        required_fields=_TARGET_REGISTRY_FIELDS,
+    )
+
+
+def save_run_coverage(payload: Mapping[str, Any], path: str | Path) -> None:
+    save_json(
+        _validate_required_fields(
+            _require_json_object(payload, label="run_coverage.json"),
+            label="run_coverage.json",
+            required_fields=_RUN_COVERAGE_FIELDS,
+        ),
+        path,
+    )
+
+
+def load_run_coverage(path: str | Path) -> dict[str, Any] | None:
+    payload = load_json(path)
+    if payload is None:
+        return None
+    return _validate_required_fields(
+        _require_json_object(payload, label="run_coverage.json"),
+        label="run_coverage.json",
+        required_fields=_RUN_COVERAGE_FIELDS,
+    )
+
+
+def save_execution_log(payload: Mapping[str, Any], path: str | Path) -> None:
+    save_json(
+        _validate_required_fields(
+            _require_json_object(payload, label="execution_log.json"),
+            label="execution_log.json",
+            required_fields=_EXECUTION_LOG_FIELDS,
+        ),
+        path,
+    )
+
+
+def load_execution_log(path: str | Path) -> dict[str, Any] | None:
+    payload = load_json(path)
+    if payload is None:
+        return None
+    return _validate_required_fields(
+        _require_json_object(payload, label="execution_log.json"),
+        label="execution_log.json",
+        required_fields=_EXECUTION_LOG_FIELDS,
+    )
+
+
+def save_summary_current(payload: Mapping[str, Any], path: str | Path) -> None:
+    save_json(
+        _validate_required_fields(
+            _require_json_object(payload, label="summary_current.json"),
+            label="summary_current.json",
+            required_fields=_SUMMARY_CURRENT_FIELDS,
+        ),
+        path,
+    )
+
+
+def load_summary_current(path: str | Path) -> dict[str, Any] | None:
+    payload = load_json(path)
+    if payload is None:
+        return None
+    return _validate_required_fields(
+        _require_json_object(payload, label="summary_current.json"),
+        label="summary_current.json",
+        required_fields=_SUMMARY_CURRENT_FIELDS,
+    )
 
 
 __all__ = [
-    "save_json",
-    "load_json",
-    "save_poison_model",
-    "load_poison_model",
-    "save_fake_sessions",
+    "load_execution_log",
     "load_fake_sessions",
-    "save_target_info",
-    "load_target_info",
-    "save_selected_targets",
+    "load_json",
+    "load_poison_model",
+    "load_run_coverage",
     "load_selected_targets",
-    "save_target_selection_meta",
+    "load_summary_current",
+    "load_target_info",
+    "load_target_registry",
     "load_target_selection_meta",
+    "save_execution_log",
+    "save_fake_sessions",
+    "save_json",
+    "save_poison_model",
+    "save_run_coverage",
+    "save_selected_targets",
+    "save_summary_current",
+    "save_target_info",
+    "save_target_registry",
+    "save_target_selection_meta",
 ]

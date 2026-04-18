@@ -1,24 +1,41 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
 from typing import Any, Mapping
 
 from attack.common.artifact_io import (
+    load_execution_log,
     load_json,
     load_fake_sessions,
     load_poison_model,
+    load_run_coverage,
     load_selected_targets,
     load_target_info,
+    load_target_registry,
+    save_execution_log,
     save_fake_sessions,
     save_poison_model,
+    save_run_coverage,
     save_selected_targets,
+    save_summary_current,
     save_target_selection_meta,
     save_target_info,
+    save_target_registry,
 )
-from attack.common.paths import shared_artifact_paths, split_key, target_selection_key
+from attack.common.paths import (
+    TARGET_COHORT_SELECTION_POLICY_VERSION,
+    run_group_key,
+    shared_artifact_paths,
+    split_key,
+    target_cohort_key,
+    target_selection_key,
+)
 from attack.common.seed import derive_seed, set_seed
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
@@ -36,6 +53,9 @@ from attack.models.poison.srgnn_poison_runner import SRGNNPoisonRunner
 from attack.pipeline.core.train_history import save_train_history
 
 from attack.common.config import Config
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def build_srgnn_opt_from_train_config(train_config: Mapping[str, Any]) -> SimpleNamespace:
@@ -165,6 +185,430 @@ def _target_selection_meta_payload(
         "target_selection_key": target_selection_key(config),
         "split_key": split_key(config),
     }
+
+
+def _timestamp_utc() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _stable_json(payload: Any) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _sha1_token(payload: Any) -> str:
+    return hashlib.sha1(_stable_json(payload).encode("utf-8")).hexdigest()
+
+
+def _repo_relative_path(path: str | Path) -> str:
+    path_obj = Path(path).resolve()
+    try:
+        return path_obj.relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        return str(path_obj)
+
+
+def _repo_path(path: str | Path) -> Path:
+    path_obj = Path(path)
+    if path_obj.is_absolute():
+        return path_obj
+    return (_REPO_ROOT / path_obj).resolve()
+
+
+def _coerce_target_item(value: Any) -> int | str:
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Target item identifiers must not be empty strings.")
+        if stripped.lstrip("-").isdigit():
+            return int(stripped)
+        return stripped
+    raise TypeError(f"Unsupported target item identifier type: {type(value).__name__}")
+
+
+def _requested_target_prefix_length(
+    config: Config,
+    *,
+    ordered_targets: list[int],
+) -> int:
+    if config.targets.mode == "explicit_list":
+        return int(len(ordered_targets))
+    requested = max(0, int(config.targets.count))
+    if requested > len(ordered_targets):
+        raise ValueError(
+            "Requested target prefix length exceeds the stable sampled cohort size: "
+            f"{requested} > {len(ordered_targets)}"
+        )
+    return requested
+
+
+def _deterministic_seeded_order(candidate_pool: list[int], *, seed: int) -> list[int]:
+    sorted_pool = sorted(int(item) for item in candidate_pool)
+    if len(set(sorted_pool)) != len(sorted_pool):
+        raise ValueError("Sampled target candidate pool must not contain duplicate items.")
+    return sorted(
+        sorted_pool,
+        key=lambda item: (
+            hashlib.sha1(f"{int(seed)}:{int(item)}".encode("utf-8")).hexdigest(),
+            int(item),
+        ),
+    )
+
+
+def build_ordered_target_cohort(stats: SessionStats, config: Config) -> dict[str, Any]:
+    candidate_pool = _target_candidate_pool(stats, config)
+    mode = config.targets.mode
+    if mode == "explicit_list":
+        ordered_targets = [int(item) for item in config.targets.explicit_list]
+        if len(set(ordered_targets)) != len(ordered_targets):
+            raise ValueError("Explicit target cohorts must not contain duplicate target items.")
+        candidate_basis = [int(item) for item in ordered_targets]
+        bucket: str | None = None
+        seed: int | None = None
+        explicit_list: list[int] | None = [int(item) for item in ordered_targets]
+    elif mode == "sampled":
+        seed = int(config.seeds.target_selection_seed)
+        candidate_basis = sorted(int(item) for item in candidate_pool)
+        ordered_targets = _deterministic_seeded_order(candidate_basis, seed=seed)
+        bucket = config.targets.bucket
+        explicit_list = None
+    else:
+        raise ValueError(f"Unsupported targets.mode for cohort construction: {mode}")
+
+    return {
+        "mode": mode,
+        "bucket": bucket,
+        "seed": seed,
+        "explicit_list": explicit_list,
+        "candidate_pool_hash": _sha1_token(candidate_basis),
+        "candidate_pool_size": int(len(candidate_basis)),
+        "ordered_targets": [int(item) for item in ordered_targets],
+    }
+
+
+def _expected_target_registry_payload(
+    stats: SessionStats,
+    config: Config,
+) -> dict[str, Any]:
+    cohort = build_ordered_target_cohort(stats, config)
+    ordered_targets = [int(item) for item in cohort["ordered_targets"]]
+    return {
+        "target_cohort_key": target_cohort_key(config),
+        "split_key": split_key(config),
+        "selection_policy_version": TARGET_COHORT_SELECTION_POLICY_VERSION,
+        **cohort,
+        "current_count": _requested_target_prefix_length(
+            config,
+            ordered_targets=ordered_targets,
+        ),
+    }
+
+
+def load_or_init_target_registry(
+    stats: SessionStats,
+    config: Config,
+    *,
+    shared_paths: Mapping[str, Path],
+) -> dict[str, Any]:
+    registry_path = shared_paths["target_registry"]
+    expected_payload = _expected_target_registry_payload(stats, config)
+    existing = load_target_registry(registry_path)
+    if existing is None:
+        now = _timestamp_utc()
+        payload = {
+            **expected_payload,
+            "created_at": now,
+            "updated_at": now,
+        }
+        Path(shared_paths["target_cohort_dir"]).mkdir(parents=True, exist_ok=True)
+        save_target_registry(payload, registry_path)
+        return payload
+
+    expected_identity = dict(expected_payload)
+    expected_identity.pop("current_count", None)
+    existing_identity = dict(existing)
+    existing_identity.pop("current_count", None)
+    existing_identity.pop("created_at", None)
+    existing_identity.pop("updated_at", None)
+    if existing_identity != expected_identity:
+        raise ValueError(
+            "Existing target_registry.json does not match the expected stable cohort identity."
+        )
+
+    current_count = int(existing["current_count"])
+    ordered_targets = existing.get("ordered_targets")
+    if not isinstance(ordered_targets, list):
+        raise ValueError("target_registry.json is missing ordered_targets.")
+    if current_count < 0 or current_count > len(ordered_targets):
+        raise ValueError("target_registry.json has an invalid current_count.")
+    return existing
+
+
+def ensure_target_registry_prefix(
+    stats: SessionStats,
+    config: Config,
+    *,
+    shared_paths: Mapping[str, Path],
+    target_registry: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    registry = (
+        load_or_init_target_registry(stats, config, shared_paths=shared_paths)
+        if target_registry is None
+        else dict(target_registry)
+    )
+    ordered_targets = registry.get("ordered_targets")
+    if not isinstance(ordered_targets, list):
+        raise ValueError("target_registry.json is missing ordered_targets.")
+    requested_prefix = _requested_target_prefix_length(
+        config,
+        ordered_targets=[int(item) for item in ordered_targets],
+    )
+    if requested_prefix > int(registry["current_count"]):
+        registry["current_count"] = int(requested_prefix)
+        registry["updated_at"] = _timestamp_utc()
+        save_target_registry(registry, shared_paths["target_registry"])
+    return registry
+
+
+def _default_victim_coverage_entry(timestamp: str) -> dict[str, Any]:
+    return {
+        "status": "requested",
+        "first_requested_at": timestamp,
+        "last_requested_at": timestamp,
+    }
+
+
+def _default_cell_coverage_entry(timestamp: str) -> dict[str, Any]:
+    return {
+        "status": "pending",
+        "artifacts": {
+            "metrics": None,
+            "predictions": None,
+            "train_history": None,
+            "poisoned_train": None,
+        },
+        "error": None,
+        "last_updated_at": timestamp,
+    }
+
+
+def load_or_init_run_coverage(
+    config: Config,
+    *,
+    run_type: str,
+    metadata_paths: Mapping[str, Path],
+    target_registry: Mapping[str, Any],
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    coverage_path = metadata_paths["run_coverage"]
+    expected_targets_order = [
+        int(item)
+        for item in list(target_registry["ordered_targets"])[: int(target_registry["current_count"])]
+    ]
+    expected_run_group_key = run_group_key(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    expected_target_cohort_key = target_cohort_key(config)
+    now = _timestamp_utc()
+
+    coverage = load_run_coverage(coverage_path)
+    if coverage is None:
+        coverage = {
+            "run_group_key": expected_run_group_key,
+            "target_cohort_key": expected_target_cohort_key,
+            "split_key": split_key(config),
+            "run_type": run_type,
+            "targets_order": expected_targets_order,
+            "victims": {
+                victim_name: _default_victim_coverage_entry(now)
+                for victim_name in config.victims.enabled
+            },
+            "cells": {
+                str(target_item): {
+                    victim_name: _default_cell_coverage_entry(now)
+                    for victim_name in config.victims.enabled
+                }
+                for target_item in expected_targets_order
+            },
+            "created_at": now,
+            "updated_at": now,
+        }
+        save_run_coverage(coverage, coverage_path)
+        return coverage
+
+    if coverage.get("run_group_key") != expected_run_group_key:
+        raise ValueError("run_coverage.json does not match the current run_group_key.")
+    if coverage.get("target_cohort_key") != expected_target_cohort_key:
+        raise ValueError("run_coverage.json does not match the current target_cohort_key.")
+
+    victims_payload = coverage.get("victims")
+    if not isinstance(victims_payload, dict):
+        raise ValueError("run_coverage.json must contain a victims object.")
+    cells_payload = coverage.get("cells")
+    if not isinstance(cells_payload, dict):
+        raise ValueError("run_coverage.json must contain a cells object.")
+
+    changed = False
+    for victim_name in config.victims.enabled:
+        if victim_name not in victims_payload:
+            victims_payload[victim_name] = _default_victim_coverage_entry(now)
+            changed = True
+
+    existing_targets_order = [int(item) for item in coverage.get("targets_order", [])]
+    if existing_targets_order:
+        if expected_targets_order[: len(existing_targets_order)] != existing_targets_order:
+            raise ValueError("run_coverage.json targets_order is incompatible with target_registry.")
+    if existing_targets_order != expected_targets_order:
+        coverage["targets_order"] = expected_targets_order
+        changed = True
+
+    victim_names = list(victims_payload.keys())
+    for target_item in expected_targets_order:
+        target_key = str(target_item)
+        target_cells = cells_payload.get(target_key)
+        if not isinstance(target_cells, dict):
+            target_cells = {}
+            cells_payload[target_key] = target_cells
+            changed = True
+        for victim_name in victim_names:
+            if victim_name not in target_cells:
+                target_cells[victim_name] = _default_cell_coverage_entry(now)
+                changed = True
+
+    if changed:
+        coverage["updated_at"] = now
+        save_run_coverage(coverage, coverage_path)
+    return coverage
+
+
+def load_or_init_execution_log(
+    config: Config,
+    *,
+    run_type: str,
+    metadata_paths: Mapping[str, Path],
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    execution_log_path = metadata_paths["execution_log"]
+    expected_run_group_key = run_group_key(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    expected_target_cohort_key = target_cohort_key(config)
+    execution_log = load_execution_log(execution_log_path)
+    if execution_log is None:
+        now = _timestamp_utc()
+        execution_log = {
+            "run_group_key": expected_run_group_key,
+            "target_cohort_key": expected_target_cohort_key,
+            "split_key": split_key(config),
+            "run_type": run_type,
+            "executions": [],
+            "created_at": now,
+            "updated_at": now,
+        }
+        save_execution_log(execution_log, execution_log_path)
+        return execution_log
+
+    if execution_log.get("run_group_key") != expected_run_group_key:
+        raise ValueError("execution_log.json does not match the current run_group_key.")
+    if execution_log.get("target_cohort_key") != expected_target_cohort_key:
+        raise ValueError("execution_log.json does not match the current target_cohort_key.")
+    if not isinstance(execution_log.get("executions"), list):
+        raise ValueError("execution_log.json must contain an executions list.")
+    return execution_log
+
+
+def rebuild_summary_current(
+    config: Config,
+    *,
+    run_type: str,
+    metadata_paths: Mapping[str, Path],
+    run_coverage: Mapping[str, Any],
+    attack_identity_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    target_order = list(run_coverage.get("targets_order", []))
+    victims_payload = run_coverage.get("victims", {})
+    if not isinstance(victims_payload, Mapping):
+        raise ValueError("run_coverage.json must contain a victims object.")
+    cells_payload = run_coverage.get("cells", {})
+    if not isinstance(cells_payload, Mapping):
+        raise ValueError("run_coverage.json must contain a cells object.")
+
+    summary_targets: dict[str, Any] = {}
+    for raw_target_item in target_order:
+        target_key = str(raw_target_item)
+        target_cells = cells_payload.get(target_key, {})
+        if not isinstance(target_cells, Mapping):
+            raise ValueError(f"run_coverage.json cells[{target_key}] must be an object.")
+
+        victim_summaries: dict[str, Any] = {}
+        for victim_name in victims_payload:
+            cell = target_cells.get(victim_name)
+            if not isinstance(cell, Mapping):
+                continue
+            if cell.get("status") != "completed":
+                continue
+            artifacts = cell.get("artifacts", {})
+            if not isinstance(artifacts, Mapping):
+                raise ValueError(
+                    f"run_coverage.json cells[{target_key}][{victim_name}].artifacts must be an object."
+                )
+            metrics_path = artifacts.get("metrics")
+            if not isinstance(metrics_path, str) or not metrics_path.strip():
+                raise ValueError(
+                    "Completed coverage cells must record a repo-relative metrics artifact path."
+                )
+            metrics_payload = load_json(_repo_path(metrics_path))
+            if not isinstance(metrics_payload, dict):
+                raise ValueError(f"Missing or invalid metrics artifact for completed cell: {metrics_path}")
+
+            metric_values = metrics_payload.get("metrics", {})
+            if not isinstance(metric_values, Mapping):
+                metric_values = {}
+            predictions_path = artifacts.get("predictions")
+            victim_summary = {
+                "metrics_path": metrics_path,
+                "predictions_path": (
+                    predictions_path
+                    if isinstance(predictions_path, str) and predictions_path.strip()
+                    else metrics_payload.get("predictions_path")
+                ),
+                "metrics": dict(metric_values),
+                "metrics_available": bool(metrics_payload.get("metrics_available", True)),
+            }
+            if isinstance(metrics_payload.get("reused_predictions"), bool):
+                victim_summary["reused_predictions"] = bool(metrics_payload["reused_predictions"])
+            victim_summaries[victim_name] = victim_summary
+
+        if victim_summaries:
+            summary_targets[target_key] = {
+                "target_item": _coerce_target_item(raw_target_item),
+                "victims": victim_summaries,
+            }
+
+    now = _timestamp_utc()
+    summary_current = {
+        "run_type": run_type,
+        "run_group_key": run_group_key(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ),
+        "target_cohort_key": target_cohort_key(config),
+        "is_snapshot": True,
+        "snapshot_source": "run_coverage_and_cell_artifacts",
+        "target_items": [_coerce_target_item(item) for item in target_order],
+        "victims": list(victims_payload.keys()),
+        "targets": summary_targets,
+        "created_at": now,
+        "updated_at": now,
+    }
+    save_summary_current(summary_current, metadata_paths["summary_current"])
+    return summary_current
 
 
 def resolve_target_items(
@@ -370,8 +814,14 @@ def _poison_train_config(config: Config) -> dict[str, Any]:
 
 __all__ = [
     "SharedAttackArtifacts",
+    "build_ordered_target_cohort",
     "build_srgnn_opt_from_train_config",
     "build_clean_pairs",
+    "ensure_target_registry_prefix",
+    "load_or_init_execution_log",
+    "load_or_init_run_coverage",
+    "load_or_init_target_registry",
     "prepare_shared_attack_artifacts",
+    "rebuild_summary_current",
     "resolve_target_items",
 ]
