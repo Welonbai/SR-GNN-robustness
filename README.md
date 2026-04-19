@@ -1,5 +1,50 @@
 # SR-GNN
 
+## Appendable Experiment Quick Start
+
+Run all commands from the repository root.
+
+Formal strict comparison requires:
+
+- the same target cohort / selected targets
+- the same requested victim set
+- slice-aware run bundles regenerated under the new analysis flow
+
+Do not feed old pre-slice-aware bundles such as `results/runs/diginetica__...__summary_*` into the new strict comparison flow. You do not need to delete them, but you should regenerate fresh slice-aware bundles from current raw run groups. If the raw source is still a legacy `eval_*` run root, migrate it or rerun it first under the current architecture.
+
+### 1. Produce comparable raw run groups
+
+```powershell
+python attack/pipeline/runs/run_clean.py --config attack/configs/diginetica_clean_ratio1_formal.yaml
+python attack/pipeline/runs/run_dp_sbr_baseline.py --config attack/configs/diginetica_attack_dpsbr_ratio1_formal.yaml
+python attack/pipeline/runs/run_random_nonzero.py --config attack/configs/diginetica_attack_random_nonzero_when_possible_ratio1_formal.yaml
+python attack/pipeline/runs/run_prefix_nonzero_when_possible.py --config attack/configs/diginetica_attack_prefix_nonzero_when_possible_ratio1_formal.yaml
+python attack/pipeline/runs/run_position_opt_mvp.py --config attack/configs/diginetica_attack_position_optimization_reward.yaml
+```
+
+### 2. Generate fresh slice-aware run bundles
+
+```powershell
+python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/clean_run_no_attack_ratio1_formal/run_group_*/summary_current.json).FullName --output-name diginetica_clean_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
+python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/attack_dpsbr_ratio1_formal/run_group_*/summary_current.json).FullName --output-name diginetica_dpsbr_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
+python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/attack_random_nonzero_when_possible_ratio1_formal/run_group_*/summary_current.json).FullName --output-name diginetica_random_nonzero_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
+python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1_formal/run_group_*/summary_current.json).FullName --output-name diginetica_prefix_nonzero_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
+python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_*/summary_current.json).FullName --output-name diginetica_position_opt_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
+```
+
+### 3. Build the strict comparison bundle
+
+```powershell
+python analysis/pipeline/compare_runs.py --config analysis/configs/comparisons/diginetica_ratio1_formal_popular3x3.yaml
+```
+
+### 4. Build views and render PNGs
+
+```powershell
+python analysis/pipeline/view_table_builder.py --config analysis/configs/views/diginetica_ratio1_formal_popular3x3.yaml
+python analysis/pipeline/report_table_renderer.py --bundle-parent-dir results/comparisons/diginetica_ratio1_formal_popular3x3/attack_vs_victim_metrics_by_target --config analysis/configs/render/diginetica_ratio1_formal_popular3x3.yaml
+```
+
 ## Appendable Experiment Docs
 
 This repository now also contains an appendable experiment container workflow for targeted SBR poisoning experiments.

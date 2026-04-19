@@ -250,11 +250,18 @@ def inspect_legacy_run(
         target_info_payload=target_info_payload,
         artifact_manifest_payload=artifact_manifest_payload,
     )
+    legacy_sampled_selected_targets_only = config.targets.mode == "sampled"
+    if legacy_sampled_selected_targets_only:
+        config = _normalize_sampled_legacy_targets_as_explicit_migration_cohort(
+            config,
+            selected_targets=selected_targets,
+        )
     target_registry_payload, registry_notes = reconstruct_target_registry(
         config=config,
         selected_targets=selected_targets,
         target_info_payload=target_info_payload,
         target_selection_meta_payload=target_selection_meta_payload,
+        legacy_sampled_selected_targets_only=legacy_sampled_selected_targets_only,
     )
     destination_run_root = run_metadata_paths(
         config,
@@ -287,6 +294,18 @@ def inspect_legacy_run(
         "source_selected_targets_path": _display_optional_path(discovery.selected_targets_path),
         "config_reconstruction": config_reconstruction,
         "target_registry_reconstruction": registry_notes,
+        "target_cohort_normalization": (
+            {
+                "mode": "legacy_sampled_selected_targets_promoted_to_explicit_cohort",
+                "note": (
+                    "Legacy sampled migration only proved the materialized selected target set. "
+                    "The migrated target cohort is represented as an explicit deterministic "
+                    "cohort to avoid claiming compatibility with a native sampled cohort order."
+                ),
+            }
+            if legacy_sampled_selected_targets_only
+            else None
+        ),
         "completed_cell_count": int(preview_counts["completed_cell_count"]),
         "failed_cell_count": int(preview_counts["failed_cell_count"]),
         "requested_cell_count": int(preview_counts["requested_cell_count"]),
@@ -638,12 +657,18 @@ def reconstruct_target_registry(
     selected_targets: list[int | str],
     target_info_payload: Mapping[str, Any] | None,
     target_selection_meta_payload: Mapping[str, Any] | None,
+    legacy_sampled_selected_targets_only: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     materialized_targets = _normalize_target_item_list(selected_targets)
     if not materialized_targets:
         raise MigrationError("Legacy migration requires at least one materialized target item.")
 
-    if config.targets.mode == "explicit_list":
+    if legacy_sampled_selected_targets_only:
+        ordered_targets = sorted(materialized_targets, key=_target_sort_key)
+        reconstruction_mode = "legacy_selected_targets_only"
+        order_reconstructed = True
+        explicit_list = list(ordered_targets)
+    elif config.targets.mode == "explicit_list":
         ordered_targets = _normalize_target_item_list(config.targets.explicit_list)
         if not ordered_targets:
             ordered_targets = list(materialized_targets)
@@ -712,6 +737,35 @@ def reconstruct_target_registry(
     return registry_payload, dict(registry_payload["migration"])
 
 
+def _normalize_sampled_legacy_targets_as_explicit_migration_cohort(
+    config: Config,
+    *,
+    selected_targets: Sequence[int | str],
+) -> Config:
+    ordered_targets = tuple(
+        int(target_item)
+        for target_item in sorted(
+            _normalize_target_item_list(list(selected_targets)),
+            key=_target_sort_key,
+        )
+        if isinstance(target_item, int)
+    )
+    if not ordered_targets:
+        raise MigrationError(
+            "Legacy sampled migration requires at least one integer target item to "
+            "construct an explicit migrated cohort."
+        )
+    return replace(
+        config,
+        targets=replace(
+            config.targets,
+            mode="explicit_list",
+            explicit_list=ordered_targets,
+            count=len(ordered_targets),
+        ),
+    )
+
+
 def _migrate_legacy_source(source: LegacyRunSource) -> dict[str, Any]:
     metadata_paths = run_metadata_paths(
         source.config,
@@ -734,7 +788,9 @@ def _migrate_legacy_source(source: LegacyRunSource) -> dict[str, Any]:
     existing_registry = load_target_registry(shared_paths["target_registry"])
     if existing_registry is None:
         save_target_registry(source.target_registry_payload, shared_paths["target_registry"])
-    elif existing_registry != source.target_registry_payload:
+    elif _normalize_registry_for_compatibility(existing_registry) != _normalize_registry_for_compatibility(
+        source.target_registry_payload
+    ):
         raise MigrationError(
             "Migration destination already contains a different target_registry.json for the "
             "same target cohort. Safe registry merging is not implemented for Phase 9: "
@@ -1362,8 +1418,17 @@ def _copy_legacy_cell_artifacts(
 
 
 def _copy_file(source: Path, destination: Path) -> None:
+    if source.resolve() == destination.resolve():
+        return
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+
+
+def _normalize_registry_for_compatibility(payload: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(payload)
+    normalized.pop("created_at", None)
+    normalized.pop("updated_at", None)
+    return normalized
 
 
 def _normalize_target_item_list(values: Any) -> list[int | str]:

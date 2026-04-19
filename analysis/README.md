@@ -26,6 +26,12 @@ Non-authoritative runtime/debug artifacts:
 - `progress.json`
 - legacy-style `summary_<run_type>.json`
 
+Legacy analysis note:
+
+- old `results/runs/diginetica__...__summary_*` bundles without `slice_manifest.json` are pre-appendable analysis outputs
+- keep them for reference if you want, but do not feed them into strict comparison
+- regenerate fresh slice-aware bundles from current run-group outputs before comparing
+
 ## 2. Generate A Slice-Aware Long Table
 
 ```powershell
