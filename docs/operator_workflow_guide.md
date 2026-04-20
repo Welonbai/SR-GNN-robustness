@@ -113,15 +113,19 @@ Rules:
 
 ```powershell
 python analysis/pipeline/long_csv_generator.py `
-  --summary outputs/runs/<dataset>/<experiment>/<run_group_key>/summary_current.json
+  --config analysis/configs/long_csv/diginetica_attack_compare.yaml
 ```
 
-Optional flags:
+The long_csv config supports shared defaults and multiple jobs:
 
-- `--slice-policy largest_complete_prefix|intersection_complete|all_available`
-- `--victim <victim_name>` repeated for subsets
-- `--target-count <N>`
-- `--output-name <bundle_name>`
+- `defaults.slice_policy`
+- `defaults.requested_victims`
+- `defaults.requested_target_count`
+- `jobs[*].summary`
+- `jobs[*].output_name`
+- `jobs[*].slice_policy`
+- `jobs[*].requested_victims`
+- `jobs[*].requested_target_count`
 
 Default policy:
 
@@ -139,7 +143,7 @@ Outputs under `results/runs/<bundle_name>/`:
 
 ```powershell
 python analysis/pipeline/compare_runs.py `
-  --config analysis/configs/comparisons/<comparison>.yaml
+  --config analysis/configs/comparisons/diginetica_attack_compare.yaml
 ```
 
 Default comparison behavior:
@@ -153,7 +157,7 @@ Relaxed comparison is debug-only and must be requested explicitly in the compari
 
 ```powershell
 python analysis/pipeline/view_table_builder.py `
-  --config analysis/configs/views/<view>.yaml
+  --config analysis/configs/views/attack_vs_victim_metrics_split_by_target_item.yaml
 ```
 
 The view builder:
@@ -166,8 +170,8 @@ The view builder:
 
 ```powershell
 python analysis/pipeline/report_table_renderer.py `
-  --bundle-dir results/<...>/<view_bundle> `
-  --config analysis/configs/render/<render>.yaml
+  --bundle-dir results/comparisons/diginetica_attack_compare/attack_vs_victim_metrics_split_by_target_item/<target_item_bundle> `
+  --config analysis/configs/render/attack_vs_victim_metrics_split_by_target_item.yaml
 ```
 
 The renderer:

@@ -1,5 +1,32 @@
 # SR-GNN
 
+## Run Commands
+
+### Clean
+```powershell
+python attack/pipeline/runs/run_clean.py --config attack/configs/diginetica_clean.yaml
+```
+
+### DP-SBR
+```powershell
+python attack/pipeline/runs/run_dp_sbr_baseline.py --config attack/configs/diginetica_attack_dpsbr.yaml
+```
+
+### Random Nonzero
+```powershell
+python attack/pipeline/runs/run_random_nonzero.py --config attack/configs/diginetica_attack_random_nonzero_when_possible.yaml
+```
+
+### Prefix Nonzero
+```powershell
+python attack/pipeline/runs/run_prefix_nonzero_when_possible.py --config attack/configs/diginetica_attack_prefix_nonzero_when_possible.yaml
+```
+
+### Position Optimization MVP
+```powershell
+python attack/pipeline/runs/run_position_opt_mvp.py --config attack/configs/diginetica_attack_position_optimization_reward.yaml
+```
+
 ## Appendable Experiment Quick Start
 
 Run all commands from the repository root.
@@ -25,24 +52,22 @@ python attack/pipeline/runs/run_position_opt_mvp.py --config attack/configs/digi
 ### 2. Generate fresh slice-aware run bundles
 
 ```powershell
-python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/clean_run_no_attack_ratio1_formal/run_group_*/summary_current.json).FullName --output-name diginetica_clean_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
-python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/attack_dpsbr_ratio1_formal/run_group_*/summary_current.json).FullName --output-name diginetica_dpsbr_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
-python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/attack_random_nonzero_when_possible_ratio1_formal/run_group_*/summary_current.json).FullName --output-name diginetica_random_nonzero_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
-python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1_formal/run_group_*/summary_current.json).FullName --output-name diginetica_prefix_nonzero_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
-python analysis/pipeline/long_csv_generator.py --summary (Get-ChildItem outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_*/summary_current.json).FullName --output-name diginetica_position_opt_ratio1_formal_popular3x3 --slice-policy largest_complete_prefix --victim srgnn --victim miasrec --victim tron --target-count 3
+python analysis/pipeline/long_csv_generator.py --config analysis/configs/long_csv/diginetica_attack_compare.yaml
 ```
+
+Update each `summary:` path in the config to the actual `run_group_<...>/summary_current.json` you want to analyze.
 
 ### 3. Build the strict comparison bundle
 
 ```powershell
-python analysis/pipeline/compare_runs.py --config analysis/configs/comparisons/diginetica_ratio1_formal_popular3x3.yaml
+python analysis/pipeline/compare_runs.py --config analysis/configs/comparisons/diginetica_attack_compare.yaml
 ```
 
 ### 4. Build views and render PNGs
 
 ```powershell
-python analysis/pipeline/view_table_builder.py --config analysis/configs/views/diginetica_ratio1_formal_popular3x3.yaml
-python analysis/pipeline/report_table_renderer.py --bundle-parent-dir results/comparisons/diginetica_ratio1_formal_popular3x3/attack_vs_victim_metrics_by_target --config analysis/configs/render/diginetica_ratio1_formal_popular3x3.yaml
+python analysis/pipeline/view_table_builder.py --config analysis/configs/views/attack_vs_victim_metrics_split_by_target_item.yaml
+python analysis/pipeline/report_table_renderer.py --bundle-parent-dir results/comparisons/diginetica_attack_compare/attack_vs_victim_metrics_split_by_target_item --config analysis/configs/render/attack_vs_victim_metrics_split_by_target_item.yaml
 ```
 
 ## Appendable Experiment Docs
