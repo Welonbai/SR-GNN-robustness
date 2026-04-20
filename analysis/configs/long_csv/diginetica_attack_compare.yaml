@@ -1,0 +1,25 @@
+# Replace each run_group placeholder with the actual materialized run_group directory you want to analyze.
+
+defaults:
+  slice_policy: largest_complete_prefix
+  requested_victims:
+    - srgnn
+    - miasrec
+    - tron
+  requested_target_count: 3
+
+jobs:
+  - summary: outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/summary_current.json
+    output_name: diginetica_clean_attack_compare
+
+  - summary: outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/summary_current.json
+    output_name: diginetica_dpsbr_attack_compare
+
+  - summary: outputs/runs/diginetica/attack_random_nonzero_when_possible/run_group_e1d49f9ebd/summary_current.json
+    output_name: diginetica_random_nonzero_attack_compare
+
+  - summary: outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/summary_current.json
+    output_name: diginetica_prefix_nonzero_attack_compare
+
+  - summary: outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/summary_current.json
+    output_name: diginetica_position_opt_mvp_attack_compare

@@ -6,8 +6,16 @@ import shutil
 from uuid import uuid4
 
 import pandas as pd
+import pytest
+import yaml
 
-from analysis.pipeline.long_csv_generator import generate_long_table_bundle, load_json_mapping
+from analysis.pipeline.long_csv_generator import (
+    build_long_table_bundles,
+    generate_long_table_bundle,
+    load_json_mapping,
+    load_yaml_mapping,
+    parse_long_csv_batch_spec,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -25,7 +33,7 @@ def _phase7_temp_roots():
         yield outputs_root, token
     finally:
         shutil.rmtree(outputs_root, ignore_errors=True)
-        for bundle_dir in results_root.glob(f"phase7_{token}_*"):
+        for bundle_dir in results_root.glob(f"*{token}*"):
             shutil.rmtree(bundle_dir, ignore_errors=True)
 
 
@@ -73,10 +81,11 @@ def _write_run_group_artifacts(
     coverage_statuses: dict[int, dict[str, str]],
     summary_metrics: dict[int, dict[str, float]],
     victims: list[str],
+    experiment_name: str = "analysis_phase7",
+    run_group_key: str = "run_group_phase7_test",
+    target_cohort_key: str = "target_cohort_phase7_test",
 ) -> Path:
-    run_group_key = "run_group_phase7_test"
-    target_cohort_key = "target_cohort_phase7_test"
-    run_root = outputs_root / "runs" / "diginetica" / "analysis_phase7" / run_group_key
+    run_root = outputs_root / "runs" / "diginetica" / experiment_name / run_group_key
     target_registry_path = (
         outputs_root
         / "shared"
@@ -195,6 +204,12 @@ def _write_run_group_artifacts(
         encoding="utf-8",
     )
     return run_root / "summary_current.json"
+
+
+def _write_yaml(path: Path, payload: dict[str, object]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return path
 
 
 def test_largest_complete_prefix_uses_coverage_and_not_summary_snapshot() -> None:
@@ -443,3 +458,467 @@ def test_slice_manifest_and_output_manifest_record_required_metadata() -> None:
     ]
     assert manifest["slice"]["slice_policy"] == "largest_complete_prefix"
     assert manifest["slice"]["selected_target_count"] == 1
+
+
+def test_parse_long_csv_batch_spec_accepts_defaults_and_job_overrides() -> None:
+    with _phase7_temp_roots() as (outputs_root, _token):
+        summary_a = _write_run_group_artifacts(
+            outputs_root,
+            experiment_name="analysis_phase7_a",
+            run_group_key="run_group_phase7_a",
+            target_cohort_key="target_cohort_phase7_a",
+            target_order=[11, 22],
+            current_count=2,
+            victims=["miasrec", "tron"],
+            coverage_statuses={
+                11: {"miasrec": "completed", "tron": "completed"},
+                22: {"miasrec": "completed", "tron": "completed"},
+            },
+            summary_metrics={
+                11: {"miasrec": 0.11, "tron": 0.12},
+                22: {"miasrec": 0.21, "tron": 0.22},
+            },
+        )
+        summary_b = _write_run_group_artifacts(
+            outputs_root,
+            experiment_name="analysis_phase7_b",
+            run_group_key="run_group_phase7_b",
+            target_cohort_key="target_cohort_phase7_b",
+            target_order=[31, 32],
+            current_count=2,
+            victims=["miasrec", "tron"],
+            coverage_statuses={
+                31: {"miasrec": "completed", "tron": "completed"},
+                32: {"miasrec": "completed", "tron": "completed"},
+            },
+            summary_metrics={
+                31: {"miasrec": 0.31, "tron": 0.32},
+                32: {"miasrec": 0.41, "tron": 0.42},
+            },
+        )
+
+        spec = parse_long_csv_batch_spec(
+            {
+                "defaults": {
+                    "slice_policy": "largest_complete_prefix",
+                    "requested_victims": ["miasrec", "tron"],
+                    "requested_target_count": 2,
+                },
+                "jobs": [
+                    {
+                        "summary": _repo_relative(summary_a),
+                        "output_name": "phase7_defaults_job",
+                    },
+                    {
+                        "summary": str(summary_b),
+                        "output_name": "phase7_override_job",
+                        "slice_policy": "intersection_complete",
+                        "requested_victims": ["miasrec"],
+                        "requested_target_count": 1,
+                    },
+                ],
+            },
+            source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+        )
+
+    assert len(spec.jobs) == 2
+    assert spec.jobs[0].summary_path == summary_a.resolve()
+    assert spec.jobs[0].slice_policy == "largest_complete_prefix"
+    assert spec.jobs[0].requested_victims == ["miasrec", "tron"]
+    assert spec.jobs[0].requested_victims_source_override == "config"
+    assert spec.jobs[0].requested_target_count == 2
+    assert spec.jobs[1].summary_path == summary_b.resolve()
+    assert spec.jobs[1].slice_policy == "intersection_complete"
+    assert spec.jobs[1].requested_victims == ["miasrec"]
+    assert spec.jobs[1].requested_target_count == 1
+
+
+def test_parse_long_csv_batch_spec_rejects_empty_jobs() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        parse_long_csv_batch_spec(
+            {"jobs": []},
+            source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+        )
+
+    assert "jobs" in str(exc_info.value)
+
+
+def test_parse_long_csv_batch_spec_rejects_missing_summary() -> None:
+    with pytest.raises(ValueError) as exc_info:
+        parse_long_csv_batch_spec(
+            {"jobs": [{"output_name": "phase7_missing_summary"}]},
+            source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+        )
+
+    assert "summary" in str(exc_info.value)
+
+
+def test_parse_long_csv_batch_spec_rejects_invalid_slice_policy() -> None:
+    with _phase7_temp_roots() as (outputs_root, _token):
+        summary_path = _write_run_group_artifacts(
+            outputs_root,
+            target_order=[1],
+            current_count=1,
+            victims=["miasrec"],
+            coverage_statuses={1: {"miasrec": "completed"}},
+            summary_metrics={1: {"miasrec": 0.11}},
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            parse_long_csv_batch_spec(
+                {
+                    "jobs": [
+                        {
+                            "summary": str(summary_path),
+                            "slice_policy": "not_a_policy",
+                        }
+                    ]
+                },
+                source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+            )
+
+    assert "slice_policy" in str(exc_info.value)
+
+
+def test_parse_long_csv_batch_spec_rejects_invalid_requested_target_count() -> None:
+    with _phase7_temp_roots() as (outputs_root, _token):
+        summary_path = _write_run_group_artifacts(
+            outputs_root,
+            target_order=[1],
+            current_count=1,
+            victims=["miasrec"],
+            coverage_statuses={1: {"miasrec": "completed"}},
+            summary_metrics={1: {"miasrec": 0.11}},
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            parse_long_csv_batch_spec(
+                {
+                    "jobs": [
+                        {
+                            "summary": str(summary_path),
+                            "requested_target_count": -1,
+                        }
+                    ]
+                },
+                source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+            )
+
+    assert "requested_target_count" in str(exc_info.value)
+
+
+def test_parse_long_csv_batch_spec_rejects_duplicate_requested_victims() -> None:
+    with _phase7_temp_roots() as (outputs_root, _token):
+        summary_path = _write_run_group_artifacts(
+            outputs_root,
+            target_order=[1],
+            current_count=1,
+            victims=["miasrec"],
+            coverage_statuses={1: {"miasrec": "completed"}},
+            summary_metrics={1: {"miasrec": 0.11}},
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            parse_long_csv_batch_spec(
+                {
+                    "jobs": [
+                        {
+                            "summary": str(summary_path),
+                            "requested_victims": ["miasrec", "miasrec"],
+                        }
+                    ]
+                },
+                source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+            )
+
+    assert "Duplicate requested victim" in str(exc_info.value)
+
+
+def test_build_long_table_bundles_runs_multiple_jobs_with_config_victim_source_and_overrides() -> None:
+    with _phase7_temp_roots() as (outputs_root, token):
+        summary_a = _write_run_group_artifacts(
+            outputs_root,
+            experiment_name="analysis_phase7_a",
+            run_group_key="run_group_phase7_a",
+            target_cohort_key="target_cohort_phase7_a",
+            target_order=[11, 22],
+            current_count=2,
+            victims=["miasrec", "tron"],
+            coverage_statuses={
+                11: {"miasrec": "completed", "tron": "completed"},
+                22: {"miasrec": "completed", "tron": "completed"},
+            },
+            summary_metrics={
+                11: {"miasrec": 0.11, "tron": 0.12},
+                22: {"miasrec": 0.21, "tron": 0.22},
+            },
+        )
+        summary_b = _write_run_group_artifacts(
+            outputs_root,
+            experiment_name="analysis_phase7_b",
+            run_group_key="run_group_phase7_b",
+            target_cohort_key="target_cohort_phase7_b",
+            target_order=[31, 32, 33],
+            current_count=3,
+            victims=["miasrec", "tron"],
+            coverage_statuses={
+                31: {"miasrec": "completed", "tron": "completed"},
+                32: {"miasrec": "completed", "tron": "failed"},
+                33: {"miasrec": "completed", "tron": "pending"},
+            },
+            summary_metrics={
+                31: {"miasrec": 0.31, "tron": 0.32},
+                32: {"miasrec": 0.41, "tron": 0.42},
+                33: {"miasrec": 0.51, "tron": 0.52},
+            },
+        )
+
+        spec = parse_long_csv_batch_spec(
+            {
+                "defaults": {
+                    "slice_policy": "largest_complete_prefix",
+                    "requested_victims": ["miasrec", "tron"],
+                },
+                "jobs": [
+                    {
+                        "summary": str(summary_a),
+                        "output_name": f"phase7_{token}_batch_a",
+                    },
+                    {
+                        "summary": str(summary_b),
+                        "output_name": f"phase7_{token}_batch_b",
+                        "requested_victims": ["miasrec"],
+                    },
+                ],
+            },
+            source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+        )
+        results = build_long_table_bundles(spec)
+        manifest_a = load_json_mapping(results[0]["slice_manifest_path"], label="slice manifest A")
+        manifest_b = load_json_mapping(results[1]["slice_manifest_path"], label="slice manifest B")
+        dataframe_b = pd.read_csv(results[1]["long_table_path"])
+
+    assert [result["output_name"] for result in results] == [
+        f"phase7_{token}_batch_a",
+        f"phase7_{token}_batch_b",
+    ]
+    assert manifest_a["requested_victims_source"] == "config"
+    assert manifest_b["requested_victims_source"] == "config"
+    assert manifest_b["requested_victims"] == ["miasrec"]
+    assert dataframe_b["victim_model"].unique().tolist() == ["miasrec"]
+    assert dataframe_b["target_item"].drop_duplicates().tolist() == [31, 32, 33]
+
+
+def test_build_long_table_bundles_rejects_unknown_requested_victim_from_config() -> None:
+    with _phase7_temp_roots() as (outputs_root, _token):
+        summary_path = _write_run_group_artifacts(
+            outputs_root,
+            target_order=[1],
+            current_count=1,
+            victims=["miasrec"],
+            coverage_statuses={1: {"miasrec": "completed"}},
+            summary_metrics={1: {"miasrec": 0.11}},
+        )
+        spec = parse_long_csv_batch_spec(
+            {
+                "jobs": [
+                    {
+                        "summary": str(summary_path),
+                        "output_name": "phase7_unknown_victim",
+                        "requested_victims": ["tron"],
+                    }
+                ]
+            },
+            source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            build_long_table_bundles(spec)
+
+    assert "does not exist in run_coverage.json" in str(exc_info.value)
+
+
+def test_build_long_table_bundles_preserves_derived_output_name_when_omitted() -> None:
+    with _phase7_temp_roots() as (outputs_root, _token):
+        summary_path = _write_run_group_artifacts(
+            outputs_root,
+            experiment_name="analysis_phase7_derived",
+            run_group_key="run_group_phase7_derived",
+            target_cohort_key="target_cohort_phase7_derived",
+            target_order=[7, 8],
+            current_count=2,
+            victims=["miasrec", "tron"],
+            coverage_statuses={
+                7: {"miasrec": "completed", "tron": "completed"},
+                8: {"miasrec": "completed", "tron": "failed"},
+            },
+            summary_metrics={
+                7: {"miasrec": 0.11, "tron": 0.12},
+                8: {"miasrec": 0.21, "tron": 0.22},
+            },
+        )
+        direct_result = generate_long_table_bundle(
+            summary_path=summary_path,
+            output_name=None,
+            slice_policy="largest_complete_prefix",
+            requested_victims=["miasrec", "tron"],
+            requested_target_count=2,
+        )
+        spec = parse_long_csv_batch_spec(
+            {
+                "jobs": [
+                    {
+                        "summary": str(summary_path),
+                        "slice_policy": "largest_complete_prefix",
+                        "requested_victims": ["miasrec", "tron"],
+                        "requested_target_count": 2,
+                    }
+                ]
+            },
+            source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+        )
+        batch_result = build_long_table_bundles(spec)[0]
+
+    assert batch_result["output_name"] == direct_result["output_name"]
+
+
+def test_build_long_table_bundles_is_fail_fast_and_leaves_completed_outputs() -> None:
+    with _phase7_temp_roots() as (outputs_root, token):
+        summary_a = _write_run_group_artifacts(
+            outputs_root,
+            experiment_name="analysis_phase7_fail_a",
+            run_group_key="run_group_phase7_fail_a",
+            target_cohort_key="target_cohort_phase7_fail_a",
+            target_order=[11, 22],
+            current_count=2,
+            victims=["miasrec", "tron"],
+            coverage_statuses={
+                11: {"miasrec": "completed", "tron": "completed"},
+                22: {"miasrec": "completed", "tron": "completed"},
+            },
+            summary_metrics={
+                11: {"miasrec": 0.11, "tron": 0.12},
+                22: {"miasrec": 0.21, "tron": 0.22},
+            },
+        )
+        summary_b = _write_run_group_artifacts(
+            outputs_root,
+            experiment_name="analysis_phase7_fail_b",
+            run_group_key="run_group_phase7_fail_b",
+            target_cohort_key="target_cohort_phase7_fail_b",
+            target_order=[31, 32],
+            current_count=2,
+            victims=["miasrec", "tron"],
+            coverage_statuses={
+                31: {"miasrec": "completed", "tron": "completed"},
+                32: {"miasrec": "completed", "tron": "completed"},
+            },
+            summary_metrics={
+                31: {"miasrec": 0.31, "tron": 0.32},
+                32: {"miasrec": 0.41, "tron": 0.42},
+            },
+        )
+        summary_c = _write_run_group_artifacts(
+            outputs_root,
+            experiment_name="analysis_phase7_fail_c",
+            run_group_key="run_group_phase7_fail_c",
+            target_cohort_key="target_cohort_phase7_fail_c",
+            target_order=[41, 42],
+            current_count=2,
+            victims=["miasrec", "tron"],
+            coverage_statuses={
+                41: {"miasrec": "completed", "tron": "completed"},
+                42: {"miasrec": "completed", "tron": "completed"},
+            },
+            summary_metrics={
+                41: {"miasrec": 0.51, "tron": 0.52},
+                42: {"miasrec": 0.61, "tron": 0.62},
+            },
+        )
+        spec = parse_long_csv_batch_spec(
+            {
+                "jobs": [
+                    {
+                        "summary": str(summary_a),
+                        "output_name": f"phase7_{token}_failfast_a",
+                    },
+                    {
+                        "summary": str(summary_b),
+                        "output_name": f"phase7_{token}_failfast_b",
+                        "requested_target_count": 99,
+                    },
+                    {
+                        "summary": str(summary_c),
+                        "output_name": f"phase7_{token}_failfast_c",
+                    },
+                ]
+            },
+            source_config_path=REPO_ROOT / "analysis" / "configs" / "long_csv" / "phase7_test.yaml",
+        )
+
+        with pytest.raises(ValueError) as exc_info:
+            build_long_table_bundles(spec)
+
+        completed_output_exists = (
+            RESULTS_ROOT / "runs" / f"phase7_{token}_failfast_a" / "long_table.csv"
+        ).is_file()
+        skipped_output_exists = (RESULTS_ROOT / "runs" / f"phase7_{token}_failfast_c").exists()
+
+    assert "requested_target_count exceeds" in str(exc_info.value)
+    assert completed_output_exists is True
+    assert skipped_output_exists is False
+
+
+def test_long_csv_config_can_generate_five_bundles_from_one_yaml() -> None:
+    with _phase7_temp_roots() as (outputs_root, token):
+        summary_paths: list[Path] = []
+        for index in range(5):
+            summary_paths.append(
+                _write_run_group_artifacts(
+                    outputs_root,
+                    experiment_name=f"analysis_phase7_job_{index}",
+                    run_group_key=f"run_group_phase7_job_{index}",
+                    target_cohort_key=f"target_cohort_phase7_job_{index}",
+                    target_order=[index * 10 + 1, index * 10 + 2],
+                    current_count=2,
+                    victims=["miasrec", "tron"],
+                    coverage_statuses={
+                        index * 10 + 1: {"miasrec": "completed", "tron": "completed"},
+                        index * 10 + 2: {"miasrec": "completed", "tron": "completed"},
+                    },
+                    summary_metrics={
+                        index * 10 + 1: {"miasrec": 0.10 + index, "tron": 0.20 + index},
+                        index * 10 + 2: {"miasrec": 0.30 + index, "tron": 0.40 + index},
+                    },
+                )
+            )
+
+        config_path = _write_yaml(
+            outputs_root / "phase7_long_csv.yaml",
+            {
+                "defaults": {
+                    "slice_policy": "largest_complete_prefix",
+                    "requested_victims": ["miasrec", "tron"],
+                    "requested_target_count": 2,
+                },
+                "jobs": [
+                    {
+                        "summary": _repo_relative(summary_path),
+                        "output_name": f"phase7_{token}_job_{index}",
+                    }
+                    for index, summary_path in enumerate(summary_paths)
+                ],
+            },
+        )
+        spec = parse_long_csv_batch_spec(
+            load_yaml_mapping(config_path, label="long_csv config"),
+            source_config_path=config_path,
+        )
+        results = build_long_table_bundles(spec)
+        all_outputs_exist = all(Path(result["long_table_path"]).is_file() for result in results)
+
+    assert len(results) == 5
+    assert [result["output_name"] for result in results] == [
+        f"phase7_{token}_job_{index}" for index in range(5)
+    ]
+    assert all_outputs_exist is True

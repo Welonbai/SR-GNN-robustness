@@ -16,7 +16,12 @@ from analysis.pipeline.compare_runs import (
     RUNS_ROOT,
     build_comparison_bundle,
 )
-from analysis.pipeline.report_table_renderer import resolve_title
+from analysis.pipeline.report_table_renderer import (
+    TableStructure,
+    apply_dimension_value_orders,
+    parse_render_spec,
+    resolve_title,
+)
 from analysis.pipeline.view_table_builder import build_view_bundles, parse_view_spec
 
 
@@ -390,3 +395,157 @@ def test_renderer_remains_presentation_only_without_runtime_state_inputs() -> No
     )
 
     assert title == "Slice intersection_complete N=3 Victims miasrec"
+
+
+def test_renderer_can_reorder_attack_method_rows_from_render_config() -> None:
+    render_spec = parse_render_spec(
+        {
+            "style_name": "phase8_render_order",
+            "output_format": "png",
+            "title": {
+                "template": "test",
+                "align": "center",
+                "font_size": 12,
+                "color": "black",
+            },
+            "figure": {
+                "width": 8,
+                "height": 4,
+                "dpi": 100,
+                "background_color": "white",
+            },
+            "table": {
+                "font_size": 10,
+                "round_digits": 4,
+                "text_color": "black",
+                "show_grid": True,
+                "auto_shrink": False,
+                "wrap_text": False,
+                "cell_align": "center",
+                "display_alias": {},
+                "value_alias": {},
+                "dimension_value_orders": {
+                    "attack_method": [
+                        "clean",
+                        "dpsbr_baseline",
+                        "prefix_nonzero_when_possible",
+                        "random_nonzero_when_possible",
+                        "position_opt_mvp",
+                    ]
+                },
+                "scope_colors": {},
+                "top_level_group_separators": False,
+            },
+        }
+    )
+    dataframe = pd.DataFrame(
+        [
+            {
+                "victim_model": "miasrec",
+                "attack_method": "clean",
+                "recall | 10 | ground_truth": 0.11,
+            },
+            {
+                "victim_model": "miasrec",
+                "attack_method": "dpsbr_baseline",
+                "recall | 10 | ground_truth": 0.12,
+            },
+            {
+                "victim_model": "miasrec",
+                "attack_method": "position_opt_mvp",
+                "recall | 10 | ground_truth": 0.13,
+            },
+            {
+                "victim_model": "miasrec",
+                "attack_method": "prefix_nonzero_when_possible",
+                "recall | 10 | ground_truth": 0.14,
+            },
+            {
+                "victim_model": "miasrec",
+                "attack_method": "random_nonzero_when_possible",
+                "recall | 10 | ground_truth": 0.15,
+            },
+            {
+                "victim_model": "tron",
+                "attack_method": "clean",
+                "recall | 10 | ground_truth": 0.21,
+            },
+            {
+                "victim_model": "tron",
+                "attack_method": "dpsbr_baseline",
+                "recall | 10 | ground_truth": 0.22,
+            },
+            {
+                "victim_model": "tron",
+                "attack_method": "position_opt_mvp",
+                "recall | 10 | ground_truth": 0.23,
+            },
+            {
+                "victim_model": "tron",
+                "attack_method": "prefix_nonzero_when_possible",
+                "recall | 10 | ground_truth": 0.24,
+            },
+            {
+                "victim_model": "tron",
+                "attack_method": "random_nonzero_when_possible",
+                "recall | 10 | ground_truth": 0.25,
+            },
+        ]
+    )
+    table_structure = TableStructure(
+        row_levels=["victim_model", "attack_method"],
+        col_levels=["metric_name", "k", "metric_scope"],
+        row_tuples=[
+            ("miasrec", "clean"),
+            ("miasrec", "dpsbr_baseline"),
+            ("miasrec", "position_opt_mvp"),
+            ("miasrec", "prefix_nonzero_when_possible"),
+            ("miasrec", "random_nonzero_when_possible"),
+            ("tron", "clean"),
+            ("tron", "dpsbr_baseline"),
+            ("tron", "position_opt_mvp"),
+            ("tron", "prefix_nonzero_when_possible"),
+            ("tron", "random_nonzero_when_possible"),
+        ],
+        column_tuples=[("recall", 10, "ground_truth")],
+        row_column_names=["victim_model", "attack_method"],
+        value_column_names=["recall | 10 | ground_truth"],
+    )
+
+    ordered_dataframe, ordered_table_structure = apply_dimension_value_orders(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        dimension_value_orders=render_spec.table.dimension_value_orders,
+    )
+
+    assert ordered_table_structure.row_tuples == [
+        ("miasrec", "clean"),
+        ("miasrec", "dpsbr_baseline"),
+        ("miasrec", "prefix_nonzero_when_possible"),
+        ("miasrec", "random_nonzero_when_possible"),
+        ("miasrec", "position_opt_mvp"),
+        ("tron", "clean"),
+        ("tron", "dpsbr_baseline"),
+        ("tron", "prefix_nonzero_when_possible"),
+        ("tron", "random_nonzero_when_possible"),
+        ("tron", "position_opt_mvp"),
+    ]
+    assert list(
+        zip(
+            ordered_dataframe["victim_model"].tolist(),
+            ordered_dataframe["attack_method"].tolist(),
+            ordered_dataframe["recall | 10 | ground_truth"].tolist(),
+            strict=True,
+        )
+    ) == [
+        ("miasrec", "clean", 0.11),
+        ("miasrec", "dpsbr_baseline", 0.12),
+        ("miasrec", "prefix_nonzero_when_possible", 0.14),
+        ("miasrec", "random_nonzero_when_possible", 0.15),
+        ("miasrec", "position_opt_mvp", 0.13),
+        ("tron", "clean", 0.21),
+        ("tron", "dpsbr_baseline", 0.22),
+        ("tron", "prefix_nonzero_when_possible", 0.24),
+        ("tron", "random_nonzero_when_possible", 0.25),
+        ("tron", "position_opt_mvp", 0.23),
+    ]

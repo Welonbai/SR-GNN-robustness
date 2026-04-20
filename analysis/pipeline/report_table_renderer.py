@@ -7,7 +7,7 @@ import argparse
 import json
 import string
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
@@ -90,6 +90,7 @@ class TableSpec:
     cell_align: str
     display_alias: DisplayAliasSpec
     value_alias: dict[str, dict[str, str]]
+    dimension_value_orders: dict[str, list[Any]]
     scope_colors: dict[str, dict[str, str]]
     best_value_bolding: BestValueBoldingSpec | None
     top_level_group_separators: bool
@@ -229,6 +230,10 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
         value_alias=normalize_value_alias_mapping(
             table_payload.get("value_alias", {}),
             label="table.value_alias",
+        ),
+        dimension_value_orders=normalize_dimension_value_orders(
+            table_payload.get("dimension_value_orders", {}),
+            label="table.dimension_value_orders",
         ),
         scope_colors=normalize_dimension_value_string_mapping(
             table_payload.get("scope_colors", {}),
@@ -397,6 +402,11 @@ def render_bundle(*, bundle_dir: Path, render_spec: RenderSpec) -> Path:
             meta_payload=meta_payload,
             dataframe=table_dataframe,
             row_column_names=row_column_names,
+        )
+        table_dataframe, table_structure = apply_dimension_value_orders(
+            dataframe=table_dataframe,
+            table_structure=table_structure,
+            dimension_value_orders=render_spec.table.dimension_value_orders,
         )
         title_text = resolve_title(template=render_spec.title.template, meta_payload=meta_payload)
 
@@ -1135,6 +1145,188 @@ def extract_table_structure(
     )
 
 
+def apply_dimension_value_orders(
+    *,
+    dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    dimension_value_orders: Mapping[str, list[Any]],
+) -> tuple[pd.DataFrame, TableStructure]:
+    """Apply render-time row/column value ordering without mutating the view bundle."""
+    if not dimension_value_orders:
+        return dataframe, table_structure
+
+    validate_dimension_value_order_targets(
+        table_structure=table_structure,
+        dimension_value_orders=dimension_value_orders,
+    )
+
+    ordered_dataframe = dataframe.copy()
+    ordered_table_structure = table_structure
+
+    row_indexes = reorder_axis_indexes(
+        axis_tuples=ordered_table_structure.row_tuples,
+        axis_levels=ordered_table_structure.row_levels,
+        dimension_value_orders=dimension_value_orders,
+    )
+    if row_indexes != list(range(len(ordered_table_structure.row_tuples))):
+        ordered_dataframe = ordered_dataframe.iloc[row_indexes].reset_index(drop=True)
+        ordered_table_structure = replace(
+            ordered_table_structure,
+            row_tuples=[ordered_table_structure.row_tuples[index] for index in row_indexes],
+        )
+
+    column_indexes = reorder_axis_indexes(
+        axis_tuples=ordered_table_structure.column_tuples,
+        axis_levels=ordered_table_structure.col_levels,
+        dimension_value_orders=dimension_value_orders,
+    )
+    if column_indexes != list(range(len(ordered_table_structure.column_tuples))):
+        ordered_value_column_names = [
+            ordered_table_structure.value_column_names[index] for index in column_indexes
+        ]
+        ordered_dataframe = ordered_dataframe.loc[
+            :,
+            ordered_table_structure.row_column_names + ordered_value_column_names,
+        ]
+        ordered_table_structure = replace(
+            ordered_table_structure,
+            column_tuples=[ordered_table_structure.column_tuples[index] for index in column_indexes],
+            value_column_names=ordered_value_column_names,
+        )
+
+    return ordered_dataframe, ordered_table_structure
+
+
+def validate_dimension_value_order_targets(
+    *,
+    table_structure: TableStructure,
+    dimension_value_orders: Mapping[str, list[Any]],
+) -> None:
+    """Require render-time ordering rules to target existing row/column dimensions."""
+    allowed_dimensions = set(table_structure.row_levels)
+    allowed_dimensions.update(table_structure.col_levels)
+    missing_dimensions = sorted(
+        dimension_name
+        for dimension_name in dimension_value_orders
+        if dimension_name not in allowed_dimensions
+    )
+    if missing_dimensions:
+        raise AnalysisError(
+            f"The render config dimension_value_orders targets {missing_dimensions} do not exist in "
+            "the current table structure."
+        )
+
+
+def reorder_axis_indexes(
+    *,
+    axis_tuples: list[tuple[Any, ...]],
+    axis_levels: list[str],
+    dimension_value_orders: Mapping[str, list[Any]],
+) -> list[int]:
+    """Return render-ordered indexes for one axis while preserving hierarchy groups."""
+    if not axis_tuples:
+        return []
+    return reorder_axis_indexes_for_level(
+        candidate_indexes=list(range(len(axis_tuples))),
+        axis_tuples=axis_tuples,
+        axis_levels=axis_levels,
+        dimension_value_orders=dimension_value_orders,
+        level_index=0,
+    )
+
+
+def reorder_axis_indexes_for_level(
+    *,
+    candidate_indexes: list[int],
+    axis_tuples: list[tuple[Any, ...]],
+    axis_levels: list[str],
+    dimension_value_orders: Mapping[str, list[Any]],
+    level_index: int,
+) -> list[int]:
+    """Recursively reorder contiguous hierarchy groups for one axis level at a time."""
+    if level_index >= len(axis_levels) or len(candidate_indexes) <= 1:
+        return list(candidate_indexes)
+
+    grouped_indexes = group_axis_indexes_by_level_value(
+        candidate_indexes=candidate_indexes,
+        axis_tuples=axis_tuples,
+        level_index=level_index,
+    )
+    grouped_indexes = sort_axis_index_groups(
+        grouped_indexes=grouped_indexes,
+        dimension_name=axis_levels[level_index],
+        dimension_value_orders=dimension_value_orders,
+    )
+
+    ordered_indexes: list[int] = []
+    for _, child_indexes in grouped_indexes:
+        ordered_indexes.extend(
+            reorder_axis_indexes_for_level(
+                candidate_indexes=child_indexes,
+                axis_tuples=axis_tuples,
+                axis_levels=axis_levels,
+                dimension_value_orders=dimension_value_orders,
+                level_index=level_index + 1,
+            )
+        )
+    return ordered_indexes
+
+
+def group_axis_indexes_by_level_value(
+    *,
+    candidate_indexes: list[int],
+    axis_tuples: list[tuple[Any, ...]],
+    level_index: int,
+) -> list[tuple[Any, list[int]]]:
+    """Group contiguous axis indexes by one hierarchy level value."""
+    grouped_indexes: list[tuple[Any, list[int]]] = []
+    for index in candidate_indexes:
+        level_value = axis_tuples[index][level_index]
+        if grouped_indexes and grouped_indexes[-1][0] == level_value:
+            grouped_indexes[-1][1].append(index)
+            continue
+        grouped_indexes.append((level_value, [index]))
+    return grouped_indexes
+
+
+def sort_axis_index_groups(
+    *,
+    grouped_indexes: list[tuple[Any, list[int]]],
+    dimension_name: str,
+    dimension_value_orders: Mapping[str, list[Any]],
+) -> list[tuple[Any, list[int]]]:
+    """Sort sibling hierarchy groups by one optional render-time preferred value order."""
+    preferred_values = dimension_value_orders.get(dimension_name)
+    if not preferred_values:
+        return grouped_indexes
+
+    order_lookup = {
+        stringify_alias_lookup_value(value): index for index, value in enumerate(preferred_values)
+    }
+    sortable_groups = list(enumerate(grouped_indexes))
+    sortable_groups.sort(
+        key=lambda item: build_dimension_group_sort_key(
+            value=item[1][0],
+            original_position=item[0],
+            order_lookup=order_lookup,
+        )
+    )
+    return [group for _, group in sortable_groups]
+
+
+def build_dimension_group_sort_key(
+    *,
+    value: Any,
+    original_position: int,
+    order_lookup: Mapping[str, int],
+) -> tuple[int, int]:
+    """Sort specified values first and leave unspecified values in their existing relative order."""
+    lookup_key = stringify_alias_lookup_value(value)
+    if lookup_key in order_lookup:
+        return (0, order_lookup[lookup_key])
+    return (1, original_position)
+
+
 def extract_optional_string_list(value: Any, *, label: str) -> list[str] | None:
     """Return a validated non-empty string list when present."""
     if value is None:
@@ -1499,6 +1691,22 @@ def normalize_best_value_bolding_spec(value: Any, *, label: str) -> BestValueBol
     )
 
 
+def normalize_dimension_value_orders(value: Any, *, label: str) -> dict[str, list[Any]]:
+    """Normalize optional render-time preferred value orders for row/column dimensions."""
+    if value is None:
+        return {}
+
+    mapping = require_mapping(value, label=label)
+    normalized: dict[str, list[Any]] = {}
+    for raw_dimension_name, raw_values in mapping.items():
+        dimension_name = require_nonempty_string(raw_dimension_name, label=f"{label} dimension")
+        normalized[dimension_name] = normalize_scalar_order_list(
+            raw_values,
+            label=f"{label}[{dimension_name}]",
+        )
+    return normalized
+
+
 def normalize_value_alias_mapping(value: Any, *, label: str) -> dict[str, dict[str, str]]:
     """Normalize an optional nested mapping from column names to value aliases."""
     if value is None:
@@ -1519,6 +1727,39 @@ def normalize_value_alias_mapping(value: Any, *, label: str) -> dict[str, dict[s
             )
         normalized[column_name] = normalized_alias_map
     return normalized
+
+
+def normalize_scalar_order_list(value: Any, *, label: str) -> list[Any]:
+    """Normalize one ordered list of scalar values and reject duplicates."""
+    if not isinstance(value, list) or not value:
+        raise AnalysisError(f"Expected '{label}' to be a non-empty list of scalar values.")
+
+    normalized: list[Any] = []
+    seen_keys: set[str] = set()
+    duplicate_keys: list[str] = []
+    for index, raw_item in enumerate(value):
+        normalized_item = normalize_order_scalar(raw_item, label=f"{label}[{index}]")
+        lookup_key = stringify_alias_lookup_value(normalized_item)
+        if lookup_key in seen_keys and lookup_key not in duplicate_keys:
+            duplicate_keys.append(lookup_key)
+        seen_keys.add(lookup_key)
+        normalized.append(normalized_item)
+
+    if duplicate_keys:
+        raise AnalysisError(f"Duplicate values are not allowed in '{label}': {sorted(duplicate_keys)}.")
+    return normalized
+
+
+def normalize_order_scalar(value: Any, *, label: str) -> Any:
+    """Normalize one scalar that may appear in a preferred render order list."""
+    normalized_value = normalize_scalar(value)
+    if isinstance(normalized_value, str):
+        return require_nonempty_string(normalized_value, label=label)
+    if isinstance(normalized_value, (bool, Integral, Real)):
+        return normalized_value
+    raise AnalysisError(
+        f"Expected '{label}' to be a scalar string/number/bool, got {type(normalized_value).__name__}."
+    )
 
 
 def require_nonempty_string(value: Any, *, label: str) -> str:

@@ -2,14 +2,55 @@
 
 Run all commands from the repository root.
 
+## 1. Quick Commands
+
+### 1.1 Generate Slice-Aware Long Tables
+
+```powershell
+python analysis/pipeline/long_csv_generator.py `
+  --config analysis/configs/long_csv/diginetica_attack_compare.yaml
+```
+
+### 1.2 Compare Compatible Bundles
+
+```powershell
+python analysis/pipeline/compare_runs.py `
+  --config analysis/configs/comparisons/diginetica_attack_compare.yaml
+```
+
+### 1.3 Build View Bundles
+
+```powershell
+python analysis/pipeline/view_table_builder.py `
+  --config analysis/configs/views/attack_vs_victim_metrics_split_by_target_item.yaml
+```
+
+### 1.4 Render From Propagated Metadata
+
+Single bundle:
+
+```powershell
+python analysis/pipeline/report_table_renderer.py `
+  --bundle-dir results/comparisons/diginetica_attack_compare/attack_vs_victim_metrics_split_by_target_item/<target_item_bundle> `
+  --config analysis/configs/render/attack_vs_victim_metrics_split_by_target_item.yaml
+```
+
+Batch render all direct child bundles:
+
+```powershell
+python analysis/pipeline/report_table_renderer.py `
+  --bundle-parent-dir results/comparisons/diginetica_attack_compare/attack_vs_victim_metrics_split_by_target_item `
+  --config analysis/configs/render/attack_vs_victim_metrics_split_by_target_item.yaml
+```
+
+## 2. Inputs and Trust Model
+
 This pipeline now assumes the appendable run-group architecture:
 
 - run-time state is stored under `outputs/runs/<dataset>/<experiment>/<run_group_key>/`
 - analysis resolves a comparable slice before rendering
 - comparison validates slice compatibility by default
 - rendering consumes propagated metadata and stays presentation-only
-
-## 1. Inputs and Trust Model
 
 Authoritative runtime inputs:
 
@@ -32,19 +73,18 @@ Legacy analysis note:
 - keep them for reference if you want, but do not feed them into strict comparison
 - regenerate fresh slice-aware bundles from current run-group outputs before comparing
 
-## 2. Generate A Slice-Aware Long Table
+## 3. Long CSV Notes
 
-```powershell
-python analysis/pipeline/long_csv_generator.py `
-  --summary outputs/runs/<dataset>/<experiment>/<run_group_key>/summary_current.json
-```
+The config supports shared defaults and multiple jobs:
 
-Optional flags:
-
-- `--slice-policy largest_complete_prefix|intersection_complete|all_available`
-- `--victim <victim_name>` repeated for explicit victim subsets
-- `--target-count <N>`
-- `--output-name <bundle_name>`
+- `defaults.slice_policy`
+- `defaults.requested_victims`
+- `defaults.requested_target_count`
+- `jobs[*].summary`
+- `jobs[*].output_name`
+- `jobs[*].slice_policy`
+- `jobs[*].requested_victims`
+- `jobs[*].requested_target_count`
 
 Default slice policy:
 
@@ -74,12 +114,7 @@ Outputs under `results/runs/<bundle_name>/`:
 - `k`
 - `value`
 
-## 3. Compare Compatible Bundles
-
-```powershell
-python analysis/pipeline/compare_runs.py `
-  --config analysis/configs/comparisons/<comparison>.yaml
-```
+## 4. Comparison Notes
 
 Comparison now loads each source bundle's sibling `slice_manifest.json`.
 
@@ -101,12 +136,7 @@ Outputs under `results/comparisons/<comparison_id>/`:
 - `manifest.json`
 - `slice_manifest.json`
 
-## 4. Build View Bundles
-
-```powershell
-python analysis/pipeline/view_table_builder.py `
-  --config analysis/configs/views/<view>.yaml
-```
+## 5. View Notes
 
 The view builder:
 
@@ -123,32 +153,17 @@ Typical outputs:
 
 When `split_by` is configured, multiple sibling bundles are written.
 
-## 5. Render From Propagated Metadata
-
-Single bundle:
-
-```powershell
-python analysis/pipeline/report_table_renderer.py `
-  --bundle-dir results/<...>/<view_bundle> `
-  --config analysis/configs/render/<render>.yaml
-```
-
-Batch render all direct child bundles:
-
-```powershell
-python analysis/pipeline/report_table_renderer.py `
-  --bundle-parent-dir results/<...>/<parent_dir> `
-  --config analysis/configs/render/<render>.yaml
-```
+## 6. Render Notes
 
 The renderer:
 
 - reads `table.csv` and `meta.json`
 - can display slice metadata from `context` / `slice_context`
+- can reorder row/column dimension values at render time with `table.dimension_value_orders`
 - does not load `run_coverage.json` or `target_registry.json`
 - does not recompute fairness
 
-## 6. Recommended End-to-End Flow
+## 7. Recommended End-to-End Flow
 
 1. Produce or append a run group with the attack pipeline.
 2. Generate one slice-aware long-table bundle from `summary_current.json`.
@@ -156,7 +171,7 @@ The renderer:
 4. Build one or more view bundles from the comparison output.
 5. Render final PNGs from the view bundles.
 
-## 7. Related Docs
+## 8. Related Docs
 
 - [Appendable Experiment Operator Guide](../docs/operator_workflow_guide.md)
 - [Analysis Slice Rules](../docs/analysis_slice_rules.md)

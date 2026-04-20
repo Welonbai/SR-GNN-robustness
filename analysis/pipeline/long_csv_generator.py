@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import yaml
 
 if __package__ is None or __package__ == "":
     import sys
@@ -95,44 +96,52 @@ class SliceSelection:
     fairness_safe: bool
 
 
+@dataclass(frozen=True)
+class LongCsvDefaultsSpec:
+    """Optional shared defaults applied to every batch job."""
+
+    output_name: str | None
+    slice_policy: str | None
+    requested_victims: list[str] | None
+    requested_target_count: int | None
+
+
+@dataclass(frozen=True)
+class LongCsvJobSpec:
+    """One validated long-table generation job from config."""
+
+    summary_path: Path
+    output_name: str | None
+    slice_policy: str | None
+    requested_victims: list[str] | None
+    requested_victims_source_override: str | None
+    requested_target_count: int | None
+
+
+@dataclass(frozen=True)
+class LongCsvBatchSpec:
+    """Validated batch config content for one long-table generation run."""
+
+    config_path: Path
+    jobs: list[LongCsvJobSpec]
+
+
 def build_arg_parser() -> argparse.ArgumentParser:
     """Create the Phase 7 CLI parser."""
     parser = argparse.ArgumentParser(
         description=(
-            "Convert one appendable run-group summary_current.json plus sibling runtime state "
-            "into a slice-aware canonical long_table.csv."
+            "Generate one or more slice-aware canonical long_table.csv bundles from a YAML config."
         ),
     )
     parser.add_argument(
-        "--summary",
+        "--config",
         required=True,
-        help="Path to one run-group summary JSON under outputs/. summary_current.json is preferred.",
+        help="Path to a long_csv YAML config.",
     )
     parser.add_argument(
-        "--output-name",
-        "--name",
-        dest="output_name",
-        help=(
-            "Optional output folder name under results/runs/. "
-            "If omitted, it is derived from the source run root plus slice identity."
-        ),
-    )
-    parser.add_argument(
-        "--slice-policy",
-        choices=SLICE_POLICIES,
-        default="largest_complete_prefix",
-        help="Slice policy. Defaults to largest_complete_prefix.",
-    )
-    parser.add_argument(
-        "--victim",
-        dest="requested_victims",
-        action="append",
-        help="Optional victim name to include. Repeat for multiple victims.",
-    )
-    parser.add_argument(
-        "--target-count",
-        type=int,
-        help="Optional cap on how many ordered targets from the materialized registry prefix may participate.",
+        "--spec",
+        dest="config",
+        help=argparse.SUPPRESS,
     )
     return parser
 
@@ -143,17 +152,14 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        result = generate_long_table_bundle(
-            summary_path=args.summary,
-            output_name=args.output_name,
-            slice_policy=args.slice_policy,
-            requested_victims=args.requested_victims,
-            requested_target_count=args.target_count,
+        config_path = resolve_existing_file(args.config, label="long_csv config")
+        spec = parse_long_csv_batch_spec(
+            load_yaml_mapping(config_path, label="long_csv config"),
+            source_config_path=config_path,
         )
-        print(
-            f"Wrote {result['row_count']} canonical rows to '{result['long_table_path']}' "
-            f"for output folder '{result['output_name']}'."
-        )
+        results = build_long_table_bundles(spec)
+        rendered_outputs = ", ".join(result["output_name"] for result in results)
+        print(f"Wrote {len(results)} long-table bundle(s): {rendered_outputs}")
     except AnalysisError as exc:
         raise SystemExit(f"Error: {exc}") from exc
 
@@ -167,6 +173,43 @@ def generate_long_table_bundle(
     requested_target_count: int | None,
 ) -> dict[str, object]:
     """Generate one slice-aware long-table bundle and return its key paths."""
+    return _generate_long_table_bundle(
+        summary_path=summary_path,
+        output_name=output_name,
+        slice_policy=slice_policy,
+        requested_victims=requested_victims,
+        requested_target_count=requested_target_count,
+        requested_victims_source_override=None,
+    )
+
+
+def build_long_table_bundles(spec: LongCsvBatchSpec) -> list[dict[str, object]]:
+    """Generate one or more slice-aware long-table bundles from a validated config."""
+    results: list[dict[str, object]] = []
+    for job in spec.jobs:
+        results.append(
+            _generate_long_table_bundle(
+                summary_path=job.summary_path,
+                output_name=job.output_name,
+                slice_policy=job.slice_policy,
+                requested_victims=job.requested_victims,
+                requested_target_count=job.requested_target_count,
+                requested_victims_source_override=job.requested_victims_source_override,
+            )
+        )
+    return results
+
+
+def _generate_long_table_bundle(
+    *,
+    summary_path: str | Path,
+    output_name: str | None,
+    slice_policy: str | None,
+    requested_victims: list[str] | None,
+    requested_target_count: int | None,
+    requested_victims_source_override: str | None,
+) -> dict[str, object]:
+    """Generate one slice-aware long-table bundle with an optional victim-source override."""
     requested_summary_path = resolve_existing_path(str(summary_path), label="summary JSON")
     ensure_path_within(requested_summary_path, OUTPUTS_ROOT, label="summary JSON")
     source_paths = resolve_source_artifacts(requested_summary_path)
@@ -189,6 +232,7 @@ def generate_long_table_bundle(
     resolved_requested_victims, requested_victims_source = resolve_requested_victims(
         run_coverage_payload,
         requested_victims=requested_victims,
+        requested_victims_source_override=requested_victims_source_override,
     )
     resolved_slice_policy = slice_policy or "largest_complete_prefix"
     slice_selection = resolve_slice(
@@ -292,8 +336,167 @@ def generate_long_table_bundle(
     }
 
 
+def parse_long_csv_batch_spec(
+    payload: Mapping[str, Any],
+    *,
+    source_config_path: Path,
+) -> LongCsvBatchSpec:
+    """Validate and normalize one long_csv YAML config."""
+    defaults = parse_long_csv_defaults_spec(payload.get("defaults"), label="defaults")
+    jobs_value = payload.get("jobs")
+    if not isinstance(jobs_value, list) or not jobs_value:
+        raise AnalysisError("Expected 'jobs' to be a non-empty list of job mappings.")
+
+    jobs: list[LongCsvJobSpec] = []
+    for index, raw_job in enumerate(jobs_value):
+        jobs.append(
+            parse_long_csv_job_spec(
+                require_mapping(raw_job, label=f"jobs[{index}]"),
+                label=f"jobs[{index}]",
+                defaults=defaults,
+            )
+        )
+
+    return LongCsvBatchSpec(config_path=source_config_path, jobs=jobs)
+
+
+def parse_long_csv_defaults_spec(value: Any, *, label: str) -> LongCsvDefaultsSpec:
+    """Normalize optional shared defaults from a batch config."""
+    if value is None:
+        return LongCsvDefaultsSpec(
+            output_name=None,
+            slice_policy=None,
+            requested_victims=None,
+            requested_target_count=None,
+        )
+
+    payload = require_mapping(value, label=label)
+    return LongCsvDefaultsSpec(
+        output_name=normalize_optional_output_name(
+            payload.get("output_name"),
+            label=f"{label}.output_name",
+        ),
+        slice_policy=normalize_optional_slice_policy(
+            payload.get("slice_policy"),
+            label=f"{label}.slice_policy",
+        ),
+        requested_victims=normalize_optional_requested_victims(
+            payload.get("requested_victims"),
+            label=f"{label}.requested_victims",
+        ),
+        requested_target_count=normalize_optional_requested_target_count(
+            payload.get("requested_target_count"),
+            label=f"{label}.requested_target_count",
+        ),
+    )
+
+
+def parse_long_csv_job_spec(
+    payload: Mapping[str, Any],
+    *,
+    label: str,
+    defaults: LongCsvDefaultsSpec,
+) -> LongCsvJobSpec:
+    """Normalize one long_csv batch job after applying shared defaults."""
+    summary_path = resolve_config_summary_path(
+        require_nonempty_string(payload.get("summary"), label=f"{label}.summary"),
+        label=f"{label}.summary",
+    )
+    raw_output_name = config_value_or_default(
+        payload,
+        key="output_name",
+        default=defaults.output_name,
+    )
+    raw_slice_policy = config_value_or_default(
+        payload,
+        key="slice_policy",
+        default=defaults.slice_policy,
+    )
+    raw_requested_victims = config_value_or_default(
+        payload,
+        key="requested_victims",
+        default=defaults.requested_victims,
+    )
+    raw_requested_target_count = config_value_or_default(
+        payload,
+        key="requested_target_count",
+        default=defaults.requested_target_count,
+    )
+
+    requested_victims = normalize_optional_requested_victims(
+        raw_requested_victims,
+        label=f"{label}.requested_victims",
+    )
+    return LongCsvJobSpec(
+        summary_path=summary_path,
+        output_name=normalize_optional_output_name(
+            raw_output_name,
+            label=f"{label}.output_name",
+        ),
+        slice_policy=normalize_optional_slice_policy(
+            raw_slice_policy,
+            label=f"{label}.slice_policy",
+        ),
+        requested_victims=requested_victims,
+        requested_victims_source_override="config" if requested_victims is not None else None,
+        requested_target_count=normalize_optional_requested_target_count(
+            raw_requested_target_count,
+            label=f"{label}.requested_target_count",
+        ),
+    )
+
+
+def config_value_or_default(
+    payload: Mapping[str, Any],
+    *,
+    key: str,
+    default: Any,
+) -> Any:
+    """Return one config value, allowing explicit null to clear a shared default."""
+    if key in payload:
+        return payload[key]
+    return default
+
+
+def load_yaml_mapping(path: Path, *, label: str) -> Mapping[str, Any]:
+    """Load a YAML file and require a top-level mapping."""
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise AnalysisError(f"The {label} at '{path}' is not valid YAML: {exc}.") from exc
+
+    if not isinstance(payload, Mapping):
+        raise AnalysisError(f"The {label} at '{path}' must contain a top-level mapping.")
+    return payload
+
+
+def resolve_existing_file(raw_path: str, *, label: str) -> Path:
+    """Resolve and validate one existing file path relative to the repo when needed."""
+    path = resolve_repo_path(raw_path)
+    if not path.exists():
+        raise AnalysisError(f"The {label} path does not exist: '{path}'.")
+    if not path.is_file():
+        raise AnalysisError(f"The {label} path is not a file: '{path}'.")
+    return path
+
+
+def resolve_repo_path(raw_path: str) -> Path:
+    """Resolve one path relative to the repository root when needed."""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path.resolve()
+
+
+def resolve_config_summary_path(raw_path: str, *, label: str) -> Path:
+    """Resolve one configured summary path and require it to stay under outputs/."""
+    path = resolve_existing_file(raw_path, label=label)
+    ensure_path_within(path, OUTPUTS_ROOT, label=label)
+    return path
+
+
 def resolve_existing_path(raw_path: str, *, label: str) -> Path:
-    """Resolve an existing path provided on the CLI."""
+    """Resolve one existing file path."""
     path = Path(raw_path).expanduser().resolve()
     if not path.exists():
         raise AnalysisError(f"The {label} path does not exist: '{path}'.")
@@ -434,15 +637,15 @@ def resolve_output_name(
 
     candidate = raw_output_name.strip()
     if not candidate:
-        raise AnalysisError("The provided --output-name is empty.")
+        raise AnalysisError("The provided output_name is empty.")
     if "\\" in candidate or "/" in candidate:
-        raise AnalysisError("The --output-name value must be a single folder name, not a path.")
+        raise AnalysisError("The output_name value must be a single folder name, not a path.")
 
     parts = [sanitize_component(part) for part in re.split(r"__+", candidate)]
     normalized = "__".join(part for part in parts if part)
     if not normalized:
         raise AnalysisError(
-            f"The provided --output-name '{raw_output_name}' does not contain any usable characters."
+            f"The provided output_name '{raw_output_name}' does not contain any usable characters."
         )
     return normalized
 
@@ -577,8 +780,9 @@ def resolve_requested_victims(
     run_coverage_payload: Mapping[str, Any],
     *,
     requested_victims: list[str] | None,
+    requested_victims_source_override: str | None = None,
 ) -> tuple[list[str], str]:
-    """Resolve requested victims from CLI input or run-group state."""
+    """Resolve requested victims from config/CLI input or run-group state."""
     victims_payload = require_mapping(
         run_coverage_payload.get("victims"),
         label="run_coverage.victims",
@@ -604,7 +808,7 @@ def resolve_requested_victims(
         normalized.append(normalized_name)
     if not normalized:
         raise AnalysisError("The requested victim set must not be empty.")
-    return normalized, "cli"
+    return normalized, requested_victims_source_override or "cli"
 
 
 def resolve_slice(
@@ -973,6 +1177,59 @@ def require_nonempty_string(value: Any, *, label: str) -> str:
     if not stripped:
         raise AnalysisError(f"Expected '{label}' to be a non-empty string.")
     return stripped
+
+
+def normalize_optional_output_name(value: Any, *, label: str) -> str | None:
+    """Normalize one optional output_name from config."""
+    if value is None:
+        return None
+
+    output_name = require_nonempty_string(value, label=label)
+    if "\\" in output_name or "/" in output_name:
+        raise AnalysisError(f"The '{label}' value must be a single folder name, not a path.")
+    return output_name
+
+
+def normalize_optional_slice_policy(value: Any, *, label: str) -> str | None:
+    """Normalize one optional slice policy token."""
+    if value is None:
+        return None
+
+    slice_policy = require_nonempty_string(value, label=label)
+    if slice_policy not in SLICE_POLICIES:
+        raise AnalysisError(
+            f"Unsupported '{label}' value '{slice_policy}'. Expected one of {list(SLICE_POLICIES)}."
+        )
+    return slice_policy
+
+
+def normalize_optional_requested_victims(value: Any, *, label: str) -> list[str] | None:
+    """Normalize one optional requested_victims list from config."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value:
+        raise AnalysisError(f"Expected '{label}' to be a non-empty list of strings.")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, raw_victim_name in enumerate(value):
+        victim_name = require_nonempty_string(raw_victim_name, label=f"{label}[{index}]")
+        if victim_name in seen:
+            raise AnalysisError(f"Duplicate requested victim '{victim_name}' in '{label}'.")
+        seen.add(victim_name)
+        normalized.append(victim_name)
+    return normalized
+
+
+def normalize_optional_requested_target_count(value: Any, *, label: str) -> int | None:
+    """Normalize one optional requested_target_count value from config."""
+    if value is None:
+        return None
+
+    target_count = require_int(value, label=label)
+    if target_count < 0:
+        raise AnalysisError(f"Expected '{label}' to be non-negative.")
+    return target_count
 
 
 def require_float(value: Any, *, label: str) -> float:

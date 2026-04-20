@@ -56,6 +56,14 @@ table:
 
   value_alias: {}
 
+  dimension_value_orders:
+    attack_method:
+      - clean
+      - dpsbr_baseline
+      - prefix_nonzero_when_possible
+      - random_nonzero_when_possible
+      - position_opt_mvp
+
   scope_colors:
     metric_scope:
       ground_truth: "#E8F1FF"

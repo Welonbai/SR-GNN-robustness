@@ -1,7 +1,7 @@
 name: attack_vs_victim_metrics_split_by_target_item
 
-input: results\comparisons\clean_vs_heuristic_optimization_diginetica_popular_0.1size\merged_long_table.csv
-output_dir: results\comparisons\clean_vs_heuristic_optimization_diginetica_popular_0.1size
+input: results\comparisons\diginetica_attack_compare\merged_long_table.csv
+output_dir: results\comparisons\diginetica_attack_compare
 filters:
   poison_model: srgnn
   target_type: popular
