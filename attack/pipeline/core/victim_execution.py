@@ -28,6 +28,7 @@ class VictimExecutionResult:
 def execute_single_victim(
     config: Config,
     *,
+    run_type: str,
     victim_name: str,
     canonical_dataset: CanonicalDataset,
     poisoned_sessions: Sequence[Sequence[int]],
@@ -39,11 +40,11 @@ def execute_single_victim(
     srg_nn_export_paths: dict[str, Path] | None = None,
     predictions_path: Path | None = None,
 ) -> VictimExecutionResult:
-    victim_stage_seed = derive_seed(
-        config.seeds.victim_train_seed,
-        "victim_train",
-        victim_name,
-        int(target_item),
+    victim_stage_seed = _victim_stage_seed(
+        config,
+        victim_name=victim_name,
+        run_type=run_type,
+        target_item=target_item,
     )
     set_seed(victim_stage_seed)
     max_topk = max(eval_topk)
@@ -83,7 +84,7 @@ def execute_single_victim(
                 attacked_train_data,
                 attacked_valid_data,
                 victim_epochs,
-                target_item=target_item,
+                target_item=(None if run_type == "clean" else target_item),
                 topk=max_topk,
             )
             if attacked_runner.train_loss_history:
@@ -252,6 +253,27 @@ def execute_single_victim(
         )
 
     raise ValueError(f"Unsupported victim model: {victim_name}")
+
+
+def _victim_stage_seed(
+    config: Config,
+    *,
+    victim_name: str,
+    run_type: str,
+    target_item: int,
+) -> int:
+    if run_type == "clean":
+        return derive_seed(
+            config.seeds.victim_train_seed,
+            "victim_train",
+            victim_name,
+        )
+    return derive_seed(
+        config.seeds.victim_train_seed,
+        "victim_train",
+        victim_name,
+        int(target_item),
+    )
 
 
 def _require_victim_train_config(config: Config, victim_name: str) -> dict[str, object]:

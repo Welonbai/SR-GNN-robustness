@@ -57,6 +57,7 @@ from attack.pipeline.core.victim_execution import VictimExecutionResult, execute
 PROGRESS_TIMEZONE = "Asia/Taipei"
 _PROGRESS_ZONE = ZoneInfo(PROGRESS_TIMEZONE)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+_DROP_SHARED_METADATA = object()
 
 
 @dataclass(frozen=True)
@@ -263,6 +264,8 @@ def run_targets_and_victims(
 
                 victim_result, reused = _maybe_reuse_or_execute_victim(
                     config,
+                    run_type=run_type,
+                    run_coverage=run_coverage,
                     victim_name=victim_name,
                     canonical_dataset=context.canonical_dataset,
                     poisoned_sessions=target_payload.poisoned.sessions,
@@ -1633,6 +1636,8 @@ def _progress_timestamp() -> str:
 def _maybe_reuse_or_execute_victim(
     config: Config,
     *,
+    run_type: str,
+    run_coverage: Mapping[str, Any],
     victim_name: str,
     canonical_dataset: CanonicalDataset,
     poisoned_sessions: list[list[int]],
@@ -1645,9 +1650,17 @@ def _maybe_reuse_or_execute_victim(
     predictions_path: Path,
     artifacts: dict[str, Path],
 ) -> tuple[VictimExecutionResult, bool]:
+    _guard_clean_shared_cache_bootstrap(
+        run_type=run_type,
+        run_coverage=run_coverage,
+        victim_name=victim_name,
+        artifacts=artifacts,
+    )
     reused = _load_shared_victim_result(
         config,
+        run_type=run_type,
         victim_name=victim_name,
+        target_item=target_item,
         run_dir=run_dir,
         artifacts=artifacts,
         predictions_path=predictions_path,
@@ -1661,6 +1674,7 @@ def _maybe_reuse_or_execute_victim(
 
     victim_result = execute_single_victim(
         config,
+        run_type=run_type,
         victim_name=victim_name,
         canonical_dataset=canonical_dataset,
         poisoned_sessions=poisoned_sessions,
@@ -1672,14 +1686,20 @@ def _maybe_reuse_or_execute_victim(
         srg_nn_export_paths=srg_nn_export_paths,
         predictions_path=predictions_path,
     )
-    _persist_shared_victim_result(victim_result, artifacts=artifacts)
+    _persist_shared_victim_result(
+        run_type=run_type,
+        victim_result=victim_result,
+        artifacts=artifacts,
+    )
     return victim_result, False
 
 
 def _load_shared_victim_result(
     config: Config,
     *,
+    run_type: str,
     victim_name: str,
+    target_item: int,
     run_dir: Path,
     artifacts: dict[str, Path],
     predictions_path: Path,
@@ -1689,17 +1709,21 @@ def _load_shared_victim_result(
     if not shared_predictions.exists() or not shared_execution_result.exists():
         return None
 
-    _copy_if_exists(shared_predictions, predictions_path)
+    execution_payload = load_json(shared_execution_result)
+    predictions_payload = load_json(shared_predictions)
+    if not isinstance(execution_payload, dict) or not isinstance(predictions_payload, dict):
+        raise ValueError("Shared victim artifacts are malformed.")
+
+    _save_reused_predictions_payload(
+        predictions_payload,
+        predictions_path=predictions_path,
+        target_item=target_item,
+    )
     _copy_if_exists(artifacts["shared_train_history"], artifacts["train_history"])
     poisoned_train_local: Path | None = None
     if artifacts["shared_poisoned_train"].exists():
         _copy_if_exists(artifacts["shared_poisoned_train"], artifacts["poisoned_train"])
         poisoned_train_local = artifacts["poisoned_train"]
-
-    execution_payload = load_json(shared_execution_result)
-    predictions_payload = load_json(shared_predictions)
-    if not isinstance(execution_payload, dict) or not isinstance(predictions_payload, dict):
-        raise ValueError("Shared victim artifacts are malformed.")
 
     _write_reused_victim_resolved_config(
         config,
@@ -1713,9 +1737,10 @@ def _load_shared_victim_result(
     if rankings_raw is not None:
         rankings = [list(map(int, row)) for row in rankings_raw]
 
-    extra = execution_payload.get("extra", {})
-    if not isinstance(extra, dict):
-        extra = {}
+    extra = _shared_execution_extra(
+        run_type=run_type,
+        extra=execution_payload.get("extra", {}),
+    )
     return VictimExecutionResult(
         predictions=rankings,
         predictions_path=predictions_path,
@@ -1725,8 +1750,9 @@ def _load_shared_victim_result(
 
 
 def _persist_shared_victim_result(
-    victim_result: VictimExecutionResult,
     *,
+    run_type: str,
+    victim_result: VictimExecutionResult,
     artifacts: dict[str, Path],
 ) -> None:
     artifacts["shared_dir"].mkdir(parents=True, exist_ok=True)
@@ -1738,7 +1764,10 @@ def _persist_shared_victim_result(
         shared_poisoned_train = str(artifacts["shared_poisoned_train"])
     save_json(
         {
-            "extra": victim_result.extra,
+            "extra": _shared_execution_extra(
+                run_type=run_type,
+                extra=victim_result.extra,
+            ),
             "predictions_path": str(artifacts["shared_predictions"]),
             "train_history_path": (
                 str(artifacts["shared_train_history"])
@@ -1796,6 +1825,129 @@ def _copy_if_exists(source: Path, destination: Path) -> None:
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
+
+
+def _shared_execution_extra(
+    *,
+    run_type: str,
+    extra: Any,
+) -> dict[str, object]:
+    if not isinstance(extra, Mapping):
+        return {}
+    if run_type != "clean":
+        return dict(extra)
+    sanitized = _sanitize_clean_shared_extra(extra)
+    if sanitized is _DROP_SHARED_METADATA or not isinstance(sanitized, dict):
+        return {}
+    return sanitized
+
+
+def _sanitize_clean_shared_extra(
+    value: Any,
+    *,
+    parent_key: str | None = None,
+) -> Any:
+    if isinstance(value, Path):
+        return _DROP_SHARED_METADATA
+    if isinstance(value, Mapping):
+        sanitized: dict[str, Any] = {}
+        for raw_key, item in value.items():
+            key = str(raw_key)
+            cleaned = _sanitize_clean_shared_extra(item, parent_key=key)
+            if cleaned is _DROP_SHARED_METADATA:
+                continue
+            if isinstance(cleaned, dict) and not cleaned:
+                continue
+            if isinstance(cleaned, list) and not cleaned:
+                continue
+            sanitized[key] = cleaned
+        return sanitized if sanitized else _DROP_SHARED_METADATA
+    if isinstance(value, (list, tuple)):
+        sanitized_items = []
+        for item in value:
+            cleaned = _sanitize_clean_shared_extra(item, parent_key=parent_key)
+            if cleaned is _DROP_SHARED_METADATA:
+                continue
+            if isinstance(cleaned, dict) and not cleaned:
+                continue
+            if isinstance(cleaned, list) and not cleaned:
+                continue
+            sanitized_items.append(cleaned)
+        return sanitized_items if sanitized_items else _DROP_SHARED_METADATA
+    if isinstance(value, str) and _looks_like_local_path_metadata(value=value, key=parent_key):
+        return _DROP_SHARED_METADATA
+    return value
+
+
+def _looks_like_local_path_metadata(
+    *,
+    value: str,
+    key: str | None,
+) -> bool:
+    key_lower = (key or "").strip().lower()
+    if any(token in key_lower for token in ("path", "dir", "root", "checkpoint", "log")):
+        return True
+    normalized = value.replace("\\", "/").strip()
+    if not normalized:
+        return False
+    if normalized.startswith(("outputs/", "./", "../", "/")):
+        return True
+    if len(normalized) >= 3 and normalized[1] == ":" and normalized[2] == "/":
+        return True
+    if "/" not in normalized:
+        return False
+    if normalized.count("/") >= 2:
+        return True
+    return bool(Path(normalized).suffix)
+
+
+def _guard_clean_shared_cache_bootstrap(
+    *,
+    run_type: str,
+    run_coverage: Mapping[str, Any],
+    victim_name: str,
+    artifacts: Mapping[str, Path],
+) -> None:
+    if run_type != "clean":
+        return
+    if artifacts["shared_predictions"].exists() and artifacts["shared_execution_result"].exists():
+        return
+    if not _coverage_has_completed_victim_cells(run_coverage, victim_name=victim_name):
+        return
+    raise RuntimeError(
+        "Clean append would mix existing target-scoped victim results with the new "
+        "target-agnostic shared clean cache because completed cells already exist for "
+        f"victim '{victim_name}' but {artifacts['shared_predictions']} is missing. "
+        "Regenerate or migrate this clean run group before appending new targets or victims."
+    )
+
+
+def _coverage_has_completed_victim_cells(
+    run_coverage: Mapping[str, Any],
+    *,
+    victim_name: str,
+) -> bool:
+    cells_payload = run_coverage.get("cells", {})
+    if not isinstance(cells_payload, Mapping):
+        return False
+    for target_cells in cells_payload.values():
+        if not isinstance(target_cells, Mapping):
+            continue
+        cell = target_cells.get(victim_name)
+        if isinstance(cell, Mapping) and cell.get("status") == "completed":
+            return True
+    return False
+
+
+def _save_reused_predictions_payload(
+    predictions_payload: Mapping[str, Any],
+    *,
+    predictions_path: Path,
+    target_item: int,
+) -> None:
+    local_payload = dict(predictions_payload)
+    local_payload["target_item"] = int(target_item)
+    save_json(local_payload, predictions_path)
 
 
 def _write_reused_victim_resolved_config(

@@ -459,7 +459,7 @@ def shared_victim_dir(
     victim_name: str,
     attack_identity_context: Mapping[str, Any] | None = None,
 ) -> Path:
-    return (
+    base = (
         shared_root(config)
         / "victim_predictions"
         / victim_name
@@ -469,9 +469,12 @@ def shared_victim_dir(
             run_type=run_type,
             attack_identity_context=attack_identity_context,
         )
-        / "targets"
-        / str(target_id)
     )
+    if run_type == "clean":
+        # Clean victim execution is target-agnostic: one trained model and one
+        # prediction export are reused across all target evaluations.
+        return base / "shared"
+    return base / "targets" / str(target_id)
 
 
 def runs_root(config: Config) -> Path:

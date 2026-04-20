@@ -31,6 +31,7 @@ def run_clean(
     stats = compute_session_stats(canonical_dataset.train_sub)
     shared_paths = shared_artifact_paths(config, run_type="clean")
     clean_sessions, clean_labels = build_clean_pairs(canonical_dataset)
+    clean_poisoned = build_poisoned_dataset(clean_sessions, clean_labels, [])
 
     export_paths: dict[str, Path] | None = None
     if "srgnn" in config.victims.enabled:
@@ -49,7 +50,6 @@ def run_clean(
     )
 
     def build_poisoned(target_item: int) -> TargetPoisonOutput:
-        poisoned = build_poisoned_dataset(clean_sessions, clean_labels, [])
         target_root = target_dir(config, target_item, run_type="clean")
         target_root.mkdir(parents=True, exist_ok=True)
         position_stats_path = save_position_stats(
@@ -61,7 +61,7 @@ def run_clean(
             note="Clean run injects no fake sessions, so no replacement positions are used.",
         )
         return TargetPoisonOutput(
-            poisoned=poisoned,
+            poisoned=clean_poisoned,
             metadata={"position_stats_path": str(position_stats_path)},
         )
 
