@@ -417,7 +417,7 @@ def test_clean_target_append_reuses_shared_predictions_without_new_execution(mon
 
 def test_run_clean_reuses_one_target_invariant_poisoned_bundle(monkeypatch) -> None:
     with _temp_root() as temp_root:
-        config = _config_for_temp_root(temp_root, count=3)
+        config = _config_for_temp_root(temp_root, count=3, victims=("srgnn",))
         fake_dataset = SimpleNamespace(
             train_sub=[[1, 2, 3], [2, 3, 4]],
             valid=[[1, 2]],
@@ -464,6 +464,11 @@ def test_run_clean_reuses_one_target_invariant_poisoned_bundle(monkeypatch) -> N
             assert run_type == "clean"
             assert config_path is None
             assert context.canonical_dataset is fake_dataset
+            metadata_paths = run_metadata_paths(_config, run_type="clean")
+            assert metadata_paths["run_root"].exists() is False
+            assert context.export_paths is not None
+            shared_attack_dir = shared_artifact_paths(_config, run_type="clean")["attack_shared_dir"]
+            assert Path(context.export_paths["train"]).is_relative_to(shared_attack_dir)
             for target_item in (101, 202, 303):
                 payload = build_poisoned(target_item)
                 poisoned_ids.append(id(payload.poisoned))

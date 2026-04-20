@@ -9,7 +9,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from attack.common.config import Config, load_config
-from attack.common.paths import run_config_dir, shared_artifact_paths, target_dir
+from attack.common.paths import shared_artifact_paths, target_dir
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.data.session_stats import compute_session_stats
@@ -35,7 +35,7 @@ def run_clean(
 
     export_paths: dict[str, Path] | None = None
     if "srgnn" in config.victims.enabled:
-        export_root = run_config_dir(config, run_type="clean") / "export" / "srgnn_clean"
+        export_root = shared_paths["attack_shared_dir"] / "export" / "srgnn_clean"
         export_result = SRGNNExporter().export(canonical_dataset, export_root)
         export_paths = export_result.files
 
