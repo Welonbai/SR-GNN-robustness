@@ -1,0 +1,110 @@
+{
+  "case": {
+    "case_id": "tron_pair",
+    "description": "Same-victim case pair on TRON: failure case target 5334 where Prefix beats PosOptMVP, and success case target 11103 where PosOptMVP beats Prefix.",
+    "kind": "same_victim_pair",
+    "targets": [
+      5334,
+      11103
+    ],
+    "victims": [
+      "tron"
+    ]
+  },
+  "generated_plots": [
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/targeted_metrics_overview.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/final_position_histogram_target_5334.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/normalized_position_histogram_target_5334.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_reward_curve_target_5334.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_baseline_curve_target_5334.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_advantage_curve_target_5334.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_mean_entropy_curve_target_5334.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_average_selected_position_curve_target_5334.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/final_position_histogram_target_11103.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/normalized_position_histogram_target_11103.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_reward_curve_target_11103.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_baseline_curve_target_11103.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_advantage_curve_target_11103.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_mean_entropy_curve_target_11103.png",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/plots/posopt_average_selected_position_curve_target_11103.png"
+  ],
+  "generated_tables": [
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/metrics_comparison.csv",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/position_comparison.csv",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/per_session_join.csv",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/per_session_context_join.csv",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/context_comparison.csv",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/top_replaced_original_items.csv",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/top_left_neighbors.csv",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/top_right_neighbors.csv",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/posopt_training_dynamics.csv",
+    "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103/summary.json"
+  ],
+  "input_roots": {
+    "posopt_run_group_root": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46",
+    "prefix_run_group_root": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6",
+    "repo_root": ".",
+    "shared_fake_sessions_path": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/fake_sessions.pkl"
+  },
+  "output_dir": "analysis/diagnosis_outputs/prefix_vs_posopt/tron_case_pair_5334_vs_11103",
+  "target_level_inputs": [
+    {
+      "posopt_artifacts": {
+        "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt/optimized_poisoned_sessions.pkl",
+        "position_stats": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_stats.json",
+        "run_metadata": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt/run_metadata.json",
+        "selected_positions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt/selected_positions.json",
+        "target_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334",
+        "training_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt/training_history.json"
+      },
+      "prefix_artifacts": {
+        "position_stats": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/position_stats.json",
+        "selected_positions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/prefix_nonzero_when_possible_metadata.pkl",
+        "target_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334"
+      },
+      "target_item": 5334
+    },
+    {
+      "posopt_artifacts": {
+        "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt/optimized_poisoned_sessions.pkl",
+        "position_stats": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_stats.json",
+        "run_metadata": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt/run_metadata.json",
+        "selected_positions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt/selected_positions.json",
+        "target_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103",
+        "training_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt/training_history.json"
+      },
+      "prefix_artifacts": {
+        "position_stats": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/position_stats.json",
+        "selected_positions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/prefix_nonzero_when_possible_metadata.pkl",
+        "target_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103"
+      },
+      "target_item": 11103
+    }
+  ],
+  "victim_level_inputs": [
+    {
+      "posopt_metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron/metrics.json",
+      "posopt_resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron/resolved_config.json",
+      "posopt_run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron",
+      "posopt_train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron/train_history.json",
+      "prefix_metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron/metrics.json",
+      "prefix_resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron/resolved_config.json",
+      "prefix_run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron",
+      "prefix_train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron/train_history.json",
+      "target_item": 5334,
+      "victim_model": "tron"
+    },
+    {
+      "posopt_metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron/metrics.json",
+      "posopt_resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron/resolved_config.json",
+      "posopt_run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron",
+      "posopt_train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron/train_history.json",
+      "prefix_metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron/metrics.json",
+      "prefix_resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron/resolved_config.json",
+      "prefix_run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron",
+      "prefix_train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron/train_history.json",
+      "target_item": 11103,
+      "victim_model": "tron"
+    }
+  ]
+}

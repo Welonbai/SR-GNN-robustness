@@ -5,38 +5,107 @@ from typing import Sequence
 import torch
 from torch import nn
 
+from attack.position_opt.feature_builder import (
+    CandidateFeatureTensors,
+    SessionCandidateFeatures,
+)
 
-class PerSessionLogitPolicy(nn.Module):
-    """MVP position policy with one learnable logit vector per fake session."""
 
-    def __init__(self, candidate_sizes: Sequence[int]) -> None:
+class SharedContextualPositionPolicy(nn.Module):
+    """Shared contextual scorer for candidate replacement positions."""
+
+    def __init__(
+        self,
+        *,
+        num_item_embeddings: int,
+        embedding_dim: int,
+        hidden_dim: int,
+    ) -> None:
         super().__init__()
-        normalized_sizes = [int(size) for size in candidate_sizes]
-        if not normalized_sizes:
-            raise ValueError("candidate_sizes must contain at least one session.")
-        if any(size <= 0 for size in normalized_sizes):
-            raise ValueError("Each session must have at least one candidate position.")
+        normalized_vocab_size = int(num_item_embeddings)
+        normalized_embedding_dim = int(embedding_dim)
+        normalized_hidden_dim = int(hidden_dim)
+        if normalized_vocab_size <= 0:
+            raise ValueError("num_item_embeddings must be positive.")
+        if normalized_embedding_dim <= 0:
+            raise ValueError("embedding_dim must be positive.")
+        if normalized_hidden_dim <= 0:
+            raise ValueError("hidden_dim must be positive.")
 
-        self._candidate_sizes = tuple(normalized_sizes)
-        self._logits = nn.ParameterList(
-            [nn.Parameter(torch.zeros(size, dtype=torch.float32)) for size in normalized_sizes]
+        self.num_item_embeddings = normalized_vocab_size
+        self.embedding_dim = normalized_embedding_dim
+        self.hidden_dim = normalized_hidden_dim
+        self.item_embedding = nn.Embedding(
+            num_embeddings=self.num_item_embeddings,
+            embedding_dim=self.embedding_dim,
+        )
+        self.scorer = nn.Sequential(
+            nn.Linear((self.embedding_dim * 4) + 3, self.hidden_dim),
+            nn.ReLU(),
+            nn.Linear(self.hidden_dim, 1),
         )
 
-    @property
-    def num_sessions(self) -> int:
-        return len(self._logits)
+    def score_candidates(self, features: CandidateFeatureTensors) -> torch.Tensor:
+        device = self.item_embedding.weight.device
+        batch = features.to(device)
+        _validate_item_id_range(
+            batch,
+            num_item_embeddings=self.num_item_embeddings,
+        )
 
-    @property
-    def candidate_sizes(self) -> tuple[int, ...]:
-        return self._candidate_sizes
+        target_embedding = self.item_embedding(batch.target_item_ids)
+        original_embedding = self.item_embedding(batch.original_item_ids)
+        left_embedding = self.item_embedding(batch.left_item_ids)
+        right_embedding = self.item_embedding(batch.right_item_ids)
+        scalar_features = torch.stack(
+            (
+                batch.position_indices.to(dtype=torch.float32),
+                batch.normalized_positions.to(dtype=torch.float32),
+                batch.session_lengths.to(dtype=torch.float32),
+            ),
+            dim=1,
+        )
+        model_input = torch.cat(
+            (
+                target_embedding,
+                original_embedding,
+                left_embedding,
+                right_embedding,
+                scalar_features,
+            ),
+            dim=1,
+        )
+        logits = self.scorer(model_input).squeeze(-1)
+        if logits.ndim != 1:
+            raise RuntimeError("Policy scorer must return a 1D logit per candidate.")
+        return logits
 
-    def get_logits(self, session_idx: int) -> torch.Tensor:
-        if session_idx < 0 or session_idx >= len(self._logits):
-            raise IndexError("session_idx is outside the policy range.")
-        return self._logits[int(session_idx)]
+    def export_logits(
+        self,
+        features: Sequence[SessionCandidateFeatures],
+    ) -> list[torch.Tensor]:
+        with torch.no_grad():
+            return [
+                self.score_candidates(session_features.tensors).detach().cpu().clone()
+                for session_features in features
+            ]
 
-    def export_logits(self) -> list[torch.Tensor]:
-        return [param.detach().cpu().clone() for param in self._logits]
+
+def _validate_item_id_range(
+    features: CandidateFeatureTensors,
+    *,
+    num_item_embeddings: int,
+) -> None:
+    for tensor in (
+        features.target_item_ids,
+        features.original_item_ids,
+        features.left_item_ids,
+        features.right_item_ids,
+    ):
+        if int(torch.min(tensor).item()) < 0:
+            raise ValueError("Candidate item ids must be non-negative.")
+        if int(torch.max(tensor).item()) >= int(num_item_embeddings):
+            raise ValueError("Candidate item ids exceed the embedding table range.")
 
 
-__all__ = ["PerSessionLogitPolicy"]
+__all__ = ["SharedContextualPositionPolicy"]

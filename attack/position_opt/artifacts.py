@@ -10,6 +10,7 @@ from .types import PositionOptArtifactPaths
 
 
 POSITION_OPT_RUN_TYPE = "position_opt_mvp"
+POSITION_OPT_SHARED_POLICY_RUN_TYPE = "position_opt_shared_policy"
 
 
 def resolve_clean_surrogate_checkpoint_path(
@@ -94,6 +95,7 @@ def ensure_position_opt_artifact_dirs(paths: PositionOptArtifactPaths) -> Positi
 
 __all__ = [
     "POSITION_OPT_RUN_TYPE",
+    "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
     "build_position_opt_artifact_paths",
     "ensure_position_opt_artifact_dirs",
     "resolve_clean_surrogate_checkpoint_path",

@@ -78,6 +78,9 @@ def _write_run_group_artifacts(
     *,
     target_order: list[int],
     current_count: int,
+    coverage_target_count: int | None = None,
+    materialized_target_prefix_count: int | None = None,
+    include_materialized_target_prefix_count: bool = True,
     coverage_statuses: dict[int, dict[str, str]],
     summary_metrics: dict[int, dict[str, float]],
     victims: list[str],
@@ -95,6 +98,18 @@ def _write_run_group_artifacts(
     )
     run_root.mkdir(parents=True, exist_ok=True)
     target_registry_path.parent.mkdir(parents=True, exist_ok=True)
+    coverage_target_count = current_count if coverage_target_count is None else coverage_target_count
+    effective_materialized_target_prefix_count = materialized_target_prefix_count
+    if effective_materialized_target_prefix_count is None:
+        effective_materialized_target_prefix_count = 0
+        for target_item in target_order[:coverage_target_count]:
+            if all(
+                coverage_statuses[target_item][victim_name] == "completed"
+                for victim_name in victims
+            ):
+                effective_materialized_target_prefix_count += 1
+                continue
+            break
 
     target_registry_path.write_text(
         __import__("json").dumps(
@@ -124,7 +139,7 @@ def _write_run_group_artifacts(
         "target_cohort_key": target_cohort_key,
         "split_key": "split_test",
         "run_type": "clean",
-        "targets_order": target_order[:current_count],
+        "targets_order": target_order[:coverage_target_count],
         "victims": {
             victim_name: {
                 "status": "requested",
@@ -156,11 +171,15 @@ def _write_run_group_artifacts(
                 }
                 for victim_name in victims
             }
-            for target_item in target_order[:current_count]
+            for target_item in target_order[:coverage_target_count]
         },
         "created_at": "2026-04-19T00:00:00+00:00",
         "updated_at": "2026-04-19T00:00:00+00:00",
     }
+    if include_materialized_target_prefix_count:
+        run_coverage_payload["materialized_target_prefix_count"] = (
+            effective_materialized_target_prefix_count
+        )
     (run_root / "run_coverage.json").write_text(
         __import__("json").dumps(run_coverage_payload, indent=2, sort_keys=True),
         encoding="utf-8",
@@ -172,7 +191,7 @@ def _write_run_group_artifacts(
         "target_cohort_key": target_cohort_key,
         "is_snapshot": True,
         "snapshot_source": "run_coverage_and_cell_artifacts",
-        "target_items": target_order[:current_count],
+        "target_items": target_order[:coverage_target_count],
         "victims": victims,
         "targets": {
             str(target_item): _summary_target_payload(target_item, summary_metrics[target_item])
@@ -218,6 +237,7 @@ def test_largest_complete_prefix_uses_coverage_and_not_summary_snapshot() -> Non
             outputs_root,
             target_order=[11, 22, 33, 44],
             current_count=4,
+            materialized_target_prefix_count=4,
             victims=["miasrec", "tron"],
             coverage_statuses={
                 11: {"miasrec": "completed", "tron": "completed"},
@@ -251,6 +271,153 @@ def test_largest_complete_prefix_uses_coverage_and_not_summary_snapshot() -> Non
     assert {"target_item": 33, "victim_name": "tron", "status": "failed"} in slice_manifest[
         "excluded_incomplete_cells"
     ]
+
+
+def test_run_group_local_targets_order_caps_analysis_even_when_shared_registry_prefix_is_larger() -> None:
+    with _phase7_temp_roots() as (outputs_root, token):
+        summary_path = _write_run_group_artifacts(
+            outputs_root,
+            target_order=[11, 22, 33, 44, 55, 66],
+            current_count=6,
+            coverage_target_count=3,
+            victims=["tron"],
+            coverage_statuses={
+                11: {"tron": "completed"},
+                22: {"tron": "completed"},
+                33: {"tron": "completed"},
+            },
+            summary_metrics={
+                11: {"tron": 0.11},
+                22: {"tron": 0.22},
+                33: {"tron": 0.33},
+            },
+        )
+        result = generate_long_table_bundle(
+            summary_path=summary_path,
+            output_name=f"phase7_{token}_local_prefix",
+            slice_policy="largest_complete_prefix",
+            requested_victims=None,
+            requested_target_count=None,
+        )
+        dataframe = pd.read_csv(result["long_table_path"])
+        slice_manifest = load_json_mapping(result["slice_manifest_path"], label="slice_manifest JSON")
+
+    assert dataframe["target_item"].drop_duplicates().tolist() == [11, 22, 33]
+    assert slice_manifest["selected_targets"] == [11, 22, 33]
+    assert slice_manifest["excluded_targets"] == []
+
+
+def test_materialized_target_prefix_count_limits_considered_targets_when_targets_order_is_longer() -> None:
+    with _phase7_temp_roots() as (outputs_root, token):
+        summary_path = _write_run_group_artifacts(
+            outputs_root,
+            target_order=[11, 22, 33, 44, 55, 66],
+            current_count=6,
+            coverage_target_count=6,
+            materialized_target_prefix_count=3,
+            victims=["tron"],
+            coverage_statuses={
+                11: {"tron": "completed"},
+                22: {"tron": "completed"},
+                33: {"tron": "completed"},
+                44: {"tron": "requested"},
+                55: {"tron": "requested"},
+                66: {"tron": "requested"},
+            },
+            summary_metrics={
+                11: {"tron": 0.11},
+                22: {"tron": 0.22},
+                33: {"tron": 0.33},
+            },
+        )
+        result = generate_long_table_bundle(
+            summary_path=summary_path,
+            output_name=f"phase7_{token}_materialized_prefix",
+            slice_policy="largest_complete_prefix",
+            requested_victims=None,
+            requested_target_count=None,
+        )
+        dataframe = pd.read_csv(result["long_table_path"])
+        slice_manifest = load_json_mapping(result["slice_manifest_path"], label="slice_manifest JSON")
+
+    assert dataframe["target_item"].drop_duplicates().tolist() == [11, 22, 33]
+    assert slice_manifest["selected_targets"] == [11, 22, 33]
+    assert slice_manifest["excluded_targets"] == []
+
+
+def test_missing_materialized_target_prefix_count_bootstraps_from_largest_complete_prefix() -> None:
+    with _phase7_temp_roots() as (outputs_root, token):
+        summary_path = _write_run_group_artifacts(
+            outputs_root,
+            target_order=[11, 22, 33, 44, 55, 66],
+            current_count=6,
+            coverage_target_count=6,
+            include_materialized_target_prefix_count=False,
+            victims=["tron"],
+            coverage_statuses={
+                11: {"tron": "completed"},
+                22: {"tron": "completed"},
+                33: {"tron": "completed"},
+                44: {"tron": "requested"},
+                55: {"tron": "requested"},
+                66: {"tron": "requested"},
+            },
+            summary_metrics={
+                11: {"tron": 0.11},
+                22: {"tron": 0.22},
+                33: {"tron": 0.33},
+            },
+        )
+        result = generate_long_table_bundle(
+            summary_path=summary_path,
+            output_name=f"phase7_{token}_bootstrap_prefix",
+            slice_policy="largest_complete_prefix",
+            requested_victims=None,
+            requested_target_count=None,
+        )
+        dataframe = pd.read_csv(result["long_table_path"])
+        slice_manifest = load_json_mapping(result["slice_manifest_path"], label="slice_manifest JSON")
+
+    assert dataframe["target_item"].drop_duplicates().tolist() == [11, 22, 33]
+    assert slice_manifest["selected_targets"] == [11, 22, 33]
+    assert slice_manifest["excluded_targets"] == []
+
+
+def test_requested_target_count_caps_within_local_materialized_prefix() -> None:
+    with _phase7_temp_roots() as (outputs_root, token):
+        summary_path = _write_run_group_artifacts(
+            outputs_root,
+            target_order=[11, 22, 33, 44, 55, 66],
+            current_count=6,
+            coverage_target_count=6,
+            materialized_target_prefix_count=3,
+            victims=["tron"],
+            coverage_statuses={
+                11: {"tron": "completed"},
+                22: {"tron": "completed"},
+                33: {"tron": "completed"},
+                44: {"tron": "requested"},
+                55: {"tron": "requested"},
+                66: {"tron": "requested"},
+            },
+            summary_metrics={
+                11: {"tron": 0.11},
+                22: {"tron": 0.22},
+            },
+        )
+        result = generate_long_table_bundle(
+            summary_path=summary_path,
+            output_name=f"phase7_{token}_capped_prefix",
+            slice_policy="largest_complete_prefix",
+            requested_victims=None,
+            requested_target_count=2,
+        )
+        dataframe = pd.read_csv(result["long_table_path"])
+        slice_manifest = load_json_mapping(result["slice_manifest_path"], label="slice_manifest JSON")
+
+    assert dataframe["target_item"].drop_duplicates().tolist() == [11, 22]
+    assert slice_manifest["selected_targets"] == [11, 22]
+    assert slice_manifest["excluded_targets"] == []
 
 
 def test_largest_complete_prefix_preserves_target_registry_order() -> None:
@@ -289,6 +456,7 @@ def test_intersection_complete_selects_completed_targets_in_registry_order() -> 
             outputs_root,
             target_order=[40, 10, 30],
             current_count=3,
+            materialized_target_prefix_count=3,
             victims=["miasrec", "tron"],
             coverage_statuses={
                 40: {"miasrec": "completed", "tron": "completed"},
@@ -322,6 +490,7 @@ def test_all_available_includes_partial_completed_rows_and_is_not_fairness_safe(
             outputs_root,
             target_order=[1, 2, 3],
             current_count=3,
+            materialized_target_prefix_count=3,
             victims=["miasrec", "tron"],
             coverage_statuses={
                 1: {"miasrec": "completed", "tron": "completed"},
@@ -360,6 +529,7 @@ def test_requested_victim_subset_changes_slice_membership() -> None:
             outputs_root,
             target_order=[101, 202, 303],
             current_count=3,
+            materialized_target_prefix_count=3,
             victims=["miasrec", "tron"],
             coverage_statuses={
                 101: {"miasrec": "completed", "tron": "completed"},
@@ -425,6 +595,7 @@ def test_slice_manifest_and_output_manifest_record_required_metadata() -> None:
             outputs_root,
             target_order=[9, 8],
             current_count=2,
+            materialized_target_prefix_count=2,
             victims=["miasrec", "tron"],
             coverage_statuses={
                 9: {"miasrec": "completed", "tron": "completed"},
@@ -469,6 +640,7 @@ def test_parse_long_csv_batch_spec_accepts_defaults_and_job_overrides() -> None:
             target_cohort_key="target_cohort_phase7_a",
             target_order=[11, 22],
             current_count=2,
+            materialized_target_prefix_count=2,
             victims=["miasrec", "tron"],
             coverage_statuses={
                 11: {"miasrec": "completed", "tron": "completed"},
@@ -643,6 +815,7 @@ def test_build_long_table_bundles_runs_multiple_jobs_with_config_victim_source_a
             target_cohort_key="target_cohort_phase7_a",
             target_order=[11, 22],
             current_count=2,
+            materialized_target_prefix_count=2,
             victims=["miasrec", "tron"],
             coverage_statuses={
                 11: {"miasrec": "completed", "tron": "completed"},
@@ -660,6 +833,7 @@ def test_build_long_table_bundles_runs_multiple_jobs_with_config_victim_source_a
             target_cohort_key="target_cohort_phase7_b",
             target_order=[31, 32, 33],
             current_count=3,
+            materialized_target_prefix_count=3,
             victims=["miasrec", "tron"],
             coverage_statuses={
                 31: {"miasrec": "completed", "tron": "completed"},
@@ -747,6 +921,7 @@ def test_build_long_table_bundles_preserves_derived_output_name_when_omitted() -
             target_cohort_key="target_cohort_phase7_derived",
             target_order=[7, 8],
             current_count=2,
+            materialized_target_prefix_count=2,
             victims=["miasrec", "tron"],
             coverage_statuses={
                 7: {"miasrec": "completed", "tron": "completed"},

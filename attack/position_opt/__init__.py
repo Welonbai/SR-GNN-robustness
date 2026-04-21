@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 
 from .artifacts import (
     POSITION_OPT_RUN_TYPE,
+    POSITION_OPT_SHARED_POLICY_RUN_TYPE,
     build_position_opt_artifact_paths,
     ensure_position_opt_artifact_dirs,
     resolve_clean_surrogate_checkpoint_path,
@@ -12,7 +13,7 @@ from .objective import (
     compute_asymmetric_gt_penalty,
     compute_position_opt_objective,
 )
-from .policy import PerSessionLogitPolicy
+from .policy import SharedContextualPositionPolicy
 from .poison_builder import replace_item_at_position
 from .selector import sample_position_reinforce, select_position_eval, select_position_train
 from .types import (
@@ -43,14 +44,15 @@ def __getattr__(name: str):
 __all__ = [
     "POSITION_OPT_DEFAULTS",
     "POSITION_OPT_RUN_TYPE",
+    "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
     "CandidateMetadata",
     "InnerTrainResult",
-    "PerSessionLogitPolicy",
     "PositionOptConfig",
     "PositionOptMVPTrainer",
     "PositionOptObjectiveResult",
     "PositionOptArtifactPaths",
     "SelectedPositionResult",
+    "SharedContextualPositionPolicy",
     "SurrogateScoreResult",
     "TruncatedFineTuneConfig",
     "build_candidate_positions",

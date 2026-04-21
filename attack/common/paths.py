@@ -9,6 +9,11 @@ from .config import Config
 
 
 POSITION_OPT_RUN_TYPE = "position_opt_mvp"
+POSITION_OPT_SHARED_POLICY_RUN_TYPE = "position_opt_shared_policy"
+_POSITION_OPT_RUNTIME_RUN_TYPES = {
+    POSITION_OPT_RUN_TYPE,
+    POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+}
 TARGET_COHORT_SELECTION_POLICY_VERSION = "appendable_target_cohort_v1"
 
 
@@ -217,10 +222,10 @@ def attack_key_payload(
             },
         },
     }
-    if run_type == POSITION_OPT_RUN_TYPE:
+    if run_type in _POSITION_OPT_RUNTIME_RUN_TYPES:
         if attack_identity_context is None:
             raise ValueError(
-                "position_opt_mvp final attack identity requires explicit "
+                f"{run_type} final attack identity requires explicit "
                 "attack_identity_context with position-opt settings and clean "
                 "surrogate identity."
             )
@@ -646,6 +651,8 @@ def run_artifact_paths(
 
 
 __all__ = [
+    "POSITION_OPT_RUN_TYPE",
+    "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
     "attack_key",
     "attack_key_payload",
     "build_position_opt_attack_identity_context",

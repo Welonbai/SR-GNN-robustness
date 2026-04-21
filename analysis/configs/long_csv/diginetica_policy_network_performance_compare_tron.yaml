@@ -1,0 +1,21 @@
+# Replace the shared-policy summary path after your new run materializes.
+# For a quick gate, this config intentionally slices to TRON only and defaults
+# to one target so strict comparison stays easy while the new method is still
+# partially complete. Increase requested_target_count after the shared-policy
+# run completes more targets.
+
+defaults:
+  slice_policy: largest_complete_prefix
+  requested_victims:
+    - tron
+  requested_target_count: 1
+
+jobs:
+  - summary: outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/summary_current.json
+    output_name: diginetica_clean_policy_network_performance_compare_tron
+
+  - summary: outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/summary_current.json
+    output_name: diginetica_position_opt_mvp_policy_network_performance_compare_tron
+
+  - summary: outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/REPLACE_WITH_SHARED_POLICY_RUN_GROUP/summary_current.json
+    output_name: diginetica_position_opt_shared_policy_policy_network_performance_compare_tron

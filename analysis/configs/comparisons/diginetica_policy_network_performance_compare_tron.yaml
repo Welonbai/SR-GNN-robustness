@@ -1,0 +1,6 @@
+comparison_id: diginetica_policy_network_performance_compare_tron
+
+runs:
+  - diginetica_clean_policy_network_performance_compare_tron
+  - diginetica_position_opt_mvp_policy_network_performance_compare_tron
+  - diginetica_position_opt_shared_policy_policy_network_performance_compare_tron

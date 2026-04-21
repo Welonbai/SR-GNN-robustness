@@ -17,8 +17,15 @@ from attack.data.poisoned_dataset_builder import (
 from attack.inner_train.base import InnerTrainer
 from attack.position_opt.artifacts import ensure_position_opt_artifact_dirs
 from attack.position_opt.candidate_builder import build_candidate_positions
+from attack.position_opt.feature_builder import (
+    PolicySpecialItemIds,
+    SessionCandidateFeatures,
+    build_policy_special_item_ids,
+    build_session_candidate_features,
+    infer_max_item_id,
+)
 from attack.position_opt.objective import compute_position_opt_objective
-from attack.position_opt.policy import PerSessionLogitPolicy
+from attack.position_opt.policy import SharedContextualPositionPolicy
 from attack.position_opt.poison_builder import replace_item_at_position
 from attack.position_opt.selector import sample_position_reinforce, select_position_eval
 from attack.position_opt.types import (
@@ -36,19 +43,12 @@ from attack.surrogate.base import SurrogateBackend
 class _SessionCandidateState:
     original_session: list[int]
     metadata: CandidateMetadata
+    features: SessionCandidateFeatures
     candidate_sessions: list[list[int]]
 
 
 class PositionOptMVPTrainer:
-    """Joint-MVP trainer with one sampled poison set per outer step.
-
-    Phase 2.5 switches the outer update to REINFORCE:
-    - sample one categorical action per fake session
-    - build one joint poisoned-session set
-    - run one surrogate fine-tuning step from the clean checkpoint
-    - evaluate once on real validation prefixes
-    - update the per-session logits with a scalar reward and moving-average baseline
-    """
+    """Joint-MVP trainer with one sampled poison set per outer step."""
 
     def __init__(
         self,
@@ -67,9 +67,10 @@ class PositionOptMVPTrainer:
         self.clean_surrogate_checkpoint_path = checkpoint_path
         self.position_opt_config = resolve_position_opt_config(position_opt_config)
 
-        self.policy: PerSessionLogitPolicy | None = None
+        self.policy: SharedContextualPositionPolicy | None = None
         self.training_history: list[dict[str, Any]] = []
         self._session_states: list[_SessionCandidateState] = []
+        self._policy_special_item_ids: PolicySpecialItemIds | None = None
         self._target_item: int | None = None
         self._trained_config: Config | None = None
         self._reward_baseline: float | None = None
@@ -103,14 +104,16 @@ class PositionOptMVPTrainer:
         self._final_poisoned_sessions = None
         self.training_history = []
 
-        self._session_states = _build_session_states(
+        self._session_states, self._policy_special_item_ids = _build_session_states(
             normalized_fake_sessions,
             target_item=target_id,
             replacement_topk_ratio=config.attack.replacement_topk_ratio,
         )
         candidate_sizes = [len(state.metadata.positions) for state in self._session_states]
-        self.policy = PerSessionLogitPolicy(
-            candidate_sizes
+        self.policy = SharedContextualPositionPolicy(
+            num_item_embeddings=self._policy_special_item_ids.num_item_embeddings,
+            embedding_dim=int(self.position_opt_config.policy_embedding_dim),
+            hidden_dim=int(self.position_opt_config.policy_hidden_dim),
         )
         candidate_avg = sum(candidate_sizes) / len(candidate_sizes)
         print(
@@ -214,6 +217,7 @@ class PositionOptMVPTrainer:
             "final_selected_positions": [asdict(result) for result in final_positions],
             "final_poisoned_session_count": int(len(final_sessions)),
             "target_item": target_id,
+            "policy_representation": "shared_contextual_mlp",
             "reward_baseline": self._reward_baseline,
         }
 
@@ -222,21 +226,22 @@ class PositionOptMVPTrainer:
             raise RuntimeError("train() must be called before exporting final selections.")
 
         results: list[SelectedPositionResult] = []
-        for session_idx, session_state in enumerate(self._session_states):
-            logits = self.policy.get_logits(session_idx)
-            if self.position_opt_config.final_selection != "argmax":
-                raise ValueError(
-                    "Unsupported final_selection for the current position-opt MVP."
+        with torch.no_grad():
+            for session_state in self._session_states:
+                logits = self._score_session_candidates(session_state)
+                if self.position_opt_config.final_selection != "argmax":
+                    raise ValueError(
+                        "Unsupported final_selection for the current position-opt MVP."
+                    )
+                candidate_index = select_position_eval(logits)
+                position = session_state.metadata.positions[candidate_index]
+                results.append(
+                    SelectedPositionResult(
+                        position=int(position),
+                        candidate_index=int(candidate_index),
+                        score=float(logits[candidate_index].detach().cpu().item()),
+                    )
                 )
-            candidate_index = select_position_eval(logits)
-            position = session_state.metadata.positions[candidate_index]
-            results.append(
-                SelectedPositionResult(
-                    position=int(position),
-                    candidate_index=int(candidate_index),
-                    score=float(logits[candidate_index].detach().cpu().item()),
-                )
-            )
 
         self._final_selected_positions = results
         return list(results)
@@ -282,6 +287,7 @@ class PositionOptMVPTrainer:
                     if self._trained_config is None
                     else asdict(self._trained_config.seeds)
                 ),
+                "policy_representation": "shared_contextual_mlp",
                 "policy_update": "reinforce",
                 "reward_baseline_final": self._reward_baseline,
                 "outer_eval_source": "real_validation_sessions",
@@ -292,16 +298,7 @@ class PositionOptMVPTrainer:
                 json.dump(payload, handle, indent=2, sort_keys=True)
 
         if paths.learned_logits is not None:
-            torch.save(
-                {
-                    "target_item": self._target_item,
-                    "logits": self.policy.export_logits(),
-                    "candidate_positions": [
-                        list(map(int, state.metadata.positions)) for state in self._session_states
-                    ],
-                },
-                paths.learned_logits,
-            )
+            torch.save(self._build_learned_logits_payload(), paths.learned_logits)
 
     def _precompute_clean_gt_utility(
         self,
@@ -348,8 +345,8 @@ class PositionOptMVPTrainer:
         )
         set_seed(position_opt_step_seed)
 
-        for session_idx, session_state in enumerate(self._session_states):
-            logits = self.policy.get_logits(session_idx)
+        for session_state in self._session_states:
+            logits = self._score_session_candidates(session_state)
             candidate_index, log_prob, entropy = sample_position_reinforce(logits)
             selected_candidate_indices.append(int(candidate_index))
             selected_positions.append(int(session_state.metadata.positions[candidate_index]))
@@ -443,13 +440,59 @@ class PositionOptMVPTrainer:
             + (1.0 - momentum) * float(reward)
         )
 
+    def _score_session_candidates(self, session_state: _SessionCandidateState) -> torch.Tensor:
+        if self.policy is None:
+            raise RuntimeError("Policy is not initialized.")
+        return self.policy.score_candidates(session_state.features.tensors)
+
+    def _build_learned_logits_payload(self) -> dict[str, Any]:
+        if self.policy is None:
+            raise RuntimeError("Policy is not initialized.")
+        if self._policy_special_item_ids is None:
+            raise RuntimeError("Policy special-item ids are not initialized.")
+
+        sessions_payload: list[dict[str, Any]] = []
+        with torch.no_grad():
+            for session_idx, session_state in enumerate(self._session_states):
+                logits = self._score_session_candidates(session_state).detach().cpu().clone()
+                sessions_payload.append(
+                    {
+                        "session_index": int(session_idx),
+                        "session_length": int(session_state.metadata.session_length),
+                        "candidate_positions": list(map(int, session_state.metadata.positions)),
+                        "candidate_logits": logits,
+                        "candidate_feature_metadata": [
+                            asdict(row) for row in session_state.features.metadata
+                        ],
+                    }
+                )
+
+        return {
+            "target_item": self._target_item,
+            "policy_representation": "shared_contextual_mlp",
+            "policy_config": {
+                "embedding_dim": int(self.position_opt_config.policy_embedding_dim),
+                "hidden_dim": int(self.position_opt_config.policy_hidden_dim),
+                "num_item_embeddings": int(self.policy.num_item_embeddings),
+            },
+            "special_item_ids": self._policy_special_item_ids.to_payload(),
+            "sessions": sessions_payload,
+            "policy_state_dict": {
+                key: value.detach().cpu().clone()
+                for key, value in self.policy.state_dict().items()
+            },
+        }
+
 
 def _build_session_states(
     fake_sessions: Sequence[Sequence[int]],
     *,
     target_item: int,
     replacement_topk_ratio: float,
-) -> list[_SessionCandidateState]:
+) -> tuple[list[_SessionCandidateState], PolicySpecialItemIds]:
+    special_item_ids = build_policy_special_item_ids(
+        infer_max_item_id(fake_sessions, target_item=target_item)
+    )
     session_states: list[_SessionCandidateState] = []
     for session in fake_sessions:
         session_list = list(session)
@@ -459,6 +502,12 @@ def _build_session_states(
             replacement_topk_ratio=float(replacement_topk_ratio),
             positions=tuple(int(position) for position in candidate_positions),
         )
+        features = build_session_candidate_features(
+            session_list,
+            candidate_positions,
+            target_item=target_item,
+            special_item_ids=special_item_ids,
+        )
         candidate_sessions = [
             replace_item_at_position(session_list, position, target_item)
             for position in candidate_positions
@@ -467,10 +516,11 @@ def _build_session_states(
             _SessionCandidateState(
                 original_session=session_list,
                 metadata=metadata,
+                features=features,
                 candidate_sessions=candidate_sessions,
             )
         )
-    return session_states
+    return session_states, special_item_ids
 
 
 def _normalize_fake_sessions(fake_sessions: Sequence[Sequence[int]]) -> list[list[int]]:

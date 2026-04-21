@@ -63,6 +63,8 @@ class PositionOptConfig:
     clean_surrogate_checkpoint: str | None = None
     outer_steps: int = 30
     policy_lr: float = 0.05
+    policy_embedding_dim: int = 16
+    policy_hidden_dim: int = 32
     fine_tune_steps: int = 20
     validation_subset_size: int | None = None
     reward_baseline_momentum: float = 0.9
@@ -94,6 +96,22 @@ class PositionOptConfig:
         if policy_lr <= 0.0:
             raise ValueError("attack.position_opt.policy_lr must be positive.")
         object.__setattr__(self, "policy_lr", policy_lr)
+
+        policy_embedding_dim = _as_int(
+            self.policy_embedding_dim,
+            "attack.position_opt.policy_embedding_dim",
+        )
+        if policy_embedding_dim <= 0:
+            raise ValueError("attack.position_opt.policy_embedding_dim must be positive.")
+        object.__setattr__(self, "policy_embedding_dim", policy_embedding_dim)
+
+        policy_hidden_dim = _as_int(
+            self.policy_hidden_dim,
+            "attack.position_opt.policy_hidden_dim",
+        )
+        if policy_hidden_dim <= 0:
+            raise ValueError("attack.position_opt.policy_hidden_dim must be positive.")
+        object.__setattr__(self, "policy_hidden_dim", policy_hidden_dim)
 
         fine_tune_steps = _as_int(
             self.fine_tune_steps,
@@ -590,6 +608,16 @@ def _normalize_position_opt_config(value: Any, context: str) -> dict[str, Any]:
         payload["outer_steps"] = _as_int(mapping["outer_steps"], f"{context}.outer_steps")
     if "policy_lr" in mapping:
         payload["policy_lr"] = _as_float(mapping["policy_lr"], f"{context}.policy_lr")
+    if "policy_embedding_dim" in mapping:
+        payload["policy_embedding_dim"] = _as_int(
+            mapping["policy_embedding_dim"],
+            f"{context}.policy_embedding_dim",
+        )
+    if "policy_hidden_dim" in mapping:
+        payload["policy_hidden_dim"] = _as_int(
+            mapping["policy_hidden_dim"],
+            f"{context}.policy_hidden_dim",
+        )
     if "fine_tune_steps" in mapping:
         payload["fine_tune_steps"] = _as_int(
             mapping["fine_tune_steps"],

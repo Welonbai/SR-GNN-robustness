@@ -1,0 +1,35 @@
+name: policy_network_performance_compare_tron_by_target_item
+
+input: results\comparisons\diginetica_policy_network_performance_compare_tron\merged_long_table.csv
+output_dir: results\comparisons\diginetica_policy_network_performance_compare_tron
+filters:
+  poison_model: srgnn
+  target_type: popular
+  attack_size: 0.01
+  victim_model: tron
+  metric_name: [recall, mrr]
+  metric_scope: [ground_truth, targeted]
+  k: [10, 20, 30]
+
+split_by:
+  - target_item
+
+rows:
+  - attack_method
+
+cols:
+  - metric_name
+  - k
+  - metric_scope
+
+value_col: value
+agg: first
+auto_context: true
+require_unique_cells: true
+
+ground_truth_relative_to_clean:
+  enabled: true
+  baseline_attack_method: clean
+  ignore_pairing_columns:
+    - run_id
+    - replacement_topk_ratio

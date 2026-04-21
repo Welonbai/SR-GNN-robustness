@@ -827,7 +827,9 @@ def resolve_slice(
         )
 
     considered_targets = resolve_considered_targets(
+        run_coverage_payload,
         target_registry_payload,
+        requested_victims=requested_victims,
         requested_target_count=requested_target_count,
     )
     if slice_policy == "largest_complete_prefix":
@@ -871,11 +873,13 @@ def resolve_slice(
 
 
 def resolve_considered_targets(
+    run_coverage_payload: Mapping[str, Any],
     target_registry_payload: Mapping[str, Any],
     *,
+    requested_victims: list[str],
     requested_target_count: int | None,
 ) -> list[int | str]:
-    """Resolve the materialized ordered target prefix, optionally capped for analysis."""
+    """Resolve the run-group-local ordered target prefix, optionally capped for analysis."""
     ordered_targets_raw = target_registry_payload.get("ordered_targets")
     if not isinstance(ordered_targets_raw, list):
         raise AnalysisError("target_registry.json is missing ordered_targets.")
@@ -883,14 +887,48 @@ def resolve_considered_targets(
         require_target_item(item, label="target_registry.ordered_targets[*]")
         for item in ordered_targets_raw
     ]
-    current_count = require_int(
+    run_coverage_targets_raw = run_coverage_payload.get("targets_order")
+    if not isinstance(run_coverage_targets_raw, list):
+        raise AnalysisError("run_coverage.json is missing targets_order.")
+    run_coverage_targets = [
+        require_target_item(item, label="run_coverage.targets_order[*]")
+        for item in run_coverage_targets_raw
+    ]
+    if ordered_targets[: len(run_coverage_targets)] != run_coverage_targets:
+        raise AnalysisError(
+            "run_coverage.json targets_order is not a valid prefix of target_registry.ordered_targets."
+        )
+
+    registry_current_count = require_int(
         target_registry_payload.get("current_count"),
         label="target_registry.current_count",
     )
-    if current_count < 0 or current_count > len(ordered_targets):
+    if registry_current_count < 0 or registry_current_count > len(ordered_targets):
         raise AnalysisError("target_registry.json has an invalid current_count.")
 
-    considered_targets = ordered_targets[:current_count]
+    materialized_prefix_value = run_coverage_payload.get("materialized_target_prefix_count")
+    if materialized_prefix_value is None:
+        inferred_targets, _ = select_largest_complete_prefix(
+            run_coverage_payload,
+            target_order=run_coverage_targets,
+            requested_victims=requested_victims,
+        )
+        local_materialized_prefix_count = len(inferred_targets)
+    else:
+        local_materialized_prefix_count = require_int(
+            materialized_prefix_value,
+            label="run_coverage.materialized_target_prefix_count",
+        )
+        if (
+            local_materialized_prefix_count < 0
+            or local_materialized_prefix_count > len(run_coverage_targets)
+        ):
+            raise AnalysisError(
+                "run_coverage.materialized_target_prefix_count must fall within "
+                "run_coverage.targets_order."
+            )
+
+    considered_targets = run_coverage_targets[:local_materialized_prefix_count]
     if requested_target_count is None:
         return considered_targets
     if requested_target_count < 0:
