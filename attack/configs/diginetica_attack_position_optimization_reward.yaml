@@ -52,7 +52,7 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 3
+  count: 6
   reuse_saved_targets: true
 
 victims:

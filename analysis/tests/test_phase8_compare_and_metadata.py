@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 from uuid import uuid4
 
+import matplotlib.pyplot as plt
 import pandas as pd
 import pytest
 
@@ -17,9 +18,12 @@ from analysis.pipeline.compare_runs import (
     build_comparison_bundle,
 )
 from analysis.pipeline.report_table_renderer import (
+    BestValueBoldingSpec,
     TableStructure,
     apply_dimension_value_orders,
+    draw_cell_block,
     parse_render_spec,
+    resolve_ranked_value_highlights,
     resolve_title,
 )
 from analysis.pipeline.view_table_builder import build_view_bundles, parse_view_spec
@@ -395,6 +399,156 @@ def test_renderer_remains_presentation_only_without_runtime_state_inputs() -> No
     )
 
     assert title == "Slice intersection_complete N=3 Victims miasrec"
+
+
+def test_renderer_parses_second_best_underline_flag() -> None:
+    render_spec = parse_render_spec(
+        {
+            "style_name": "phase8_ranked_highlight",
+            "output_format": "png",
+            "title": {
+                "template": "test",
+                "align": "center",
+                "font_size": 12,
+                "color": "black",
+            },
+            "figure": {
+                "width": 8,
+                "height": 4,
+                "dpi": 100,
+                "background_color": "white",
+            },
+            "table": {
+                "font_size": 10,
+                "round_digits": 4,
+                "text_color": "black",
+                "show_grid": True,
+                "auto_shrink": False,
+                "wrap_text": False,
+                "cell_align": "center",
+                "display_alias": {},
+                "value_alias": {},
+                "dimension_value_orders": {},
+                "scope_colors": {},
+                "best_value_bolding": {
+                    "compare_along": "rows",
+                    "mode": "max",
+                    "partition_by_levels": ["victim_model"],
+                    "underline_second_best": True,
+                },
+                "top_level_group_separators": False,
+            },
+        }
+    )
+
+    assert render_spec.table.best_value_bolding is not None
+    assert render_spec.table.best_value_bolding.underline_second_best is True
+
+
+def test_renderer_can_identify_best_and_second_best_cells_per_partition() -> None:
+    dataframe = pd.DataFrame(
+        [
+            {"victim_model": "miasrec", "attack_method": "clean", "recall | 10 | ground_truth": 0.11},
+            {"victim_model": "miasrec", "attack_method": "dpsbr_baseline", "recall | 10 | ground_truth": 0.14},
+            {
+                "victim_model": "miasrec",
+                "attack_method": "position_opt_mvp",
+                "recall | 10 | ground_truth": 0.13,
+            },
+            {"victim_model": "tron", "attack_method": "clean", "recall | 10 | ground_truth": 0.30},
+            {"victim_model": "tron", "attack_method": "dpsbr_baseline", "recall | 10 | ground_truth": 0.30},
+            {"victim_model": "tron", "attack_method": "position_opt_mvp", "recall | 10 | ground_truth": 0.25},
+        ]
+    )
+    table_structure = TableStructure(
+        row_levels=["victim_model", "attack_method"],
+        col_levels=["metric_name", "k", "metric_scope"],
+        row_tuples=[
+            ("miasrec", "clean"),
+            ("miasrec", "dpsbr_baseline"),
+            ("miasrec", "position_opt_mvp"),
+            ("tron", "clean"),
+            ("tron", "dpsbr_baseline"),
+            ("tron", "position_opt_mvp"),
+        ],
+        column_tuples=[("recall", 10, "ground_truth")],
+        row_column_names=["victim_model", "attack_method"],
+        value_column_names=["recall | 10 | ground_truth"],
+    )
+
+    highlights = resolve_ranked_value_highlights(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        best_value_bolding=BestValueBoldingSpec(
+            compare_along="rows",
+            mode="max",
+            partition_by_levels=["victim_model"],
+            underline_second_best=True,
+        ),
+    )
+
+    assert highlights.best_value_cells == {(1, 0), (3, 0), (4, 0)}
+    assert highlights.second_best_value_cells == {(2, 0), (5, 0)}
+
+
+def test_draw_cell_block_supports_underlined_text() -> None:
+    render_spec = parse_render_spec(
+        {
+            "style_name": "phase8_underline_draw",
+            "output_format": "png",
+            "title": {
+                "template": "test",
+                "align": "center",
+                "font_size": 12,
+                "color": "black",
+            },
+            "figure": {
+                "width": 8,
+                "height": 4,
+                "dpi": 100,
+                "background_color": "white",
+            },
+            "table": {
+                "font_size": 10,
+                "round_digits": 4,
+                "text_color": "black",
+                "show_grid": True,
+                "auto_shrink": False,
+                "wrap_text": False,
+                "cell_align": "center",
+                "display_alias": {},
+                "value_alias": {},
+                "dimension_value_orders": {},
+                "scope_colors": {},
+                "top_level_group_separators": False,
+            },
+        }
+    )
+    fig, ax = plt.subplots()
+    try:
+        draw_cell_block(
+            ax=ax,
+            x0=0.0,
+            x1=1.0,
+            y0=0.0,
+            y1=1.0,
+            text="0.13",
+            font_weight="normal",
+            underline_text=True,
+            facecolor=None,
+            render_spec=render_spec,
+            total_table_width=1.0,
+            total_row_count=1,
+        )
+        assert len(ax.texts) == 1
+        assert len(ax.lines) == 1
+        line = ax.lines[0]
+        x_data = list(line.get_xdata())
+        y_data = list(line.get_ydata())
+        assert x_data[0] < x_data[1]
+        assert y_data[0] == pytest.approx(y_data[1])
+    finally:
+        plt.close(fig)
 
 
 def test_renderer_can_reorder_attack_method_rows_from_render_config() -> None:

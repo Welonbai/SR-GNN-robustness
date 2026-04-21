@@ -34,6 +34,11 @@ STUB_COLUMN_WIDTH_WEIGHT = 1.35
 LEAF_COLUMN_WIDTH_WEIGHT = 1.0
 CELL_PADDING_FRACTION = 0.06
 GROUP_SEPARATOR_LINE_WIDTH = 1.2
+SECOND_BEST_UNDERLINE_LINE_WIDTH = 1.3
+SECOND_BEST_UNDERLINE_Y_FRACTION = 0.76
+SECOND_BEST_UNDERLINE_MIN_FRACTION = 0.42
+SECOND_BEST_UNDERLINE_MAX_FRACTION = 0.8
+SECOND_BEST_UNDERLINE_PER_CHAR_FRACTION = 0.1
 
 
 class AnalysisError(ValueError):
@@ -70,11 +75,12 @@ class DisplayAliasSpec:
 
 @dataclass(frozen=True)
 class BestValueBoldingSpec:
-    """Configuration for bolding best values within each comparable slice."""
+    """Configuration for emphasizing ranked values within each comparable slice."""
 
     compare_along: str
     mode: str
     partition_by_levels: list[str]
+    underline_second_best: bool
 
 
 @dataclass(frozen=True)
@@ -118,6 +124,14 @@ class TableStructure:
     column_tuples: list[tuple[Any, ...]]
     row_column_names: list[str]
     value_column_names: list[str]
+
+
+@dataclass(frozen=True)
+class RankedValueCellHighlights:
+    """Resolved cell coordinates for ranked-value emphasis within data cells."""
+
+    best_value_cells: set[tuple[int, int]]
+    second_best_value_cells: set[tuple[int, int]]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -282,7 +296,7 @@ def render_png(
         round_digits=render_spec.table.round_digits,
         value_alias=render_spec.table.value_alias,
     )
-    best_value_cells = resolve_best_value_cells(
+    ranked_value_highlights = resolve_ranked_value_highlights(
         dataframe=dataframe,
         table_structure=table_structure,
         best_value_bolding=render_spec.table.best_value_bolding,
@@ -302,7 +316,8 @@ def render_png(
         raw_dataframe=dataframe,
         dataframe=display_dataframe,
         table_structure=table_structure,
-        best_value_cells=best_value_cells,
+        best_value_cells=ranked_value_highlights.best_value_cells,
+        second_best_value_cells=ranked_value_highlights.second_best_value_cells,
         render_spec=render_spec,
     )
 
@@ -430,6 +445,7 @@ def draw_structured_table(
     dataframe: pd.DataFrame,
     table_structure: TableStructure,
     best_value_cells: set[tuple[int, int]],
+    second_best_value_cells: set[tuple[int, int]],
     render_spec: RenderSpec,
 ) -> None:
     """Draw one hierarchy-aware table with merged headers and grouped row labels."""
@@ -552,6 +568,7 @@ def draw_structured_table(
                 y1=float(header_row_count + row_index + 1),
                 text=str(dataframe.iloc[row_index][value_column_name]),
                 font_weight="bold" if (row_index, leaf_column_index) in best_value_cells else "normal",
+                underline_text=(row_index, leaf_column_index) in second_best_value_cells,
                 facecolor=resolve_data_cell_fill_color(
                     table_structure=table_structure,
                     row_tuple=table_structure.row_tuples[row_index],
@@ -588,6 +605,7 @@ def draw_cell_block(
     render_spec: RenderSpec,
     total_table_width: float,
     total_row_count: int,
+    underline_text: bool = False,
 ) -> None:
     """Draw one rectangular cell or merged block and its text."""
     edge_color = "black" if render_spec.table.show_grid else render_spec.figure.background_color
@@ -626,6 +644,69 @@ def draw_cell_block(
         clip_on=True,
     )
     text_artist.set_clip_path(rectangle)
+    if underline_text:
+        draw_cell_underline(
+            ax=ax,
+            rectangle=rectangle,
+            x0=x0,
+            x1=x1,
+            y0=y0,
+            y1=y1,
+            text=text,
+            align=render_spec.table.cell_align,
+            color=render_spec.table.text_color,
+        )
+
+
+def draw_cell_underline(
+    *,
+    ax: Any,
+    rectangle: Rectangle,
+    x0: float,
+    x1: float,
+    y0: float,
+    y1: float,
+    text: str,
+    align: str,
+    color: str,
+) -> None:
+    """Draw a visible underline under one cell's text without relying on font support."""
+    stripped_text = text.strip()
+    if not stripped_text:
+        return
+
+    cell_width = x1 - x0
+    underline_width = cell_width * min(
+        SECOND_BEST_UNDERLINE_MAX_FRACTION,
+        max(
+            SECOND_BEST_UNDERLINE_MIN_FRACTION,
+            0.12 + (len(stripped_text) * SECOND_BEST_UNDERLINE_PER_CHAR_FRACTION),
+        ),
+    )
+    text_anchor_x = resolve_text_x(x0=x0, x1=x1, align=align)
+    padding = cell_width * CELL_PADDING_FRACTION
+    if align == "left":
+        line_start = text_anchor_x
+        line_end = min(x1 - padding, line_start + underline_width)
+    elif align == "center":
+        line_start = text_anchor_x - (underline_width / 2.0)
+        line_end = text_anchor_x + (underline_width / 2.0)
+    elif align == "right":
+        line_end = text_anchor_x
+        line_start = max(x0 + padding, line_end - underline_width)
+    else:
+        raise AnalysisError(f"Unsupported alignment '{align}'.")
+
+    underline_y = y0 + ((y1 - y0) * SECOND_BEST_UNDERLINE_Y_FRACTION)
+    underline_artist = ax.plot(
+        [line_start, line_end],
+        [underline_y, underline_y],
+        color=color,
+        linewidth=SECOND_BEST_UNDERLINE_LINE_WIDTH,
+        solid_capstyle="butt",
+        clip_on=True,
+    )[0]
+    underline_artist.set_clip_path(rectangle)
 
 
 def build_boundaries(width_weights: list[float]) -> list[float]:
@@ -904,15 +985,15 @@ def validate_scope_color_targets(
         )
 
 
-def resolve_best_value_cells(
+def resolve_ranked_value_highlights(
     *,
     dataframe: pd.DataFrame,
     table_structure: TableStructure,
     best_value_bolding: BestValueBoldingSpec | None,
-) -> set[tuple[int, int]]:
-    """Return the set of data-cell coordinates that should be bolded."""
+) -> RankedValueCellHighlights:
+    """Return the ranked data-cell highlights configured for one rendered table."""
     if best_value_bolding is None:
-        return set()
+        return RankedValueCellHighlights(best_value_cells=set(), second_best_value_cells=set())
 
     if best_value_bolding.compare_along != "rows":
         raise AnalysisError(
@@ -926,26 +1007,63 @@ def resolve_best_value_cells(
         partition_by_levels=best_value_bolding.partition_by_levels,
     )
     best_cells: set[tuple[int, int]] = set()
+    second_best_cells: set[tuple[int, int]] = set()
     for leaf_column_index, value_column_name in enumerate(table_structure.value_column_names):
         numeric_values = pd.to_numeric(dataframe[value_column_name], errors="coerce")
         numeric_value_list = numeric_values.tolist()
         for row_group in row_groups:
-            valid_group_values = [
-                float(numeric_value_list[row_index])
+            valid_group_entries = [
+                (row_index, float(numeric_value_list[row_index]))
                 for row_index in row_group
                 if not pd.isna(numeric_value_list[row_index])
             ]
-            if not valid_group_values:
+            if not valid_group_entries:
                 continue
 
-            best_value = max(valid_group_values)
-            for row_index in row_group:
-                numeric_value = numeric_value_list[row_index]
-                if pd.isna(numeric_value):
-                    continue
-                if are_close(float(numeric_value), best_value):
+            distinct_ranked_values = resolve_distinct_ranked_values(
+                [numeric_value for _, numeric_value in valid_group_entries]
+            )
+            best_value = distinct_ranked_values[0]
+            second_best_value = distinct_ranked_values[1] if len(distinct_ranked_values) > 1 else None
+
+            for row_index, numeric_value in valid_group_entries:
+                if are_close(numeric_value, best_value):
                     best_cells.add((row_index, leaf_column_index))
-    return best_cells
+                    continue
+                if (
+                    best_value_bolding.underline_second_best
+                    and second_best_value is not None
+                    and are_close(numeric_value, second_best_value)
+                ):
+                    second_best_cells.add((row_index, leaf_column_index))
+    return RankedValueCellHighlights(
+        best_value_cells=best_cells,
+        second_best_value_cells=second_best_cells,
+    )
+
+
+def resolve_best_value_cells(
+    *,
+    dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    best_value_bolding: BestValueBoldingSpec | None,
+) -> set[tuple[int, int]]:
+    """Return the set of data-cell coordinates that should be bolded."""
+    return resolve_ranked_value_highlights(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        best_value_bolding=best_value_bolding,
+    ).best_value_cells
+
+
+def resolve_distinct_ranked_values(values: list[float]) -> list[float]:
+    """Return descending distinct values with float-noise collapse."""
+    distinct_values: list[float] = []
+    for value in sorted(values, reverse=True):
+        if distinct_values and are_close(value, distinct_values[-1]):
+            continue
+        distinct_values.append(value)
+    return distinct_values
 
 
 def resolve_partition_row_groups(
@@ -1683,12 +1801,36 @@ def normalize_best_value_bolding_spec(value: Any, *, label: str) -> BestValueBol
         payload.get("partition_by_levels"),
         label=f"{label}.partition_by_levels",
     )
+    underline_second_best = normalize_second_best_underline_flag(payload=payload, label=label)
 
     return BestValueBoldingSpec(
         compare_along=compare_along,
         mode=mode,
         partition_by_levels=partition_by_levels,
+        underline_second_best=underline_second_best,
     )
+
+
+def normalize_second_best_underline_flag(*, payload: Mapping[str, Any], label: str) -> bool:
+    """Normalize the second-best emphasis flag and accept the italic key as a fallback."""
+    has_underline_flag = "underline_second_best" in payload
+    has_italic_flag = "italicize_second_best" in payload
+    if has_underline_flag and has_italic_flag:
+        raise AnalysisError(
+            f"Provide only one of {label}.underline_second_best or "
+            f"{label}.italicize_second_best."
+        )
+    if has_underline_flag:
+        return require_bool(
+            payload.get("underline_second_best"),
+            label=f"{label}.underline_second_best",
+        )
+    if has_italic_flag:
+        return require_bool(
+            payload.get("italicize_second_best"),
+            label=f"{label}.italicize_second_best",
+        )
+    return False
 
 
 def normalize_dimension_value_orders(value: Any, *, label: str) -> dict[str, list[Any]]:

@@ -40,8 +40,8 @@ table:
       position_opt_mvp: PosOptMVP
 
     victim_model:
-      miasrec: MIARec
-      srgnn: SR-GNN
+      miasrec: MiaSRec
+      srgnn: SRGNN
       tron: TRON
 
     metric_name:
@@ -72,5 +72,6 @@ table:
   best_value_bolding:
     compare_along: rows
     mode: max
+    underline_second_best: true
     partition_by_levels:
       - victim_model
