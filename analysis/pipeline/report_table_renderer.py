@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from matplotlib import colors as mcolors
 from matplotlib.patches import Rectangle
 import pandas as pd
 import yaml
@@ -39,6 +40,13 @@ SECOND_BEST_UNDERLINE_Y_FRACTION = 0.76
 SECOND_BEST_UNDERLINE_MIN_FRACTION = 0.42
 SECOND_BEST_UNDERLINE_MAX_FRACTION = 0.8
 SECOND_BEST_UNDERLINE_PER_CHAR_FRACTION = 0.1
+METRIC_SCOPE_COLUMN = "metric_scope"
+GROUND_TRUTH_SCOPE = "ground_truth"
+ABSOLUTE_VALUE_DISPLAY_MODE = "absolute"
+SIGNED_PERCENT_VALUE_DISPLAY_MODE = "signed_percent"
+RELATIVE_HEATMAP_NEUTRAL_COLOR = "#FFFFFF"
+RELATIVE_HEATMAP_POSITIVE_COLOR = "#2CA25F"
+RELATIVE_HEATMAP_NEGATIVE_COLOR = "#DE2D26"
 
 
 class AnalysisError(ValueError):
@@ -89,6 +97,7 @@ class TableSpec:
 
     font_size: float
     round_digits: int
+    signed_percent_round_digits: int | None
     text_color: str
     show_grid: bool
     auto_shrink: bool
@@ -132,6 +141,22 @@ class RankedValueCellHighlights:
 
     best_value_cells: set[tuple[int, int]]
     second_best_value_cells: set[tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class SignedPercentHeatmapScale:
+    """Positive/negative magnitude scales for one GT signed-percent comparison group."""
+
+    positive_abs_max: float | None
+    negative_abs_max: float | None
+
+
+@dataclass(frozen=True)
+class DataCellPresentation:
+    """Per-cell display modes and GT-relative heatmap scaling for one rendered table."""
+
+    display_modes: list[list[str]]
+    signed_percent_scales: list[list[SignedPercentHeatmapScale | None]]
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -232,6 +257,10 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
     table_spec = TableSpec(
         font_size=require_positive_float(table_payload.get("font_size"), label="table.font_size"),
         round_digits=require_nonnegative_int(table_payload.get("round_digits"), label="table.round_digits"),
+        signed_percent_round_digits=normalize_optional_nonnegative_int(
+            table_payload.get("signed_percent_round_digits"),
+            label="table.signed_percent_round_digits",
+        ),
         text_color=require_nonempty_string(table_payload.get("text_color"), label="table.text_color"),
         show_grid=require_bool(table_payload.get("show_grid"), label="table.show_grid"),
         auto_shrink=require_bool(table_payload.get("auto_shrink"), label="table.auto_shrink"),
@@ -277,6 +306,7 @@ def render_png(
     *,
     dataframe: pd.DataFrame,
     table_structure: TableStructure,
+    data_cell_presentation: DataCellPresentation,
     title_text: str,
     render_spec: RenderSpec,
     output_path: Path,
@@ -294,7 +324,10 @@ def render_png(
         dataframe,
         identifier_columns=set(table_structure.row_column_names),
         round_digits=render_spec.table.round_digits,
+        signed_percent_round_digits=render_spec.table.signed_percent_round_digits,
         value_alias=render_spec.table.value_alias,
+        table_structure=table_structure,
+        data_cell_presentation=data_cell_presentation,
     )
     ranked_value_highlights = resolve_ranked_value_highlights(
         dataframe=dataframe,
@@ -316,6 +349,7 @@ def render_png(
         raw_dataframe=dataframe,
         dataframe=display_dataframe,
         table_structure=table_structure,
+        data_cell_presentation=data_cell_presentation,
         best_value_cells=ranked_value_highlights.best_value_cells,
         second_best_value_cells=ranked_value_highlights.second_best_value_cells,
         render_spec=render_spec,
@@ -423,12 +457,18 @@ def render_bundle(*, bundle_dir: Path, render_spec: RenderSpec) -> Path:
             table_structure=table_structure,
             dimension_value_orders=render_spec.table.dimension_value_orders,
         )
+        data_cell_presentation = build_data_cell_presentation(
+            dataframe=table_dataframe,
+            table_structure=table_structure,
+            meta_payload=meta_payload,
+        )
         title_text = resolve_title(template=render_spec.title.template, meta_payload=meta_payload)
 
         output_path = bundle_dir / "render.png"
         render_png(
             dataframe=table_dataframe,
             table_structure=table_structure,
+            data_cell_presentation=data_cell_presentation,
             title_text=title_text,
             render_spec=render_spec,
             output_path=output_path,
@@ -444,6 +484,7 @@ def draw_structured_table(
     raw_dataframe: pd.DataFrame,
     dataframe: pd.DataFrame,
     table_structure: TableStructure,
+    data_cell_presentation: DataCellPresentation,
     best_value_cells: set[tuple[int, int]],
     second_best_value_cells: set[tuple[int, int]],
     render_spec: RenderSpec,
@@ -573,6 +614,9 @@ def draw_structured_table(
                     table_structure=table_structure,
                     row_tuple=table_structure.row_tuples[row_index],
                     column_tuple=table_structure.column_tuples[leaf_column_index],
+                    raw_value=raw_dataframe.iloc[row_index][value_column_name],
+                    display_mode=data_cell_presentation.display_modes[row_index][leaf_column_index],
+                    signed_percent_heatmap_scale=data_cell_presentation.signed_percent_scales[row_index][leaf_column_index],
                     leaf_column_fill_color=leaf_column_fill_colors[leaf_column_index],
                     scope_colors=render_spec.table.scope_colors,
                 ),
@@ -811,10 +855,20 @@ def resolve_data_cell_fill_color(
     table_structure: TableStructure,
     row_tuple: tuple[Any, ...],
     column_tuple: tuple[Any, ...],
+    raw_value: Any,
+    display_mode: str,
+    signed_percent_heatmap_scale: SignedPercentHeatmapScale | None,
     leaf_column_fill_color: str | None,
     scope_colors: Mapping[str, Mapping[str, str]],
 ) -> str | None:
     """Resolve one semantic fill color for a data cell."""
+    if display_mode == SIGNED_PERCENT_VALUE_DISPLAY_MODE:
+        heatmap_color = resolve_signed_percent_heatmap_color(
+            value=raw_value,
+            signed_percent_heatmap_scale=signed_percent_heatmap_scale,
+        )
+        if heatmap_color is not None:
+            return heatmap_color
     if leaf_column_fill_color is not None:
         return leaf_column_fill_color
     return resolve_leaf_axis_fill_color(
@@ -822,6 +876,50 @@ def resolve_data_cell_fill_color(
         axis_tuple=row_tuple,
         scope_colors=scope_colors,
     )
+
+
+def resolve_signed_percent_heatmap_color(
+    *,
+    value: Any,
+    signed_percent_heatmap_scale: SignedPercentHeatmapScale | None,
+) -> str | None:
+    """Map one signed GT-relative percentage onto a light-to-dark diverging color."""
+    numeric_value = coerce_numeric_value(value)
+    if numeric_value is None:
+        return None
+    if are_close(numeric_value, 0.0):
+        return RELATIVE_HEATMAP_NEUTRAL_COLOR
+    if signed_percent_heatmap_scale is None:
+        return RELATIVE_HEATMAP_NEUTRAL_COLOR
+
+    if numeric_value > 0.0:
+        signed_magnitude_abs_max = signed_percent_heatmap_scale.positive_abs_max
+        target_color = RELATIVE_HEATMAP_POSITIVE_COLOR
+    else:
+        signed_magnitude_abs_max = signed_percent_heatmap_scale.negative_abs_max
+        target_color = RELATIVE_HEATMAP_NEGATIVE_COLOR
+
+    if signed_magnitude_abs_max is None or are_close(signed_magnitude_abs_max, 0.0):
+        return RELATIVE_HEATMAP_NEUTRAL_COLOR
+
+    magnitude = min(abs(numeric_value) / signed_magnitude_abs_max, 1.0)
+    return interpolate_hex_color(
+        RELATIVE_HEATMAP_NEUTRAL_COLOR,
+        target_color,
+        magnitude,
+    )
+
+
+def interpolate_hex_color(start_color: str, end_color: str, blend: float) -> str:
+    """Blend two colors in RGB space and return a hex string."""
+    clamped_blend = max(0.0, min(1.0, float(blend)))
+    start_rgb = mcolors.to_rgb(start_color)
+    end_rgb = mcolors.to_rgb(end_color)
+    blended_rgb = tuple(
+        start_component + ((end_component - start_component) * clamped_blend)
+        for start_component, end_component in zip(start_rgb, end_rgb, strict=True)
+    )
+    return mcolors.to_hex(blended_rgb)
 
 
 def draw_top_level_group_separators(
@@ -913,24 +1011,272 @@ def format_dataframe_for_display(
     identifier_columns: set[str],
     round_digits: int,
     value_alias: Mapping[str, Mapping[str, str]],
+    table_structure: TableStructure,
+    data_cell_presentation: DataCellPresentation,
+    signed_percent_round_digits: int | None = None,
 ) -> pd.DataFrame:
     """Convert a dataframe into display strings for slide rendering."""
     validate_value_alias_columns(dataframe=dataframe, value_alias=value_alias)
+    validate_data_cell_presentation(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        data_cell_presentation=data_cell_presentation,
+    )
 
     formatted_columns: dict[str, pd.Series] = {}
+    value_column_indexes = {
+        column_name: index
+        for index, column_name in enumerate(table_structure.value_column_names)
+    }
     for column_name in dataframe.columns:
         normalized_column_name = str(column_name)
         is_identifier_column = normalized_column_name in identifier_columns
         column_value_alias = value_alias.get(normalized_column_name, {})
-        formatted_columns[normalized_column_name] = dataframe[column_name].map(
-            lambda value: format_cell_value(
-                value,
-                is_identifier_column=is_identifier_column,
-                round_digits=round_digits,
-                value_alias=column_value_alias,
+        if is_identifier_column:
+            formatted_columns[normalized_column_name] = dataframe[column_name].map(
+                lambda value: format_cell_value(
+                    value,
+                    is_identifier_column=True,
+                    round_digits=round_digits,
+                    signed_percent_round_digits=signed_percent_round_digits,
+                    value_alias=column_value_alias,
+                    display_mode=ABSOLUTE_VALUE_DISPLAY_MODE,
+                )
             )
+            continue
+
+        leaf_column_index = value_column_indexes[normalized_column_name]
+        formatted_columns[normalized_column_name] = pd.Series(
+            [
+                format_cell_value(
+                    dataframe.iloc[row_index][normalized_column_name],
+                    is_identifier_column=False,
+                    round_digits=round_digits,
+                    signed_percent_round_digits=signed_percent_round_digits,
+                    value_alias=column_value_alias,
+                    display_mode=data_cell_presentation.display_modes[row_index][leaf_column_index],
+                )
+                for row_index in range(len(dataframe))
+            ],
+            index=dataframe.index,
         )
     return pd.DataFrame(formatted_columns)
+
+
+def validate_data_cell_presentation(
+    *,
+    dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    data_cell_presentation: DataCellPresentation,
+) -> None:
+    """Require the resolved per-cell presentation matrix to match table.csv dimensions."""
+    if len(data_cell_presentation.display_modes) != len(dataframe):
+        raise AnalysisError(
+            "Resolved data-cell presentation rows do not match the rendered dataframe row count."
+        )
+    if len(data_cell_presentation.signed_percent_scales) != len(dataframe):
+        raise AnalysisError(
+            "Resolved GT heatmap scale rows do not match the rendered dataframe row count."
+        )
+    expected_column_count = len(table_structure.value_column_names)
+    for row_index, row_modes in enumerate(data_cell_presentation.display_modes):
+        if len(row_modes) != expected_column_count:
+            raise AnalysisError(
+                "Resolved data-cell presentation columns do not match the rendered value-column "
+                f"count at row {row_index}."
+            )
+        for display_mode in row_modes:
+            validate_display_mode(display_mode)
+    for row_index, row_scales in enumerate(data_cell_presentation.signed_percent_scales):
+        if len(row_scales) != expected_column_count:
+            raise AnalysisError(
+                "Resolved GT heatmap scale columns do not match the rendered value-column "
+                f"count at row {row_index}."
+            )
+ 
+
+def build_data_cell_presentation(
+    *,
+    dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    meta_payload: Mapping[str, Any],
+) -> DataCellPresentation:
+    """Resolve one per-cell display-mode matrix plus GT-relative heatmap scaling."""
+    display_modes: list[list[str]] = []
+    signed_percent_scales: list[list[SignedPercentHeatmapScale | None]] = []
+    positive_abs_max_by_group: dict[tuple[tuple[Any, ...], int], float] = {}
+    negative_abs_max_by_group: dict[tuple[tuple[Any, ...], int], float] = {}
+
+    for row_index, row_tuple in enumerate(table_structure.row_tuples):
+        comparison_group_key = build_signed_percent_comparison_group_key(
+            row_tuple=row_tuple,
+            table_structure=table_structure,
+        )
+        for leaf_column_index, column_tuple in enumerate(table_structure.column_tuples):
+            display_mode = resolve_data_cell_display_mode(
+                table_structure=table_structure,
+                row_tuple=row_tuple,
+                column_tuple=column_tuple,
+                meta_payload=meta_payload,
+            )
+            if display_mode != SIGNED_PERCENT_VALUE_DISPLAY_MODE:
+                continue
+
+            numeric_value = coerce_numeric_value(
+                dataframe.iloc[row_index][table_structure.value_column_names[leaf_column_index]]
+            )
+            if numeric_value is None or are_close(numeric_value, 0.0):
+                continue
+
+            scale_group_key = (comparison_group_key, leaf_column_index)
+            if numeric_value > 0.0:
+                previous_positive_abs_max = positive_abs_max_by_group.get(scale_group_key, 0.0)
+                positive_abs_max_by_group[scale_group_key] = max(
+                    previous_positive_abs_max,
+                    abs(numeric_value),
+                )
+            else:
+                previous_negative_abs_max = negative_abs_max_by_group.get(scale_group_key, 0.0)
+                negative_abs_max_by_group[scale_group_key] = max(
+                    previous_negative_abs_max,
+                    abs(numeric_value),
+                )
+
+    for row_index, row_tuple in enumerate(table_structure.row_tuples):
+        row_display_modes: list[str] = []
+        row_signed_percent_scales: list[SignedPercentHeatmapScale | None] = []
+        comparison_group_key = build_signed_percent_comparison_group_key(
+            row_tuple=row_tuple,
+            table_structure=table_structure,
+        )
+        for leaf_column_index, column_tuple in enumerate(table_structure.column_tuples):
+            display_mode = resolve_data_cell_display_mode(
+                table_structure=table_structure,
+                row_tuple=row_tuple,
+                column_tuple=column_tuple,
+                meta_payload=meta_payload,
+            )
+            row_display_modes.append(display_mode)
+            if display_mode == SIGNED_PERCENT_VALUE_DISPLAY_MODE:
+                scale_group_key = (comparison_group_key, leaf_column_index)
+                row_signed_percent_scales.append(
+                    SignedPercentHeatmapScale(
+                        positive_abs_max=positive_abs_max_by_group.get(scale_group_key),
+                        negative_abs_max=negative_abs_max_by_group.get(scale_group_key),
+                    )
+                )
+            else:
+                row_signed_percent_scales.append(None)
+        display_modes.append(row_display_modes)
+        signed_percent_scales.append(row_signed_percent_scales)
+
+    return DataCellPresentation(
+        display_modes=display_modes,
+        signed_percent_scales=signed_percent_scales,
+    )
+
+
+def build_signed_percent_comparison_group_key(
+    *,
+    row_tuple: tuple[Any, ...],
+    table_structure: TableStructure,
+) -> tuple[Any, ...]:
+    """Group GT heatmap scaling by sibling leaf rows within the same row hierarchy branch."""
+    if len(table_structure.row_levels) <= 1:
+        return tuple()
+    return row_tuple[:-1]
+
+
+def resolve_data_cell_display_mode(
+    *,
+    table_structure: TableStructure,
+    row_tuple: tuple[Any, ...],
+    column_tuple: tuple[Any, ...],
+    meta_payload: Mapping[str, Any],
+) -> str:
+    """Resolve whether one data cell should render as an absolute value or signed percentage."""
+    ground_truth_relative_to_clean_config = resolve_ground_truth_relative_to_clean_config(meta_payload)
+    if ground_truth_relative_to_clean_config is None:
+        return ABSOLUTE_VALUE_DISPLAY_MODE
+
+    metric_scope = resolve_dimension_value_from_cell_or_meta(
+        dimension_name=METRIC_SCOPE_COLUMN,
+        table_structure=table_structure,
+        row_tuple=row_tuple,
+        column_tuple=column_tuple,
+        meta_payload=meta_payload,
+    )
+    if metric_scope is None:
+        raise AnalysisError(
+            "The bundle enables ground_truth_relative_to_clean, but the renderer could not resolve "
+            "metric_scope for at least one cell. Keep metric_scope in rows/cols/split/filters or "
+            "ensure it is uniquely inferable from bundle metadata."
+        )
+    if stringify_alias_lookup_value(metric_scope) != GROUND_TRUTH_SCOPE:
+        return ABSOLUTE_VALUE_DISPLAY_MODE
+
+    attack_method = resolve_dimension_value_from_cell_or_meta(
+        dimension_name="attack_method",
+        table_structure=table_structure,
+        row_tuple=row_tuple,
+        column_tuple=column_tuple,
+        meta_payload=meta_payload,
+    )
+    if attack_method is None:
+        raise AnalysisError(
+            "The bundle enables ground_truth_relative_to_clean, but the renderer could not resolve "
+            "attack_method for at least one GT cell. Keep attack_method in rows/cols/split/filters "
+            "or rebuild the view so clean GT raw values do not mix with attack deltas."
+        )
+    if (
+        stringify_alias_lookup_value(attack_method)
+        == ground_truth_relative_to_clean_config["baseline_attack_method"]
+    ):
+        return ABSOLUTE_VALUE_DISPLAY_MODE
+    return SIGNED_PERCENT_VALUE_DISPLAY_MODE
+
+
+def resolve_ground_truth_relative_to_clean_config(
+    meta_payload: Mapping[str, Any],
+) -> dict[str, str] | None:
+    """Return validated GT-relative rendering config from bundle metadata when enabled."""
+    raw_config = meta_payload.get("ground_truth_relative_to_clean")
+    if not isinstance(raw_config, Mapping):
+        return None
+    raw_enabled = raw_config.get("enabled")
+    if raw_enabled is not None and not bool(raw_enabled):
+        return None
+
+    baseline_attack_method = raw_config.get("baseline_attack_method")
+    if not isinstance(baseline_attack_method, str) or not baseline_attack_method.strip():
+        raise AnalysisError(
+            "The bundle metadata ground_truth_relative_to_clean block must contain a non-empty "
+            "'baseline_attack_method'."
+        )
+    return {"baseline_attack_method": baseline_attack_method.strip()}
+
+
+def resolve_dimension_value_from_cell_or_meta(
+    *,
+    dimension_name: str,
+    table_structure: TableStructure,
+    row_tuple: tuple[Any, ...],
+    column_tuple: tuple[Any, ...],
+    meta_payload: Mapping[str, Any],
+) -> Any | None:
+    """Resolve one dimension value from row/column tuples or bundle metadata fallbacks."""
+    if dimension_name in table_structure.row_levels:
+        return row_tuple[table_structure.row_levels.index(dimension_name)]
+    if dimension_name in table_structure.col_levels:
+        return column_tuple[table_structure.col_levels.index(dimension_name)]
+
+    for metadata_key in ("effective_filters", "split_values", "context", "filters"):
+        metadata_value = meta_payload.get(metadata_key)
+        if not isinstance(metadata_value, Mapping):
+            continue
+        if dimension_name in metadata_value:
+            return metadata_value[dimension_name]
+    return None
 
 
 def validate_display_alias_targets(
@@ -1142,6 +1488,8 @@ def format_cell_value(
     is_identifier_column: bool,
     round_digits: int,
     value_alias: Mapping[str, str],
+    display_mode: str,
+    signed_percent_round_digits: int | None = None,
 ) -> str:
     """Format one cell value for display."""
     if pd.isna(value):
@@ -1156,11 +1504,38 @@ def format_cell_value(
     elif isinstance(normalized_value, Integral):
         formatted_value = str(int(normalized_value))
     elif isinstance(normalized_value, Real):
-        formatted_value = f"{float(normalized_value):.{round_digits}f}"
+        numeric_value = float(normalized_value)
+        if are_close(numeric_value, 0.0):
+            numeric_value = 0.0
+        if display_mode == SIGNED_PERCENT_VALUE_DISPLAY_MODE:
+            effective_signed_percent_round_digits = (
+                round_digits
+                if signed_percent_round_digits is None
+                else signed_percent_round_digits
+            )
+            formatted_value = f"{numeric_value:+.{effective_signed_percent_round_digits}f}%"
+        else:
+            formatted_value = f"{numeric_value:.{round_digits}f}"
     else:
         formatted_value = str(normalized_value)
 
     return value_alias.get(raw_lookup_key, value_alias.get(formatted_value, formatted_value))
+
+
+def validate_display_mode(display_mode: str) -> None:
+    """Require one supported value-display mode."""
+    if display_mode not in {ABSOLUTE_VALUE_DISPLAY_MODE, SIGNED_PERCENT_VALUE_DISPLAY_MODE}:
+        raise AnalysisError(f"Unsupported data-cell display mode '{display_mode}'.")
+
+
+def coerce_numeric_value(value: Any) -> float | None:
+    """Convert one scalar cell value into a float when possible."""
+    normalized_value = normalize_scalar(value)
+    if normalized_value is None or pd.isna(normalized_value) or isinstance(normalized_value, bool):
+        return None
+    if isinstance(normalized_value, Real):
+        return float(normalized_value)
+    return None
 
 
 def extract_identifier_column_names(
@@ -1972,6 +2347,13 @@ def require_nonnegative_int(value: Any, *, label: str) -> int:
             raise AnalysisError(f"Expected '{label}' to be non-negative, got {integer_value}.")
         return integer_value
     raise AnalysisError(f"Expected '{label}' to be an integer, got {type(value).__name__}.")
+
+
+def normalize_optional_nonnegative_int(value: Any, *, label: str) -> int | None:
+    """Normalize one optional non-negative integer value."""
+    if value is None:
+        return None
+    return require_nonnegative_int(value, label=label)
 
 
 def require_bool(value: Any, *, label: str) -> bool:

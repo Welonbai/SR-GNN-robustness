@@ -63,6 +63,15 @@ class ViewSpec:
     agg: str
     auto_context: bool
     require_unique_cells: bool
+    ground_truth_relative_to_clean: GroundTruthRelativeToCleanSpec | None
+
+
+@dataclass(frozen=True)
+class GroundTruthRelativeToCleanSpec:
+    """Optional view-time GT normalization relative to one clean baseline."""
+
+    baseline_attack_method: str
+    ignore_pairing_columns: list[str]
 
 
 @dataclass(frozen=True)
@@ -135,11 +144,14 @@ def build_view_bundles(spec: ViewSpec) -> list[Path]:
         label="view input CSV",
     )
 
-    filtered_dataframe = apply_filters(dataframe, spec.filters)
+    transformed_dataframe = apply_ground_truth_relative_to_clean_transform(dataframe, spec)
+    filtered_dataframe = apply_filters(transformed_dataframe, spec.filters)
     if filtered_dataframe.empty:
         raise AnalysisError(
             f"The filters produced an empty table from '{spec.input_csv}'."
         )
+    validate_metric_scope_consistency(filtered_dataframe, spec)
+    validate_ground_truth_relative_display_mode_consistency(filtered_dataframe, spec)
 
     input_analysis_metadata = load_input_analysis_metadata(spec.input_csv)
     output_bundle_dirs: list[Path] = []
@@ -179,6 +191,10 @@ def parse_view_spec(payload: Mapping[str, Any], *, source_spec_path: Path) -> Vi
         payload.get("require_unique_cells", False),
         label="require_unique_cells",
     )
+    ground_truth_relative_to_clean = normalize_ground_truth_relative_to_clean_spec(
+        payload.get("ground_truth_relative_to_clean"),
+        label="ground_truth_relative_to_clean",
+    )
     if agg not in ALLOWED_AGGREGATIONS:
         raise AnalysisError(
             f"Unsupported agg '{agg}'. Allowed values: {sorted(ALLOWED_AGGREGATIONS)}."
@@ -197,6 +213,7 @@ def parse_view_spec(payload: Mapping[str, Any], *, source_spec_path: Path) -> Vi
         agg=agg,
         auto_context=auto_context,
         require_unique_cells=require_unique_cells,
+        ground_truth_relative_to_clean=ground_truth_relative_to_clean,
     )
 
 
@@ -231,6 +248,8 @@ def prepare_view_dataframe(dataframe: pd.DataFrame, spec: ViewSpec) -> pd.DataFr
     requested_columns.update(spec.cols)
     requested_columns.update(spec.split_by)
     requested_columns.update(spec.filters.keys())
+    if spec.ground_truth_relative_to_clean is not None:
+        requested_columns.add(METRIC_SCOPE_COLUMN)
 
     missing_derived_columns = sorted(
         column_name
@@ -251,6 +270,106 @@ def prepare_view_dataframe(dataframe: pd.DataFrame, spec: ViewSpec) -> pd.DataFr
     for column_name in missing_derived_columns:
         prepared[column_name] = derived_metric_columns[column_name]
     return prepared
+
+
+def apply_ground_truth_relative_to_clean_transform(
+    dataframe: pd.DataFrame,
+    spec: ViewSpec,
+) -> pd.DataFrame:
+    """Transform GT values into signed percent deltas relative to one baseline attack."""
+    config = spec.ground_truth_relative_to_clean
+    if config is None:
+        return dataframe.copy()
+
+    validate_required_columns(
+        dataframe,
+        required_columns=["attack_method", spec.value_col, METRIC_SCOPE_COLUMN],
+        label="view input CSV for ground_truth_relative_to_clean",
+    )
+    validate_pairing_columns(
+        dataframe,
+        ignore_pairing_columns=config.ignore_pairing_columns,
+        value_col=spec.value_col,
+    )
+
+    transform_input = apply_filters(
+        dataframe,
+        build_transform_support_filters(
+            filters=spec.filters,
+            baseline_attack_method=config.baseline_attack_method,
+        ),
+    )
+    if transform_input.empty:
+        return transform_input.copy()
+
+    ground_truth_mask = transform_input[METRIC_SCOPE_COLUMN] == GROUND_TRUTH_SCOPE
+    if not ground_truth_mask.any():
+        return transform_input.copy()
+
+    pairing_columns = build_pairing_columns(
+        transform_input,
+        value_col=spec.value_col,
+        ignore_pairing_columns=config.ignore_pairing_columns,
+    )
+    baseline_rows = transform_input[
+        ground_truth_mask & (transform_input["attack_method"] == config.baseline_attack_method)
+    ].copy()
+    if baseline_rows.empty:
+        raise AnalysisError(
+            "ground_truth_relative_to_clean is enabled, but no ground-truth baseline rows were "
+            f"found for attack_method '{config.baseline_attack_method}'."
+        )
+
+    validate_unique_pairing_rows(
+        baseline_rows,
+        pairing_columns=pairing_columns,
+        label=(
+            "ground_truth_relative_to_clean baseline rows "
+            f"for attack_method '{config.baseline_attack_method}'"
+        ),
+    )
+
+    attack_ground_truth_rows = transform_input.loc[
+        ground_truth_mask & (transform_input["attack_method"] != config.baseline_attack_method)
+    ].copy()
+    if attack_ground_truth_rows.empty:
+        return transform_input.copy()
+
+    attack_ground_truth_rows["_source_index"] = attack_ground_truth_rows.index
+    if pairing_columns:
+        baseline_lookup = baseline_rows.loc[:, pairing_columns + [spec.value_col]].rename(
+            columns={spec.value_col: "_clean_baseline_value"}
+        )
+        merged_ground_truth_rows = attack_ground_truth_rows.merge(
+            baseline_lookup,
+            on=pairing_columns,
+            how="left",
+            validate="many_to_one",
+        )
+    else:
+        merged_ground_truth_rows = attack_ground_truth_rows.copy()
+        merged_ground_truth_rows["_clean_baseline_value"] = baseline_rows.iloc[0][spec.value_col]
+    validate_present_clean_baselines(
+        merged_ground_truth_rows,
+        pairing_columns=pairing_columns,
+        baseline_attack_method=config.baseline_attack_method,
+    )
+
+    transformed_values = calculate_signed_percent_change(
+        current_values=merged_ground_truth_rows[spec.value_col],
+        baseline_values=merged_ground_truth_rows["_clean_baseline_value"],
+        label=(
+            "ground_truth_relative_to_clean baseline rows "
+            f"for attack_method '{config.baseline_attack_method}'"
+        ),
+    )
+
+    transformed = transform_input.copy()
+    transformed.loc[
+        merged_ground_truth_rows["_source_index"].tolist(),
+        spec.value_col,
+    ] = transformed_values.tolist()
+    return transformed
 
 
 def derive_metric_identity_columns(metric_series: pd.Series) -> dict[str, pd.Series]:
@@ -450,6 +569,12 @@ def write_view_bundle(
             forced_context=forced_context,
         ),
     }
+    if spec.ground_truth_relative_to_clean is not None:
+        meta["ground_truth_relative_to_clean"] = {
+            "enabled": True,
+            "baseline_attack_method": spec.ground_truth_relative_to_clean.baseline_attack_method,
+            "ignore_pairing_columns": spec.ground_truth_relative_to_clean.ignore_pairing_columns,
+        }
     write_json(meta_path, meta)
 
 
@@ -748,6 +873,309 @@ def build_effective_filters(
     return normalize_for_json(effective_filters)
 
 
+def normalize_ground_truth_relative_to_clean_spec(
+    value: Any,
+    *,
+    label: str,
+) -> GroundTruthRelativeToCleanSpec | None:
+    """Normalize an optional GT-relative-to-clean view-time transform block."""
+    if value is None:
+        return None
+
+    payload = require_mapping(value, label=label)
+    enabled = require_bool(payload.get("enabled", False), label=f"{label}.enabled")
+    if not enabled:
+        return None
+
+    return GroundTruthRelativeToCleanSpec(
+        baseline_attack_method=require_nonempty_string(
+            payload.get("baseline_attack_method"),
+            label=f"{label}.baseline_attack_method",
+        ),
+        ignore_pairing_columns=normalize_optional_string_list(
+            payload.get("ignore_pairing_columns"),
+            label=f"{label}.ignore_pairing_columns",
+        ),
+    )
+
+
+def build_transform_support_filters(
+    *,
+    filters: Mapping[str, Any],
+    baseline_attack_method: str,
+) -> dict[str, Any]:
+    """Extend attack-method filters so clean baselines remain available for pairing."""
+    support_filters = dict(filters)
+    raw_attack_method_filter = support_filters.get("attack_method")
+    if raw_attack_method_filter is None:
+        return support_filters
+    if isinstance(raw_attack_method_filter, list):
+        if baseline_attack_method in raw_attack_method_filter:
+            return support_filters
+        support_filters["attack_method"] = list(raw_attack_method_filter) + [baseline_attack_method]
+        return support_filters
+    if raw_attack_method_filter == baseline_attack_method:
+        return support_filters
+    support_filters["attack_method"] = [raw_attack_method_filter, baseline_attack_method]
+    return support_filters
+
+
+def validate_pairing_columns(
+    dataframe: pd.DataFrame,
+    *,
+    ignore_pairing_columns: list[str],
+    value_col: str,
+) -> None:
+    """Require GT-relative pairing exclusions to reference valid, safe columns."""
+    missing_columns = sorted(
+        column_name for column_name in ignore_pairing_columns if column_name not in dataframe.columns
+    )
+    if missing_columns:
+        raise AnalysisError(
+            "ground_truth_relative_to_clean.ignore_pairing_columns contains columns that do not "
+            f"exist in the input CSV: {missing_columns}."
+        )
+
+    forbidden_columns = sorted(
+        column_name
+        for column_name in ignore_pairing_columns
+        if column_name in {"attack_method", value_col}
+    )
+    if forbidden_columns:
+        raise AnalysisError(
+            "ground_truth_relative_to_clean.ignore_pairing_columns must not exclude "
+            f"'attack_method' or the value column '{value_col}', got {forbidden_columns}."
+        )
+
+
+def build_pairing_columns(
+    dataframe: pd.DataFrame,
+    *,
+    value_col: str,
+    ignore_pairing_columns: list[str],
+) -> list[str]:
+    """Return the row identity columns used to pair each GT row with its clean baseline."""
+    ignored_columns = set(ignore_pairing_columns)
+    return [
+        column_name
+        for column_name in dataframe.columns
+        if column_name not in ignored_columns and column_name not in {"attack_method", value_col}
+    ]
+
+
+def validate_unique_pairing_rows(
+    dataframe: pd.DataFrame,
+    *,
+    pairing_columns: list[str],
+    label: str,
+) -> None:
+    """Require one unique baseline row per GT pairing key."""
+    if not pairing_columns:
+        duplicate_rows = pd.DataFrame([{"_row_count": int(len(dataframe))}])
+    else:
+        duplicate_rows = (
+            dataframe.groupby(pairing_columns, dropna=False, sort=True)
+            .size()
+            .reset_index(name="_row_count")
+        )
+    duplicate_rows = duplicate_rows[duplicate_rows["_row_count"] > 1].reset_index(drop=True)
+    if duplicate_rows.empty:
+        return
+
+    formatted_duplicates: list[str] = []
+    for _, row in duplicate_rows.head(5).iterrows():
+        formatted_key = (
+            {
+                column_name: normalize_scalar(row[column_name]) for column_name in pairing_columns
+            }
+            if pairing_columns
+            else {"_global_pairing_key": "__all_rows__"}
+        )
+        formatted_duplicates.append(
+            f"rows={int(row['_row_count'])}, pairing_key={formatted_key}"
+        )
+    examples = " ; ".join(formatted_duplicates)
+    raise AnalysisError(
+        f"Found duplicate {label} for at least one pairing key. "
+        f"Conflicts: {examples}. "
+        "Adjust ignore_pairing_columns or add more identifying filters."
+    )
+
+
+def validate_present_clean_baselines(
+    dataframe: pd.DataFrame,
+    *,
+    pairing_columns: list[str],
+    baseline_attack_method: str,
+) -> None:
+    """Require every GT row to find a clean baseline row after pairing."""
+    missing_baseline_rows = dataframe[dataframe["_clean_baseline_value"].isna()].reset_index(drop=True)
+    if missing_baseline_rows.empty:
+        return
+
+    formatted_rows: list[str] = []
+    for _, row in missing_baseline_rows.head(5).iterrows():
+        formatted_key = (
+            {
+                column_name: normalize_scalar(row[column_name]) for column_name in pairing_columns
+            }
+            if pairing_columns
+            else {"_global_pairing_key": "__all_rows__"}
+        )
+        formatted_rows.append(f"pairing_key={formatted_key}")
+    examples = " ; ".join(formatted_rows)
+    raise AnalysisError(
+        "ground_truth_relative_to_clean could not find a clean baseline row for at least one "
+        f"ground-truth row using attack_method '{baseline_attack_method}'. "
+        f"Missing examples: {examples}."
+    )
+
+
+def calculate_signed_percent_change(
+    *,
+    current_values: pd.Series,
+    baseline_values: pd.Series,
+    label: str,
+) -> pd.Series:
+    """Calculate signed percentage deltas and reject undefined zero baselines."""
+    current_numeric = pd.to_numeric(current_values, errors="coerce")
+    baseline_numeric = pd.to_numeric(baseline_values, errors="coerce")
+
+    zero_baseline_mask = baseline_numeric == 0
+    nonzero_current_mask = ~pd.isna(current_numeric) & ~are_series_values_close(current_numeric, 0.0)
+    invalid_zero_baselines = zero_baseline_mask & nonzero_current_mask
+    if invalid_zero_baselines.any():
+        raise AnalysisError(
+            f"Cannot compute {label} because at least one clean baseline value is zero while the "
+            "paired ground-truth value is non-zero."
+        )
+
+    signed_percent_change = ((current_numeric - baseline_numeric) / baseline_numeric) * 100.0
+    signed_percent_change = signed_percent_change.mask(zero_baseline_mask, 0.0)
+    signed_percent_change = signed_percent_change.mask(
+        are_series_values_close(signed_percent_change, 0.0),
+        0.0,
+    )
+    return signed_percent_change
+
+
+def are_series_values_close(values: pd.Series, target: float) -> pd.Series:
+    """Return an elementwise closeness mask using the renderer's scalar tolerance convention."""
+    tolerance = 1e-12 * values.map(lambda value: max(1.0, abs(float(value))) if not pd.isna(value) else 1.0)
+    return (values - target).abs() <= tolerance
+
+
+def validate_metric_scope_consistency(dataframe: pd.DataFrame, spec: ViewSpec) -> None:
+    """Reject pivot cells that would mix transformed GT values with untouched targeted values."""
+    if spec.ground_truth_relative_to_clean is None:
+        return
+    if METRIC_SCOPE_COLUMN not in dataframe.columns:
+        raise AnalysisError(
+            "ground_truth_relative_to_clean requires the derived 'metric_scope' column."
+        )
+
+    cell_dimensions = spec.rows + spec.cols + spec.split_by
+    cell_scope_counts = (
+        dataframe.groupby(cell_dimensions, dropna=False, sort=True)[METRIC_SCOPE_COLUMN]
+        .nunique()
+        .reset_index(name="_metric_scope_count")
+    )
+    conflicting_cells = (
+        cell_scope_counts[cell_scope_counts["_metric_scope_count"] > 1].reset_index(drop=True)
+    )
+    if conflicting_cells.empty:
+        return
+
+    formatted_conflicts: list[str] = []
+    for _, row in conflicting_cells.head(5).iterrows():
+        row_key = {column: normalize_scalar(row[column]) for column in spec.rows}
+        col_key = {column: normalize_scalar(row[column]) for column in spec.cols}
+        formatted_conflicts.append(
+            f"metric_scopes={int(row['_metric_scope_count'])}, row_key={row_key}, col_key={col_key}"
+        )
+    examples = " ; ".join(formatted_conflicts)
+    raise AnalysisError(
+        "ground_truth_relative_to_clean requires each pivot cell to contain exactly one "
+        "metric_scope. Add 'metric_scope' to rows/cols/split_by or filter to one scope. "
+        f"Conflicting cells: {examples}."
+    )
+
+
+def validate_ground_truth_relative_display_mode_consistency(
+    dataframe: pd.DataFrame,
+    spec: ViewSpec,
+) -> None:
+    """Reject pivot cells that would mix clean GT raw values with GT relative deltas."""
+    config = spec.ground_truth_relative_to_clean
+    if config is None:
+        return
+    if "attack_method" not in dataframe.columns or METRIC_SCOPE_COLUMN not in dataframe.columns:
+        raise AnalysisError(
+            "ground_truth_relative_to_clean requires 'attack_method' and 'metric_scope' to remain "
+            "available through view preparation."
+        )
+
+    cell_dimensions = spec.rows + spec.cols + spec.split_by
+    display_mode_series = build_ground_truth_relative_display_mode_series(
+        dataframe,
+        baseline_attack_method=config.baseline_attack_method,
+    )
+    cell_display_mode_counts = (
+        dataframe.assign(_ground_truth_relative_display_mode=display_mode_series)
+        .groupby(cell_dimensions, dropna=False, sort=True)["_ground_truth_relative_display_mode"]
+        .nunique()
+        .reset_index(name="_display_mode_count")
+    )
+    conflicting_cells = (
+        cell_display_mode_counts[cell_display_mode_counts["_display_mode_count"] > 1]
+        .reset_index(drop=True)
+    )
+    if conflicting_cells.empty:
+        return
+
+    formatted_conflicts: list[str] = []
+    for _, row in conflicting_cells.head(5).iterrows():
+        row_key = {column: normalize_scalar(row[column]) for column in spec.rows}
+        col_key = {column: normalize_scalar(row[column]) for column in spec.cols}
+        formatted_conflicts.append(
+            f"display_modes={int(row['_display_mode_count'])}, row_key={row_key}, col_key={col_key}"
+        )
+    examples = " ; ".join(formatted_conflicts)
+    raise AnalysisError(
+        "ground_truth_relative_to_clean requires each pivot cell to contain exactly one value unit. "
+        "Add 'attack_method' to rows/cols/split_by or filter to one attack method so clean GT raw "
+        "values do not aggregate with GT relative deltas. "
+        f"Conflicting cells: {examples}."
+    )
+
+
+def build_ground_truth_relative_display_mode_series(
+    dataframe: pd.DataFrame,
+    *,
+    baseline_attack_method: str,
+) -> pd.Series:
+    """Label rows by the value unit they contribute under GT-relative rendering."""
+    is_ground_truth = dataframe[METRIC_SCOPE_COLUMN] == GROUND_TRUTH_SCOPE
+    is_baseline_attack_method = dataframe["attack_method"] == baseline_attack_method
+    return pd.Series(
+        [
+            (
+                "ground_truth_raw"
+                if is_gt and is_baseline
+                else "ground_truth_relative"
+                if is_gt
+                else "absolute"
+            )
+            for is_gt, is_baseline in zip(
+                is_ground_truth.tolist(),
+                is_baseline_attack_method.tolist(),
+                strict=True,
+            )
+        ],
+        index=dataframe.index,
+    )
+
+
 def normalize_split_value_mapping(
     split_by: list[str],
     split_values: Mapping[str, Any],
@@ -974,6 +1402,13 @@ def require_nonempty_string(value: Any, *, label: str) -> str:
     if not stripped:
         raise AnalysisError(f"Expected '{label}' to be a non-empty string.")
     return stripped
+
+
+def require_mapping(value: Any, *, label: str) -> Mapping[str, Any]:
+    """Require one mapping value."""
+    if not isinstance(value, Mapping):
+        raise AnalysisError(f"Expected '{label}' to be a mapping, got {type(value).__name__}.")
+    return value
 
 
 def require_string_list(value: Any, *, label: str) -> list[str]:

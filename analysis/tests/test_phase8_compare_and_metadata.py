@@ -21,12 +21,19 @@ from analysis.pipeline.report_table_renderer import (
     BestValueBoldingSpec,
     TableStructure,
     apply_dimension_value_orders,
+    build_data_cell_presentation,
     draw_cell_block,
+    format_dataframe_for_display,
     parse_render_spec,
+    resolve_data_cell_fill_color,
     resolve_ranked_value_highlights,
     resolve_title,
 )
-from analysis.pipeline.view_table_builder import build_view_bundles, parse_view_spec
+from analysis.pipeline.view_table_builder import (
+    AnalysisError as ViewAnalysisError,
+    build_view_bundles,
+    parse_view_spec,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -82,6 +89,20 @@ def _write_run_bundle(
     )
     _write_json(bundle_dir / "slice_manifest.json", slice_manifest)
     return bundle_dir
+
+
+def _write_long_table_bundle(
+    *,
+    bundle_name: str,
+    rows: list[dict[str, object]],
+    created_paths: list[Path],
+) -> Path:
+    bundle_dir = RESULTS_ROOT / "tests" / bundle_name
+    created_paths.append(bundle_dir)
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = bundle_dir / "long_table.csv"
+    pd.DataFrame(rows, columns=CANONICAL_COLUMNS).to_csv(csv_path, index=False)
+    return csv_path
 
 
 def _rows_for_run(run_id: str) -> list[dict[str, object]]:
@@ -359,6 +380,289 @@ def test_view_table_builder_propagates_slice_metadata_into_meta_and_context() ->
     assert meta["source_slice_manifest_path"].endswith("slice_manifest.json")
 
 
+def test_view_table_builder_transforms_ground_truth_relative_to_clean_before_aggregation() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_long_table_bundle(
+            bundle_name=f"phase8_{token}_gt_relative_input",
+            rows=[
+                {
+                    "run_id": "clean_run",
+                    "dataset": "diginetica",
+                    "attack_method": "clean",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "ground_truth_recall",
+                    "k": 10,
+                    "value": 0.50,
+                },
+                {
+                    "run_id": "attack_run",
+                    "dataset": "diginetica",
+                    "attack_method": "dpsbr_baseline",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "ground_truth_recall",
+                    "k": 10,
+                    "value": 0.60,
+                },
+                {
+                    "run_id": "clean_run",
+                    "dataset": "diginetica",
+                    "attack_method": "clean",
+                    "victim_model": "miasrec",
+                    "target_item": 102,
+                    "target_type": "popular",
+                    "metric": "ground_truth_recall",
+                    "k": 10,
+                    "value": 0.20,
+                },
+                {
+                    "run_id": "attack_run",
+                    "dataset": "diginetica",
+                    "attack_method": "dpsbr_baseline",
+                    "victim_model": "miasrec",
+                    "target_item": 102,
+                    "target_type": "popular",
+                    "metric": "ground_truth_recall",
+                    "k": 10,
+                    "value": 0.10,
+                },
+                {
+                    "run_id": "clean_run",
+                    "dataset": "diginetica",
+                    "attack_method": "clean",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "targeted_recall",
+                    "k": 10,
+                    "value": 0.01,
+                },
+                {
+                    "run_id": "attack_run",
+                    "dataset": "diginetica",
+                    "attack_method": "dpsbr_baseline",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "targeted_recall",
+                    "k": 10,
+                    "value": 0.07,
+                },
+                {
+                    "run_id": "clean_run",
+                    "dataset": "diginetica",
+                    "attack_method": "clean",
+                    "victim_model": "miasrec",
+                    "target_item": 102,
+                    "target_type": "popular",
+                    "metric": "targeted_recall",
+                    "k": 10,
+                    "value": 0.02,
+                },
+                {
+                    "run_id": "attack_run",
+                    "dataset": "diginetica",
+                    "attack_method": "dpsbr_baseline",
+                    "victim_model": "miasrec",
+                    "target_item": 102,
+                    "target_type": "popular",
+                    "metric": "targeted_recall",
+                    "k": 10,
+                    "value": 0.08,
+                },
+            ],
+            created_paths=created_paths,
+        )
+
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_gt_relative_bundle"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            {
+                "input": str(input_csv),
+                "output": str(output_bundle_dir),
+                "name": f"phase8_{token}_gt_relative_bundle",
+                "filters": {"metric_name": "recall", "k": 10},
+                "rows": ["attack_method"],
+                "cols": ["metric_scope"],
+                "value_col": "value",
+                "agg": "mean",
+                "auto_context": True,
+                "require_unique_cells": False,
+                "ground_truth_relative_to_clean": {
+                    "enabled": True,
+                    "baseline_attack_method": "clean",
+                    "ignore_pairing_columns": ["run_id"],
+                },
+            },
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_gt_relative_view_spec.yaml",
+        )
+
+        bundle_dirs = build_view_bundles(view_spec)
+        table = pd.read_csv(bundle_dirs[0] / "table.csv")
+        meta = _load_json(bundle_dirs[0] / "meta.json")
+        source_table = pd.read_csv(input_csv)
+
+    assert source_table[source_table["metric"] == "ground_truth_recall"]["value"].tolist() == [
+        0.50,
+        0.60,
+        0.20,
+        0.10,
+    ]
+    assert table["attack_method"].tolist() == ["clean", "dpsbr_baseline"]
+    assert table["ground_truth"].tolist() == pytest.approx([0.35, -15.0])
+    assert table["targeted"].tolist() == pytest.approx([0.015, 0.075])
+    assert meta["ground_truth_relative_to_clean"] == {
+        "enabled": True,
+        "baseline_attack_method": "clean",
+        "ignore_pairing_columns": ["run_id"],
+    }
+
+
+def test_view_table_builder_rejects_gt_relative_views_that_mix_metric_scopes_per_cell() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_long_table_bundle(
+            bundle_name=f"phase8_{token}_gt_relative_conflict_input",
+            rows=[
+                {
+                    "run_id": "clean_run",
+                    "dataset": "diginetica",
+                    "attack_method": "clean",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "ground_truth_recall",
+                    "k": 10,
+                    "value": 0.50,
+                },
+                {
+                    "run_id": "attack_run",
+                    "dataset": "diginetica",
+                    "attack_method": "dpsbr_baseline",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "ground_truth_recall",
+                    "k": 10,
+                    "value": 0.60,
+                },
+                {
+                    "run_id": "clean_run",
+                    "dataset": "diginetica",
+                    "attack_method": "clean",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "targeted_recall",
+                    "k": 10,
+                    "value": 0.01,
+                },
+                {
+                    "run_id": "attack_run",
+                    "dataset": "diginetica",
+                    "attack_method": "dpsbr_baseline",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "targeted_recall",
+                    "k": 10,
+                    "value": 0.07,
+                },
+            ],
+            created_paths=created_paths,
+        )
+
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_gt_relative_conflict_bundle"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            {
+                "input": str(input_csv),
+                "output": str(output_bundle_dir),
+                "name": f"phase8_{token}_gt_relative_conflict_bundle",
+                "filters": {"metric_name": "recall", "k": 10},
+                "rows": ["attack_method"],
+                "cols": ["metric_name"],
+                "value_col": "value",
+                "agg": "mean",
+                "auto_context": False,
+                "require_unique_cells": False,
+                "ground_truth_relative_to_clean": {
+                    "enabled": True,
+                    "baseline_attack_method": "clean",
+                    "ignore_pairing_columns": ["run_id"],
+                },
+            },
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_gt_relative_conflict_view_spec.yaml",
+        )
+
+        with pytest.raises(ViewAnalysisError) as exc_info:
+            build_view_bundles(view_spec)
+
+    assert "exactly one metric_scope" in str(exc_info.value)
+
+
+def test_view_table_builder_rejects_gt_relative_views_that_mix_clean_raw_and_attack_deltas() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_long_table_bundle(
+            bundle_name=f"phase8_{token}_gt_relative_mode_conflict_input",
+            rows=[
+                {
+                    "run_id": "clean_run",
+                    "dataset": "diginetica",
+                    "attack_method": "clean",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "ground_truth_recall",
+                    "k": 10,
+                    "value": 0.50,
+                },
+                {
+                    "run_id": "attack_run",
+                    "dataset": "diginetica",
+                    "attack_method": "dpsbr_baseline",
+                    "victim_model": "miasrec",
+                    "target_item": 101,
+                    "target_type": "popular",
+                    "metric": "ground_truth_recall",
+                    "k": 10,
+                    "value": 0.60,
+                },
+            ],
+            created_paths=created_paths,
+        )
+
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_gt_relative_mode_conflict_bundle"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            {
+                "input": str(input_csv),
+                "output": str(output_bundle_dir),
+                "name": f"phase8_{token}_gt_relative_mode_conflict_bundle",
+                "filters": {"metric_name": "recall", "metric_scope": "ground_truth", "k": 10},
+                "rows": ["victim_model"],
+                "cols": ["metric_scope"],
+                "value_col": "value",
+                "agg": "mean",
+                "auto_context": False,
+                "require_unique_cells": False,
+                "ground_truth_relative_to_clean": {
+                    "enabled": True,
+                    "baseline_attack_method": "clean",
+                    "ignore_pairing_columns": ["run_id"],
+                },
+            },
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_gt_relative_mode_conflict_view_spec.yaml",
+        )
+
+        with pytest.raises(ViewAnalysisError) as exc_info:
+            build_view_bundles(view_spec)
+
+    assert "exactly one value unit" in str(exc_info.value)
+
+
 def test_renderer_can_consume_propagated_slice_metadata() -> None:
     meta_payload = {
         "context": {
@@ -379,6 +683,216 @@ def test_renderer_can_consume_propagated_slice_metadata() -> None:
     )
 
     assert title == "Policy largest_complete_prefix N=2 Victims miasrec, tron Safe=True"
+
+
+def test_renderer_formats_gt_relative_cells_as_signed_percent_and_colors_by_signed_magnitude() -> None:
+    dataframe = pd.DataFrame(
+        [
+            {"attack_method": "clean", "ground_truth": 0.35, "targeted": 0.015},
+            {"attack_method": "dpsbr_baseline", "ground_truth": -15.0, "targeted": 0.075},
+            {"attack_method": "position_opt_mvp", "ground_truth": 20.0, "targeted": 0.050},
+        ]
+    )
+    table_structure = TableStructure(
+        row_levels=["attack_method"],
+        col_levels=["metric_scope"],
+        row_tuples=[
+            ("clean",),
+            ("dpsbr_baseline",),
+            ("position_opt_mvp",),
+        ],
+        column_tuples=[("ground_truth",), ("targeted",)],
+        row_column_names=["attack_method"],
+        value_column_names=["ground_truth", "targeted"],
+    )
+    meta_payload = {
+        "ground_truth_relative_to_clean": {
+            "enabled": True,
+            "baseline_attack_method": "clean",
+            "ignore_pairing_columns": ["run_id"],
+        },
+        "context": {},
+        "effective_filters": {"metric_name": "recall", "k": 10},
+        "split_values": {},
+    }
+
+    data_cell_presentation = build_data_cell_presentation(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        meta_payload=meta_payload,
+    )
+    display_dataframe = format_dataframe_for_display(
+        dataframe,
+        identifier_columns={"attack_method"},
+        round_digits=6,
+        signed_percent_round_digits=4,
+        value_alias={},
+        table_structure=table_structure,
+        data_cell_presentation=data_cell_presentation,
+    )
+
+    assert data_cell_presentation.display_modes == [
+        ["absolute", "absolute"],
+        ["signed_percent", "absolute"],
+        ["signed_percent", "absolute"],
+    ]
+    assert display_dataframe["ground_truth"].tolist() == ["0.350000", "-15.0000%", "+20.0000%"]
+    assert display_dataframe["targeted"].tolist() == ["0.015000", "0.075000", "0.050000"]
+
+    scope_colors = {}
+    clean_color = resolve_data_cell_fill_color(
+        table_structure=table_structure,
+        row_tuple=table_structure.row_tuples[0],
+        column_tuple=table_structure.column_tuples[0],
+        raw_value=0.35,
+        display_mode=data_cell_presentation.display_modes[0][0],
+        signed_percent_heatmap_scale=data_cell_presentation.signed_percent_scales[0][0],
+        leaf_column_fill_color=None,
+        scope_colors=scope_colors,
+    )
+    negative_color = resolve_data_cell_fill_color(
+        table_structure=table_structure,
+        row_tuple=table_structure.row_tuples[1],
+        column_tuple=table_structure.column_tuples[0],
+        raw_value=-15.0,
+        display_mode=data_cell_presentation.display_modes[1][0],
+        signed_percent_heatmap_scale=data_cell_presentation.signed_percent_scales[1][0],
+        leaf_column_fill_color=None,
+        scope_colors=scope_colors,
+    )
+    positive_color = resolve_data_cell_fill_color(
+        table_structure=table_structure,
+        row_tuple=table_structure.row_tuples[2],
+        column_tuple=table_structure.column_tuples[0],
+        raw_value=20.0,
+        display_mode=data_cell_presentation.display_modes[2][0],
+        signed_percent_heatmap_scale=data_cell_presentation.signed_percent_scales[2][0],
+        leaf_column_fill_color=None,
+        scope_colors=scope_colors,
+    )
+    targeted_color = resolve_data_cell_fill_color(
+        table_structure=table_structure,
+        row_tuple=table_structure.row_tuples[2],
+        column_tuple=table_structure.column_tuples[1],
+        raw_value=0.050,
+        display_mode=data_cell_presentation.display_modes[2][1],
+        signed_percent_heatmap_scale=data_cell_presentation.signed_percent_scales[2][1],
+        leaf_column_fill_color=None,
+        scope_colors=scope_colors,
+    )
+
+    assert clean_color is None
+    assert positive_color is not None
+    assert negative_color is not None
+    assert positive_color != negative_color
+    assert targeted_color is None
+
+
+def test_renderer_scales_gt_heatmap_separately_for_positive_and_negative_values_within_row_group() -> None:
+    dataframe = pd.DataFrame(
+        [
+            {"victim_model": "miasrec", "attack_method": "clean", "ground_truth": 0.35},
+            {"victim_model": "miasrec", "attack_method": "dpsbr_baseline", "ground_truth": -20.0},
+            {"victim_model": "miasrec", "attack_method": "prefix_nonzero_when_possible", "ground_truth": -10.0},
+            {"victim_model": "miasrec", "attack_method": "random_nonzero_when_possible", "ground_truth": -5.0},
+            {"victim_model": "miasrec", "attack_method": "position_opt_mvp", "ground_truth": 1.0},
+            {"victim_model": "tron", "attack_method": "clean", "ground_truth": 0.42},
+            {"victim_model": "tron", "attack_method": "dpsbr_baseline", "ground_truth": 8.0},
+        ]
+    )
+    table_structure = TableStructure(
+        row_levels=["victim_model", "attack_method"],
+        col_levels=["metric_scope"],
+        row_tuples=[
+            ("miasrec", "clean"),
+            ("miasrec", "dpsbr_baseline"),
+            ("miasrec", "prefix_nonzero_when_possible"),
+            ("miasrec", "random_nonzero_when_possible"),
+            ("miasrec", "position_opt_mvp"),
+            ("tron", "clean"),
+            ("tron", "dpsbr_baseline"),
+        ],
+        column_tuples=[("ground_truth",)],
+        row_column_names=["victim_model", "attack_method"],
+        value_column_names=["ground_truth"],
+    )
+    meta_payload = {
+        "ground_truth_relative_to_clean": {
+            "enabled": True,
+            "baseline_attack_method": "clean",
+            "ignore_pairing_columns": ["run_id", "replacement_topk_ratio"],
+        },
+        "context": {},
+        "effective_filters": {"metric_name": "recall", "k": 10},
+        "split_values": {},
+    }
+
+    data_cell_presentation = build_data_cell_presentation(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        meta_payload=meta_payload,
+    )
+
+    positive_color = resolve_data_cell_fill_color(
+        table_structure=table_structure,
+        row_tuple=table_structure.row_tuples[4],
+        column_tuple=table_structure.column_tuples[0],
+        raw_value=1.0,
+        display_mode=data_cell_presentation.display_modes[4][0],
+        signed_percent_heatmap_scale=data_cell_presentation.signed_percent_scales[4][0],
+        leaf_column_fill_color=None,
+        scope_colors={},
+    )
+    negative_color = resolve_data_cell_fill_color(
+        table_structure=table_structure,
+        row_tuple=table_structure.row_tuples[1],
+        column_tuple=table_structure.column_tuples[0],
+        raw_value=-20.0,
+        display_mode=data_cell_presentation.display_modes[1][0],
+        signed_percent_heatmap_scale=data_cell_presentation.signed_percent_scales[1][0],
+        leaf_column_fill_color=None,
+        scope_colors={},
+    )
+
+    assert data_cell_presentation.signed_percent_scales[4][0] is not None
+    assert data_cell_presentation.display_modes[0][0] == "absolute"
+    assert data_cell_presentation.signed_percent_scales[0][0] is None
+    assert data_cell_presentation.signed_percent_scales[4][0].positive_abs_max == pytest.approx(1.0)
+    assert data_cell_presentation.signed_percent_scales[4][0].negative_abs_max == pytest.approx(20.0)
+    assert positive_color == "#2ca25f"
+    assert negative_color == "#de2d26"
+
+
+def test_renderer_keeps_absolute_values_when_gt_relative_metadata_is_absent() -> None:
+    dataframe = pd.DataFrame([{"attack_method": "position_opt_mvp", "ground_truth": 20.0}])
+    table_structure = TableStructure(
+        row_levels=["attack_method"],
+        col_levels=["metric_scope"],
+        row_tuples=[("position_opt_mvp",)],
+        column_tuples=[("ground_truth",)],
+        row_column_names=["attack_method"],
+        value_column_names=["ground_truth"],
+    )
+    data_cell_presentation = build_data_cell_presentation(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        meta_payload={
+            "context": {},
+            "effective_filters": {"metric_name": "recall", "k": 10},
+            "split_values": {},
+        },
+    )
+    display_dataframe = format_dataframe_for_display(
+        dataframe,
+        identifier_columns={"attack_method"},
+        round_digits=3,
+        value_alias={},
+        table_structure=table_structure,
+        data_cell_presentation=data_cell_presentation,
+    )
+
+    assert data_cell_presentation.display_modes == [["absolute"]]
+    assert display_dataframe["ground_truth"].tolist() == ["20.000"]
 
 
 def test_renderer_remains_presentation_only_without_runtime_state_inputs() -> None:
@@ -443,6 +957,45 @@ def test_renderer_parses_second_best_underline_flag() -> None:
 
     assert render_spec.table.best_value_bolding is not None
     assert render_spec.table.best_value_bolding.underline_second_best is True
+
+
+def test_renderer_parses_optional_signed_percent_round_digits() -> None:
+    render_spec = parse_render_spec(
+        {
+            "style_name": "phase8_signed_percent_digits",
+            "output_format": "png",
+            "title": {
+                "template": "test",
+                "align": "center",
+                "font_size": 12,
+                "color": "black",
+            },
+            "figure": {
+                "width": 8,
+                "height": 4,
+                "dpi": 100,
+                "background_color": "white",
+            },
+            "table": {
+                "font_size": 10,
+                "round_digits": 6,
+                "signed_percent_round_digits": 4,
+                "text_color": "black",
+                "show_grid": True,
+                "auto_shrink": False,
+                "wrap_text": False,
+                "cell_align": "center",
+                "display_alias": {},
+                "value_alias": {},
+                "dimension_value_orders": {},
+                "scope_colors": {},
+                "top_level_group_separators": False,
+            },
+        }
+    )
+
+    assert render_spec.table.round_digits == 6
+    assert render_spec.table.signed_percent_round_digits == 4
 
 
 def test_renderer_can_identify_best_and_second_best_cells_per_partition() -> None:

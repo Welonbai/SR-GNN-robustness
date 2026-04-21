@@ -26,3 +26,10 @@ value_col: value
 agg: first
 auto_context: true
 require_unique_cells: true
+
+ground_truth_relative_to_clean:
+  enabled: true
+  baseline_attack_method: clean
+  ignore_pairing_columns:
+    - run_id
+    - replacement_topk_ratio

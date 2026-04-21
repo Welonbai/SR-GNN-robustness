@@ -17,6 +17,7 @@ figure:
 table:
   font_size: 12
   round_digits: 6
+  signed_percent_round_digits: 3
   text_color: black
   show_grid: true
   auto_shrink: false
@@ -63,11 +64,6 @@ table:
       - prefix_nonzero_when_possible
       - random_nonzero_when_possible
       - position_opt_mvp
-
-  scope_colors:
-    metric_scope:
-      ground_truth: "#E8F1FF"
-      targeted: "#FFF0E1"
 
   best_value_bolding:
     compare_along: rows
