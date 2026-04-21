@@ -52,6 +52,7 @@ from attack.pipeline.core.pipeline_utils import (
     load_or_init_execution_log,
     load_or_init_run_coverage,
     rebuild_summary_current,
+    sync_run_coverage_materialized_prefix,
 )
 from attack.position_opt import position_opt_identity_payload, resolve_clean_surrogate_checkpoint_path
 
@@ -867,6 +868,7 @@ def _migrate_legacy_source(source: LegacyRunSource) -> dict[str, Any]:
         "failed_cell_count": int(import_outcome["failed_cell_count"]),
         "requested_cell_count": int(import_outcome["requested_cell_count"]),
     }
+    sync_run_coverage_materialized_prefix(coverage)
     save_run_coverage(coverage, metadata_paths["run_coverage"])
 
     execution_record = build_import_execution_record(

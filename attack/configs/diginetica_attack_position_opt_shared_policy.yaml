@@ -52,11 +52,11 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 6
+  count: 3
   reuse_saved_targets: true
 
 victims:
-  enabled: [srgnn, miasrec, tron]
+  enabled: [tron]
   params:
     srgnn:
       train:

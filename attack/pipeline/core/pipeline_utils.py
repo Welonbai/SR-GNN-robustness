@@ -57,6 +57,7 @@ from attack.common.config import Config
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+RUN_COVERAGE_MATERIALIZED_PREFIX_FIELD = "materialized_target_prefix_count"
 
 
 def build_srgnn_opt_from_train_config(train_config: Mapping[str, Any]) -> SimpleNamespace:
@@ -401,14 +402,24 @@ def ensure_target_registry_prefix(
     return registry
 
 
-def requested_target_prefix(target_registry: Mapping[str, Any]) -> list[int]:
+def _registry_ordered_targets(target_registry: Mapping[str, Any]) -> list[int]:
     ordered_targets = target_registry.get("ordered_targets")
     if not isinstance(ordered_targets, list):
         raise ValueError("target_registry.json is missing ordered_targets.")
-    current_count = int(target_registry.get("current_count", 0))
-    if current_count < 0 or current_count > len(ordered_targets):
-        raise ValueError("target_registry.json has an invalid current_count.")
-    return [int(item) for item in ordered_targets[:current_count]]
+    return [int(item) for item in ordered_targets]
+
+
+def requested_target_prefix(
+    config: Config,
+    *,
+    target_registry: Mapping[str, Any],
+) -> list[int]:
+    ordered_targets = _registry_ordered_targets(target_registry)
+    requested_prefix = _requested_target_prefix_length(
+        config,
+        ordered_targets=ordered_targets,
+    )
+    return [int(item) for item in ordered_targets[:requested_prefix]]
 
 
 def _default_victim_coverage_entry(
@@ -505,6 +516,56 @@ def _normalize_cell_coverage_entry(
     return normalized, changed
 
 
+def _largest_completed_target_prefix_count(
+    target_order: list[int],
+    *,
+    cells_payload: Mapping[str, Any],
+    victim_names: list[str],
+) -> int:
+    if not victim_names:
+        return 0
+
+    prefix_count = 0
+    for target_item in target_order:
+        target_cells = cells_payload.get(str(target_item))
+        if not isinstance(target_cells, Mapping):
+            break
+        if all(
+            isinstance(target_cells.get(victim_name), Mapping)
+            and target_cells[victim_name].get("status") == "completed"
+            for victim_name in victim_names
+        ):
+            prefix_count += 1
+            continue
+        break
+    return prefix_count
+
+
+def sync_run_coverage_materialized_prefix(run_coverage: dict[str, Any]) -> bool:
+    targets_order_raw = run_coverage.get("targets_order", [])
+    if not isinstance(targets_order_raw, list):
+        raise ValueError("run_coverage.json must contain a targets_order list.")
+    victims_payload = run_coverage.get("victims", {})
+    if not isinstance(victims_payload, Mapping):
+        raise ValueError("run_coverage.json must contain a victims object.")
+    cells_payload = run_coverage.get("cells", {})
+    if not isinstance(cells_payload, Mapping):
+        raise ValueError("run_coverage.json must contain a cells object.")
+
+    targets_order = [int(item) for item in targets_order_raw]
+    victim_names = [str(victim_name) for victim_name in victims_payload.keys()]
+    materialized_prefix_count = _largest_completed_target_prefix_count(
+        targets_order,
+        cells_payload=cells_payload,
+        victim_names=victim_names,
+    )
+    stored_value = run_coverage.get(RUN_COVERAGE_MATERIALIZED_PREFIX_FIELD)
+    if stored_value == materialized_prefix_count:
+        return False
+    run_coverage[RUN_COVERAGE_MATERIALIZED_PREFIX_FIELD] = int(materialized_prefix_count)
+    return True
+
+
 def load_or_init_run_coverage(
     config: Config,
     *,
@@ -515,7 +576,10 @@ def load_or_init_run_coverage(
     allow_new_victims: bool = True,
 ) -> dict[str, Any]:
     coverage_path = metadata_paths["run_coverage"]
-    expected_targets_order = requested_target_prefix(target_registry)
+    requested_targets_order = requested_target_prefix(
+        config,
+        target_registry=target_registry,
+    )
     expected_run_group_key = run_group_key(
         config,
         run_type=run_type,
@@ -540,7 +604,7 @@ def load_or_init_run_coverage(
             "target_cohort_key": expected_target_cohort_key,
             "split_key": split_key(config),
             "run_type": run_type,
-            "targets_order": expected_targets_order,
+            "targets_order": requested_targets_order,
             "victims": {
                 victim_name: _default_victim_coverage_entry(
                     now,
@@ -553,8 +617,9 @@ def load_or_init_run_coverage(
                     victim_name: _default_cell_coverage_entry(now)
                     for victim_name in config.victims.enabled
                 }
-                for target_item in expected_targets_order
+                for target_item in requested_targets_order
             },
+            RUN_COVERAGE_MATERIALIZED_PREFIX_FIELD: 0,
             "created_at": now,
             "updated_at": now,
         }
@@ -607,16 +672,20 @@ def load_or_init_run_coverage(
             )
         victim_entry["last_requested_at"] = now
 
+    registry_ordered_targets = _registry_ordered_targets(target_registry)
     existing_targets_order = [int(item) for item in coverage.get("targets_order", [])]
     if existing_targets_order:
-        if expected_targets_order[: len(existing_targets_order)] != existing_targets_order:
+        if registry_ordered_targets[: len(existing_targets_order)] != existing_targets_order:
             raise ValueError("run_coverage.json targets_order is incompatible with target_registry.")
-    if existing_targets_order != expected_targets_order:
-        coverage["targets_order"] = expected_targets_order
+    target_prefix_order = list(existing_targets_order)
+    if len(requested_targets_order) > len(target_prefix_order):
+        target_prefix_order = list(requested_targets_order)
+    if existing_targets_order != target_prefix_order:
+        coverage["targets_order"] = target_prefix_order
         changed = True
 
     victim_names = list(victims_payload.keys())
-    for target_item in expected_targets_order:
+    for target_item in target_prefix_order:
         target_key = str(target_item)
         target_cells = cells_payload.get(target_key)
         if not isinstance(target_cells, dict):
@@ -641,6 +710,9 @@ def load_or_init_run_coverage(
             if normalized_changed:
                 target_cells[victim_name] = normalized_cell
                 changed = True
+
+    if sync_run_coverage_materialized_prefix(coverage):
+        changed = True
 
     if changed:
         coverage["updated_at"] = now
@@ -1014,6 +1086,7 @@ def _poison_train_config(config: Config) -> dict[str, Any]:
 
 
 __all__ = [
+    "RUN_COVERAGE_MATERIALIZED_PREFIX_FIELD",
     "SharedAttackArtifacts",
     "build_ordered_target_cohort",
     "build_srgnn_opt_from_train_config",
@@ -1027,4 +1100,5 @@ __all__ = [
     "requested_target_prefix",
     "rebuild_summary_current",
     "resolve_target_items",
+    "sync_run_coverage_materialized_prefix",
 ]

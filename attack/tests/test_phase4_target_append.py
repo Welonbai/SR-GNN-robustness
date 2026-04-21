@@ -273,6 +273,55 @@ def test_larger_prefix_only_executes_new_targets_and_rerun_executes_nothing_new(
     assert progress_payload["requested_victims"] == ["miasrec"]
 
 
+def test_shared_target_cohort_can_back_independent_method_local_requested_prefixes(
+    monkeypatch,
+) -> None:
+    with _phase4_temp_root() as temp_root:
+        method_a_config = _config_for_temp_root(temp_root, count=6, victims=("miasrec",))
+        method_b_config = _config_for_temp_root(temp_root, count=3, victims=("miasrec",))
+        method_b_run_type = "shared_policy_append_test"
+
+        method_a_calls: list[tuple[int, str]] = []
+        _install_fake_execution(monkeypatch, calls=method_a_calls)
+        run_targets_and_victims(
+            method_a_config,
+            config_path=None,
+            context=_minimal_context(method_a_config, run_type="clean"),
+            run_type="clean",
+            build_poisoned=_build_poisoned,
+        )
+
+        method_b_calls: list[tuple[int, str]] = []
+        _install_fake_execution(monkeypatch, calls=method_b_calls)
+        summary = run_targets_and_victims(
+            method_b_config,
+            config_path=None,
+            context=_minimal_context(method_b_config, run_type=method_b_run_type),
+            run_type=method_b_run_type,
+            build_poisoned=_build_poisoned,
+        )
+
+        shared_registry = load_target_registry(
+            shared_artifact_paths(method_b_config, run_type=method_b_run_type)["target_registry"]
+        )
+        method_b_metadata_paths = run_metadata_paths(
+            method_b_config,
+            run_type=method_b_run_type,
+        )
+        method_b_coverage = load_run_coverage(method_b_metadata_paths["run_coverage"])
+        method_b_progress = load_json(method_b_metadata_paths["progress"])
+
+    assert shared_registry is not None
+    assert shared_registry["current_count"] == 6
+    expected_method_b_targets = shared_registry["ordered_targets"][:3]
+    assert method_b_calls == [(int(target_item), "miasrec") for target_item in expected_method_b_targets]
+    assert summary["target_items"] == [int(item) for item in expected_method_b_targets]
+    assert method_b_coverage is not None
+    assert method_b_coverage["targets_order"] == [int(item) for item in expected_method_b_targets]
+    assert method_b_coverage["materialized_target_prefix_count"] == 3
+    assert method_b_progress["total_targets"] == 3
+
+
 def test_victim_ordering_difference_is_treated_as_compatible_same_set(monkeypatch) -> None:
     with _phase4_temp_root() as temp_root:
         first_config = _config_for_temp_root(temp_root, count=2, victims=("miasrec", "tron"))

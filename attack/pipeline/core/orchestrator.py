@@ -50,6 +50,7 @@ from attack.pipeline.core.pipeline_utils import (
     plan_target_append_cells,
     rebuild_summary_current,
     requested_target_prefix,
+    sync_run_coverage_materialized_prefix,
 )
 from attack.pipeline.core.victim_execution import VictimExecutionResult, execute_single_victim
 
@@ -142,7 +143,10 @@ def run_targets_and_victims(
         config,
         shared_paths=context.shared_paths,
     )
-    requested_target_items = requested_target_prefix(target_registry)
+    requested_target_items = requested_target_prefix(
+        config,
+        target_registry=target_registry,
+    )
     run_coverage = load_or_init_run_coverage(
         config,
         run_type=run_type,
@@ -253,7 +257,7 @@ def run_targets_and_victims(
                     victim_name=victim_name,
                     execution_id=str(execution_record["execution_id"]),
                 )
-                save_run_coverage(run_coverage, metadata_paths["run_coverage"])
+                _save_run_coverage_snapshot(run_coverage, metadata_paths=metadata_paths)
                 _record_execution_cell_pending(
                     execution_log,
                     execution_record=execution_record,
@@ -322,7 +326,7 @@ def run_targets_and_victims(
                     artifacts=artifacts,
                     execution_id=str(execution_record["execution_id"]),
                 )
-                save_run_coverage(run_coverage, metadata_paths["run_coverage"])
+                _save_run_coverage_snapshot(run_coverage, metadata_paths=metadata_paths)
                 _record_execution_cell_completion(
                     execution_log,
                     execution_record=execution_record,
@@ -393,7 +397,7 @@ def run_targets_and_victims(
                 error=exc,
                 execution_id=str(execution_record["execution_id"]),
             )
-            save_run_coverage(run_coverage, metadata_paths["run_coverage"])
+            _save_run_coverage_snapshot(run_coverage, metadata_paths=metadata_paths)
             _record_execution_cell_failure(
                 execution_log,
                 execution_record=execution_record,
@@ -1173,6 +1177,15 @@ def _coverage_cell(
             f"run_coverage.json cells[{target_item}][{victim_name}] must be an object."
         )
     return cell
+
+
+def _save_run_coverage_snapshot(
+    run_coverage: dict[str, object],
+    *,
+    metadata_paths: Mapping[str, Path],
+) -> None:
+    sync_run_coverage_materialized_prefix(run_coverage)
+    save_run_coverage(run_coverage, metadata_paths["run_coverage"])
 
 
 def _mark_coverage_cell_completed(

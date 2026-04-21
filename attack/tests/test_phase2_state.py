@@ -15,6 +15,7 @@ from attack.common.artifact_io import (
     load_target_registry,
     load_target_selection_meta,
     save_json,
+    save_run_coverage,
     save_selected_targets,
     save_target_info,
     save_target_selection_meta,
@@ -185,6 +186,97 @@ def test_run_coverage_initialization_shape() -> None:
             assert cell_row[victim_name]["artifacts"]["metrics"] is None
             assert cell_row[victim_name]["artifacts"]["predictions"] is None
             assert cell_row[victim_name]["attempt_count"] == 0
+
+
+def test_run_group_local_prefix_does_not_expand_with_shared_target_registry_current_count() -> None:
+    stats = _sample_stats()
+    with _phase2_temp_root() as temp_root:
+        small_config = _all_bucket_config(temp_root, count=3)
+        large_config = _all_bucket_config(temp_root, count=6)
+        method_run_type = "shared_policy_append_test"
+        shared_paths = shared_artifact_paths(small_config, run_type="clean")
+        registry = ensure_target_registry_prefix(stats, large_config, shared_paths=shared_paths)
+        metadata_paths = run_metadata_paths(small_config, run_type=method_run_type)
+        coverage = load_or_init_run_coverage(
+            small_config,
+            run_type=method_run_type,
+            metadata_paths=metadata_paths,
+            target_registry=registry,
+        )
+
+    assert registry["current_count"] == 6
+    assert coverage["targets_order"] == registry["ordered_targets"][:3]
+    assert coverage["materialized_target_prefix_count"] == 0
+
+
+def test_run_coverage_bootstraps_local_materialized_prefix_from_old_shared_prefix_shape() -> None:
+    stats = _sample_stats()
+    with _phase2_temp_root() as temp_root:
+        small_config = _all_bucket_config(temp_root, count=3)
+        large_config = _all_bucket_config(temp_root, count=6)
+        shared_paths = shared_artifact_paths(small_config, run_type="clean")
+        registry = ensure_target_registry_prefix(stats, large_config, shared_paths=shared_paths)
+        metadata_paths = run_metadata_paths(small_config, run_type="clean")
+        legacy_shaped_coverage = load_or_init_run_coverage(
+            large_config,
+            run_type="clean",
+            metadata_paths=metadata_paths,
+            target_registry=registry,
+        )
+        ordered_targets = [int(item) for item in legacy_shaped_coverage["targets_order"]]
+        victim_names = list(legacy_shaped_coverage["victims"].keys())
+        for index, target_item in enumerate(ordered_targets):
+            target_cells = legacy_shaped_coverage["cells"][str(target_item)]
+            for victim_name in victim_names:
+                target_cells[victim_name]["status"] = "completed" if index < 3 else "requested"
+        legacy_shaped_coverage.pop("materialized_target_prefix_count", None)
+        save_run_coverage(legacy_shaped_coverage, metadata_paths["run_coverage"])
+
+        bootstrapped_coverage = load_or_init_run_coverage(
+            small_config,
+            run_type="clean",
+            metadata_paths=metadata_paths,
+            target_registry=registry,
+        )
+        persisted_coverage = load_run_coverage(metadata_paths["run_coverage"])
+
+    assert bootstrapped_coverage["targets_order"] == registry["ordered_targets"][:6]
+    assert bootstrapped_coverage["materialized_target_prefix_count"] == 3
+    assert persisted_coverage is not None
+    assert persisted_coverage["materialized_target_prefix_count"] == 3
+
+
+def test_run_coverage_bootstrap_uses_largest_complete_prefix_for_partial_runs() -> None:
+    stats = _sample_stats()
+    with _phase2_temp_root() as temp_root:
+        config = _all_bucket_config(temp_root, count=3)
+        shared_paths = shared_artifact_paths(config, run_type="clean")
+        registry = ensure_target_registry_prefix(stats, config, shared_paths=shared_paths)
+        metadata_paths = run_metadata_paths(config, run_type="clean")
+        legacy_shaped_coverage = load_or_init_run_coverage(
+            config,
+            run_type="clean",
+            metadata_paths=metadata_paths,
+            target_registry=registry,
+        )
+        ordered_targets = [int(item) for item in legacy_shaped_coverage["targets_order"]]
+        statuses = ["completed", "failed", "completed"]
+        victim_names = list(legacy_shaped_coverage["victims"].keys())
+        for target_item, status in zip(ordered_targets, statuses, strict=True):
+            target_cells = legacy_shaped_coverage["cells"][str(target_item)]
+            for victim_name in victim_names:
+                target_cells[victim_name]["status"] = status
+        legacy_shaped_coverage.pop("materialized_target_prefix_count", None)
+        save_run_coverage(legacy_shaped_coverage, metadata_paths["run_coverage"])
+
+        bootstrapped_coverage = load_or_init_run_coverage(
+            config,
+            run_type="clean",
+            metadata_paths=metadata_paths,
+            target_registry=registry,
+        )
+
+    assert bootstrapped_coverage["materialized_target_prefix_count"] == 1
 
 
 def test_execution_log_initialization_shape() -> None:
