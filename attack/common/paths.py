@@ -275,6 +275,29 @@ def shared_attack_artifact_key(config: Config, *, run_type: str) -> str:
     return f"attack_shared_{_hash_token(_stable_json(payload))}"
 
 
+_VICTIM_IDENTITY_EXCLUDED_PARAM_KEYS = frozenset(
+    {
+        "batch_size",
+        "train_batch_size",
+        "eval_batch_size",
+    }
+)
+
+
+def _victim_identity_params(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _victim_identity_params(inner_value)
+            for key, inner_value in value.items()
+            if key not in _VICTIM_IDENTITY_EXCLUDED_PARAM_KEYS
+        }
+    if isinstance(value, list):
+        return [_victim_identity_params(item) for item in value]
+    if isinstance(value, tuple):
+        return [_victim_identity_params(item) for item in value]
+    return value
+
+
 def victim_prediction_key_payload(
     config: Config,
     victim_name: str,
@@ -296,10 +319,10 @@ def victim_prediction_key_payload(
                 attack_identity_context=attack_identity_context,
             ),
         }
-    # Victim prediction identity covers settings that can change victim training
-    # results. Runtime-only fields stay excluded because they live under
-    # victims.runtime rather than victims.params.
-    victim_params = config.victims.params[victim_name]
+    # Victim prediction identity excludes runtime-only fields and batch-size
+    # tuning knobs so append/retry can keep reusing victim state across
+    # resource-only batch-size adjustments.
+    victim_params = _victim_identity_params(config.victims.params[victim_name])
     return {
         **base_context,
         "victim_name": victim_name,

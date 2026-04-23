@@ -173,6 +173,7 @@ The renderer:
 
 ## 8. Related Docs
 
+- [Analysis Operator Playbook](../docs/analysis_operator_playbook.md)
 - [Appendable Experiment Operator Guide](../docs/operator_workflow_guide.md)
 - [Analysis Slice Rules](../docs/analysis_slice_rules.md)
 - [Legacy Migration Tool Usage](../docs/migration_tool_usage.md)

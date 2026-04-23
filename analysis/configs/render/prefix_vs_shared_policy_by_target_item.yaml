@@ -1,0 +1,67 @@
+style_name: prefix_vs_shared_policy_by_target_item
+
+output_format: png
+
+title:
+  template: "Diginetica | target={target_item} | Prefix-NZ vs Shared Policy"
+  align: center
+  font_size: 12
+  color: black
+
+figure:
+  width: 13
+  height: 5.4
+  dpi: 220
+  background_color: white
+
+table:
+  font_size: 12
+  round_digits: 6
+  signed_percent_round_digits: 3
+  text_color: black
+  show_grid: true
+  auto_shrink: false
+  wrap_text: false
+  cell_align: center
+  top_level_group_separators: true
+
+  display_alias:
+    labels:
+      attack_method: Attack
+      victim_model: Victim
+      metric_name: Metric
+      metric_scope: Scope
+      k: K
+
+    attack_method:
+      prefix_nonzero_when_possible: Prefix-NZ
+      position_opt_shared_policy: Shared Policy
+
+    victim_model:
+      miasrec: MiaSRec
+      srgnn: SRGNN
+      tron: TRON
+
+    metric_name:
+      precision: Precision
+      recall: Recall
+      mrr: MRR
+      ndcg: NDCG
+
+    metric_scope:
+      ground_truth: GT
+      targeted: Target
+
+  value_alias: {}
+
+  dimension_value_orders:
+    attack_method:
+      - prefix_nonzero_when_possible
+      - position_opt_shared_policy
+
+  best_value_bolding:
+    compare_along: rows
+    mode: max
+    underline_second_best: true
+    partition_by_levels:
+      - victim_model

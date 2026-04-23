@@ -1,0 +1,34 @@
+name: prefix_vs_shared_policy_by_target_item
+
+input: results\comparisons\diginetica_prefix_vs_shared_policy\merged_long_table.csv
+output_dir: results\comparisons\diginetica_prefix_vs_shared_policy
+filters:
+  poison_model: srgnn
+  target_type: popular
+  attack_size: 0.01
+  attack_method:
+    - prefix_nonzero_when_possible
+    - position_opt_shared_policy
+  metric_name: [recall, mrr]
+  metric_scope: [ground_truth, targeted]
+  k: [10, 20, 30]
+
+split_by:
+  - target_item
+
+rows:
+  - victim_model
+  - attack_method
+
+cols:
+  - metric_name
+  - k
+  - metric_scope
+
+value_col: value
+agg: first
+auto_context: true
+require_unique_cells: true
+
+ground_truth_relative_to_clean:
+  enabled: false

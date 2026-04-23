@@ -8,6 +8,10 @@ from typing import Any, Mapping, Sequence
 _ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron"}
 _ALLOWED_TARGET_BUCKETS = {"popular", "unpopular", "all"}
 _ALLOWED_EVAL_METRICS = {"precision", "recall", "mrr", "ndcg"}
+_ALLOWED_POSITION_OPT_REWARD_MODES = {
+    "poisoned_target_utility",
+    "delta_target_utility",
+}
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -68,6 +72,8 @@ class PositionOptConfig:
     fine_tune_steps: int = 20
     validation_subset_size: int | None = None
     reward_baseline_momentum: float = 0.9
+    reward_mode: str = "poisoned_target_utility"
+    entropy_coef: float = 0.0
     enable_gt_penalty: bool = False
     gt_penalty_weight: float = 0.0
     gt_tolerance: float = 0.0
@@ -142,6 +148,26 @@ class PositionOptConfig:
                 "attack.position_opt.reward_baseline_momentum must be in [0, 1]."
             )
         object.__setattr__(self, "reward_baseline_momentum", momentum)
+
+        reward_mode = _as_str(
+            self.reward_mode,
+            "attack.position_opt.reward_mode",
+        ).strip().lower()
+        if reward_mode not in _ALLOWED_POSITION_OPT_REWARD_MODES:
+            allowed_modes = ", ".join(sorted(_ALLOWED_POSITION_OPT_REWARD_MODES))
+            raise ValueError(
+                "attack.position_opt.reward_mode must be one of: "
+                f"{allowed_modes}."
+            )
+        object.__setattr__(self, "reward_mode", reward_mode)
+
+        entropy_coef = _as_float(
+            self.entropy_coef,
+            "attack.position_opt.entropy_coef",
+        )
+        if entropy_coef < 0.0:
+            raise ValueError("attack.position_opt.entropy_coef must be non-negative.")
+        object.__setattr__(self, "entropy_coef", entropy_coef)
 
         enable_gt_penalty = _as_bool(
             self.enable_gt_penalty,
@@ -634,6 +660,16 @@ def _normalize_position_opt_config(value: Any, context: str) -> dict[str, Any]:
         payload["reward_baseline_momentum"] = _as_float(
             mapping["reward_baseline_momentum"],
             f"{context}.reward_baseline_momentum",
+        )
+    if "reward_mode" in mapping:
+        payload["reward_mode"] = _as_str(
+            mapping["reward_mode"],
+            f"{context}.reward_mode",
+        )
+    if "entropy_coef" in mapping:
+        payload["entropy_coef"] = _as_float(
+            mapping["entropy_coef"],
+            f"{context}.entropy_coef",
         )
     if "enable_gt_penalty" in mapping:
         payload["enable_gt_penalty"] = _as_bool(

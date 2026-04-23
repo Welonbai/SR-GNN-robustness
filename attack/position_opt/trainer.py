@@ -74,6 +74,7 @@ class PositionOptMVPTrainer:
         self._target_item: int | None = None
         self._trained_config: Config | None = None
         self._reward_baseline: float | None = None
+        self._clean_target_utility: float | None = None
         self._final_selected_positions: list[SelectedPositionResult] | None = None
         self._final_poisoned_sessions: list[list[int]] | None = None
 
@@ -100,6 +101,7 @@ class PositionOptMVPTrainer:
         self._target_item = target_id
         self._trained_config = config
         self._reward_baseline = None
+        self._clean_target_utility = None
         self._final_selected_positions = None
         self._final_poisoned_sessions = None
         self.training_history = []
@@ -128,6 +130,8 @@ class PositionOptMVPTrainer:
             f"outer_steps={int(self.position_opt_config.outer_steps)} "
             f"policy_lr={float(self.position_opt_config.policy_lr):g} "
             f"fine_tune_steps={int(self.position_opt_config.fine_tune_steps)} "
+            f"reward_mode={self.position_opt_config.reward_mode} "
+            f"entropy_coef={float(self.position_opt_config.entropy_coef):g} "
             f"checkpoint={self.clean_surrogate_checkpoint_path}"
         )
 
@@ -140,12 +144,22 @@ class PositionOptMVPTrainer:
             epochs=1,
         )
 
+        # Compute the clean baseline only after the validation subset is finalized
+        # so the clean and poisoned utilities are measured on the same prefixes.
+        self._clean_target_utility = self._precompute_clean_target_utility(
+            validation_sessions=validation_sessions,
+            target_item=target_id,
+        )
         clean_gt_utility = None
         if self.position_opt_config.enable_gt_penalty:
             clean_gt_utility = self._precompute_clean_gt_utility(
                 validation_sessions=validation_sessions,
                 validation_labels=validation_labels,
             )
+        print(
+            "[position-opt] "
+            f"clean_target_utility={float(self._clean_target_utility):.6f}"
+        )
 
         for outer_step in range(int(self.position_opt_config.outer_steps)):
             optimizer.zero_grad()
@@ -156,6 +170,7 @@ class PositionOptMVPTrainer:
                 validation_labels=validation_labels,
                 target_item=target_id,
                 fine_tune_config=fine_tune_config,
+                clean_target_utility=self._clean_target_utility,
                 clean_gt_utility=clean_gt_utility,
                 outer_step=outer_step,
             )
@@ -164,14 +179,21 @@ class PositionOptMVPTrainer:
             self._update_reward_baseline(step_state["reward"])
             baseline_value = step_state["baseline"]
             baseline_text = "None" if baseline_value is None else f"{float(baseline_value):.6f}"
+            delta_text = (
+                "None"
+                if step_state["delta_target_utility"] is None
+                else f"{float(step_state['delta_target_utility']):.6f}"
+            )
             print(
                 "[position-opt] "
                 f"step {outer_step + 1}/{int(self.position_opt_config.outer_steps)} "
                 f"reward={step_state['reward']:.6f} "
                 f"baseline={baseline_text} "
-                f"target={float(step_state['target_utility_tensor'].item()):.6f} "
+                f"poisoned_target={float(step_state['target_utility_tensor'].item()):.6f} "
+                f"delta_target={delta_text} "
                 f"gt_penalty={float(step_state['gt_penalty_tensor'].item()):.6f} "
-                f"entropy={step_state['mean_entropy']:.6f}"
+                f"entropy={step_state['mean_entropy']:.6f} "
+                f"entropy_loss={float(step_state['entropy_loss_tensor'].item()):.6f}"
             )
             self.training_history.append(
                 {
@@ -179,7 +201,11 @@ class PositionOptMVPTrainer:
                     "policy_update": "reinforce",
                     "outer_eval_source": "real_validation_sessions",
                     "validation_eval_count": int(len(validation_sessions)),
+                    "reward_mode": str(step_state["reward_mode"]),
                     "policy_loss": float(step_state["policy_loss_tensor"].item()),
+                    "reinforce_loss": float(step_state["reinforce_loss_tensor"].item()),
+                    "entropy_loss": float(step_state["entropy_loss_tensor"].item()),
+                    "entropy_coef": float(self.position_opt_config.entropy_coef),
                     "reward": float(step_state["reward"]),
                     "baseline": (
                         None if step_state["baseline"] is None else float(step_state["baseline"])
@@ -187,7 +213,19 @@ class PositionOptMVPTrainer:
                     "advantage": float(step_state["advantage"]),
                     "joint_log_prob": float(step_state["joint_log_prob"]),
                     "mean_entropy": float(step_state["mean_entropy"]),
+                    "joint_entropy": float(step_state["joint_entropy"]),
                     "target_utility": float(step_state["target_utility_tensor"].item()),
+                    "poisoned_target_utility": float(step_state["poisoned_target_utility"]),
+                    "clean_target_utility": (
+                        None
+                        if step_state["clean_target_utility"] is None
+                        else float(step_state["clean_target_utility"])
+                    ),
+                    "delta_target_utility": (
+                        None
+                        if step_state["delta_target_utility"] is None
+                        else float(step_state["delta_target_utility"])
+                    ),
                     "gt_penalty": float(step_state["gt_penalty_tensor"].item()),
                     "gt_drop": float(step_state["gt_drop_tensor"].item()),
                     "clean_gt_utility": (
@@ -219,6 +257,8 @@ class PositionOptMVPTrainer:
             "target_item": target_id,
             "policy_representation": "shared_contextual_mlp",
             "reward_baseline": self._reward_baseline,
+            "reward_mode": str(self.position_opt_config.reward_mode),
+            "clean_target_utility": self._clean_target_utility,
         }
 
     def export_final_selected_positions(self) -> list[SelectedPositionResult]:
@@ -290,6 +330,8 @@ class PositionOptMVPTrainer:
                 "policy_representation": "shared_contextual_mlp",
                 "policy_update": "reinforce",
                 "reward_baseline_final": self._reward_baseline,
+                "reward_mode": str(self.position_opt_config.reward_mode),
+                "clean_target_utility": self._clean_target_utility,
                 "outer_eval_source": "real_validation_sessions",
                 "training_history": self.training_history,
                 "final_selected_positions": [asdict(result) for result in final_positions],
@@ -299,6 +341,23 @@ class PositionOptMVPTrainer:
 
         if paths.learned_logits is not None:
             torch.save(self._build_learned_logits_payload(), paths.learned_logits)
+
+    def _precompute_clean_target_utility(
+        self,
+        *,
+        validation_sessions: Sequence[Sequence[int]],
+        target_item: int,
+    ) -> float:
+        self.surrogate_backend.load_clean_checkpoint(self.clean_surrogate_checkpoint_path)
+        clean_model = self.surrogate_backend.clone_clean_model()
+        # score_target() owns the evaluation path and applies eval/no_grad before
+        # scoring, so the clean baseline stays free of training-side effects.
+        clean_result = self.surrogate_backend.score_target(
+            clean_model,
+            validation_sessions,
+            target_item,
+        )
+        return float(clean_result.mean)
 
     def _precompute_clean_gt_utility(
         self,
@@ -324,6 +383,7 @@ class PositionOptMVPTrainer:
         validation_labels: Sequence[int],
         target_item: int,
         fine_tune_config: TruncatedFineTuneConfig,
+        clean_target_utility: float | None,
         clean_gt_utility: float | None,
         outer_step: int,
     ) -> dict[str, Any]:
@@ -356,6 +416,7 @@ class PositionOptMVPTrainer:
 
         joint_log_prob = torch.stack(log_prob_terms).sum()
         mean_entropy = torch.stack(entropy_terms).mean()
+        joint_entropy = torch.stack(entropy_terms).sum()
 
         # Phase 2.5 uses one joint poison-set sample, one surrogate fine-tune, and
         # one validation-based reward per outer step. The inner trainer still sees
@@ -385,7 +446,19 @@ class PositionOptMVPTrainer:
             validation_sessions,
             target_item,
         )
-        target_utility_tensor = joint_log_prob.new_tensor(float(target_result.mean))
+        poisoned_target_utility = float(target_result.mean)
+        target_utility_tensor = joint_log_prob.new_tensor(poisoned_target_utility)
+        reward_target_utility = _resolve_reward_target_utility(
+            reward_mode=self.position_opt_config.reward_mode,
+            poisoned_target_utility=poisoned_target_utility,
+            clean_target_utility=clean_target_utility,
+        )
+        reward_target_utility_tensor = joint_log_prob.new_tensor(float(reward_target_utility))
+        delta_target_utility = (
+            None
+            if clean_target_utility is None
+            else float(poisoned_target_utility - float(clean_target_utility))
+        )
 
         poisoned_gt_utility = None
         if self.position_opt_config.enable_gt_penalty:
@@ -397,7 +470,7 @@ class PositionOptMVPTrainer:
             poisoned_gt_utility = float(poisoned_gt_result.mean)
 
         objective = compute_position_opt_objective(
-            target_utility_tensor,
+            reward_target_utility_tensor,
             clean_gt_utility=clean_gt_utility,
             poisoned_gt_utility=poisoned_gt_utility,
             enable_gt_penalty=bool(self.position_opt_config.enable_gt_penalty),
@@ -409,18 +482,30 @@ class PositionOptMVPTrainer:
         baseline = self._reward_baseline
         advantage = reward if baseline is None else (reward - baseline)
         advantage_tensor = joint_log_prob.new_tensor(float(advantage))
-        policy_loss_tensor = -(joint_log_prob * advantage_tensor)
+        policy_loss_tensor, reinforce_loss_tensor, entropy_loss_tensor = _build_policy_loss(
+            joint_log_prob=joint_log_prob,
+            advantage_tensor=advantage_tensor,
+            joint_entropy=joint_entropy,
+            entropy_coef=float(self.position_opt_config.entropy_coef),
+        )
 
         return {
             "policy_loss_tensor": policy_loss_tensor,
+            "reinforce_loss_tensor": reinforce_loss_tensor,
+            "entropy_loss_tensor": entropy_loss_tensor,
             "reward": reward,
             "baseline": baseline,
             "advantage": float(advantage),
             "joint_log_prob": float(joint_log_prob.detach().item()),
             "mean_entropy": float(mean_entropy.detach().item()),
-            "target_utility_tensor": objective.target_utility,
+            "joint_entropy": float(joint_entropy.detach().item()),
+            "reward_mode": str(self.position_opt_config.reward_mode),
+            "target_utility_tensor": target_utility_tensor,
+            "poisoned_target_utility": poisoned_target_utility,
+            "delta_target_utility": delta_target_utility,
             "gt_penalty_tensor": objective.gt_penalty,
             "gt_drop_tensor": objective.gt_drop,
+            "clean_target_utility": clean_target_utility,
             "clean_gt_utility": clean_gt_utility,
             "poisoned_gt_utility": poisoned_gt_utility,
             "selected_positions": selected_positions,
@@ -592,6 +677,38 @@ def _select_validation_subset(
     if subset_size is None or subset_size >= len(sessions):
         return sessions, labels
     return sessions[:subset_size], labels[:subset_size]
+
+
+def _build_policy_loss(
+    *,
+    joint_log_prob: torch.Tensor,
+    advantage_tensor: torch.Tensor,
+    joint_entropy: torch.Tensor,
+    entropy_coef: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if float(entropy_coef) < 0.0:
+        raise ValueError("entropy_coef must be non-negative.")
+    reinforce_loss = -(joint_log_prob * advantage_tensor)
+    entropy_loss = -joint_log_prob.new_tensor(float(entropy_coef)) * joint_entropy
+    return reinforce_loss + entropy_loss, reinforce_loss, entropy_loss
+
+
+def _resolve_reward_target_utility(
+    *,
+    reward_mode: str,
+    poisoned_target_utility: float,
+    clean_target_utility: float | None,
+) -> float:
+    if reward_mode == "poisoned_target_utility":
+        return float(poisoned_target_utility)
+    if reward_mode == "delta_target_utility":
+        if clean_target_utility is None:
+            raise ValueError(
+                "clean_target_utility is required when reward_mode='delta_target_utility'."
+            )
+        return float(poisoned_target_utility) - float(clean_target_utility)
+    raise ValueError(f"Unsupported reward_mode: {reward_mode!r}")
+
 
 def _summarize_inner_history(history: Mapping[str, Any] | None) -> dict[str, Any]:
     if history is None:

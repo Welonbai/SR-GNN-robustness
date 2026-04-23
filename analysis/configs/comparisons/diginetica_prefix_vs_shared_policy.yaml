@@ -1,0 +1,5 @@
+comparison_id: diginetica_prefix_vs_shared_policy
+
+runs:
+  - diginetica_prefix_nonzero_prefix_vs_shared_policy
+  - diginetica_position_opt_shared_policy_prefix_vs_shared_policy

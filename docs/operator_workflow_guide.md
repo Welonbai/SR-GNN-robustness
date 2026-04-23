@@ -201,6 +201,7 @@ The renderer:
 
 ## 7. Related Docs
 
+- [Analysis Operator Playbook](./analysis_operator_playbook.md)
 - [Appendable Experiment Architecture](./appendable_experiment_architecture.md)
 - [Appendable Experiment Execution Plan](./appendable_experiment_execplan.md)
 - [Analysis Slice Rules](./analysis_slice_rules.md)

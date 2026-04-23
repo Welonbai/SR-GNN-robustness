@@ -18,6 +18,8 @@ from attack.common.paths import (
     target_dir,
     target_cohort_key,
     target_cohort_key_payload,
+    victim_prediction_key,
+    victim_prediction_key_payload,
     victim_dir,
 )
 from attack.common.artifact_io import save_json
@@ -114,6 +116,41 @@ def test_shared_attack_artifact_key_stays_stable_across_phase1_identity_changes(
     )
     assert shared_attack_artifact_key(config, run_type="attack") == shared_attack_artifact_key(
         changed_victims,
+        run_type="attack",
+    )
+
+
+def test_victim_prediction_key_ignores_batch_size_fields() -> None:
+    config = _base_config()
+    changed_victim_params = {
+        name: dict(params)
+        for name, params in config.victims.params.items()
+    }
+    miasrec_params = dict(changed_victim_params["miasrec"])
+    miasrec_train = dict(miasrec_params["train"])
+    miasrec_train["train_batch_size"] = 64
+    miasrec_train["eval_batch_size"] = 32
+    miasrec_params["train"] = miasrec_train
+    changed_victim_params["miasrec"] = miasrec_params
+
+    changed_config = replace(
+        config,
+        victims=replace(config.victims, params=changed_victim_params),
+    )
+
+    base_payload = victim_prediction_key_payload(config, "miasrec", run_type="attack")
+    changed_payload = victim_prediction_key_payload(
+        changed_config,
+        "miasrec",
+        run_type="attack",
+    )
+
+    assert base_payload == changed_payload
+    assert "train_batch_size" not in base_payload["victim_params"]["train"]
+    assert "eval_batch_size" not in base_payload["victim_params"]["train"]
+    assert victim_prediction_key(config, "miasrec", run_type="attack") == victim_prediction_key(
+        changed_config,
+        "miasrec",
         run_type="attack",
     )
 

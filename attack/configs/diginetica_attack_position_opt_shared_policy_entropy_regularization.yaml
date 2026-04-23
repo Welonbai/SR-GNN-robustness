@@ -1,5 +1,5 @@
 experiment:
-  name: attack_position_optimization_reward_mvp_ratio1
+  name: attack_position_opt_shared_policy_entropy_regularization_ratio1
 
 data:
   dataset_name: diginetica
@@ -25,10 +25,11 @@ attack:
   position_opt:
     clean_surrogate_checkpoint: outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt
     outer_steps: 30
-    policy_lr: 0.05
+    policy_lr: 0.01
     fine_tune_steps: 20
     validation_subset_size: null
     reward_baseline_momentum: 0.9
+    entropy_coef: 3.0e-5
     enable_gt_penalty: false
     gt_penalty_weight: 0.0
     gt_tolerance: 0.0
@@ -49,14 +50,14 @@ attack:
         nonhybrid: false
 
 targets:
-  mode: sampled
-  explicit_list: []
+  mode: explicit_list
+  explicit_list: [5334, 11103]
   bucket: popular
-  count: 6
+  count: 2
   reuse_saved_targets: true
 
 victims:
-  enabled: [srgnn, miasrec, tron]
+  enabled: [tron]
   params:
     srgnn:
       train:

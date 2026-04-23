@@ -197,11 +197,13 @@ def run_position_opt_shared_policy(
             "position_opt_final_poisoned_session_count": int(len(optimized_poisoned_sessions)),
             "position_opt_policy_update": "reinforce",
             "position_opt_outer_eval_source": "real_validation_sessions",
+            "position_opt_reward_mode": str(trainer.position_opt_config.reward_mode),
             "position_opt_validation_subset_size": (
                 None
                 if trainer.position_opt_config.validation_subset_size is None
                 else int(trainer.position_opt_config.validation_subset_size)
             ),
+            "position_opt_entropy_coef": float(trainer.position_opt_config.entropy_coef),
         }
         return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
 
@@ -271,6 +273,8 @@ def _save_position_opt_run_metadata(
         "validation_session_count": int(len(shared.canonical_dataset.valid)),
         "resolved_seeds": asdict(config.seeds),
         "replacement_topk_ratio": float(config.attack.replacement_topk_ratio),
+        "reward_mode": str(trainer.position_opt_config.reward_mode),
+        "clean_target_utility": trainer_result.get("clean_target_utility"),
         "position_opt_config": asdict(trainer.position_opt_config),
         "trainer_result": trainer_result,
         "artifact_paths": {
@@ -317,6 +321,10 @@ def _resolve_position_opt_overrides(args: argparse.Namespace) -> dict[str, Any]:
         overrides["validation_subset_size"] = args.validation_subset_size
     if hasattr(args, "reward_baseline_momentum"):
         overrides["reward_baseline_momentum"] = float(args.reward_baseline_momentum)
+    if hasattr(args, "reward_mode"):
+        overrides["reward_mode"] = str(args.reward_mode)
+    if hasattr(args, "entropy_coef"):
+        overrides["entropy_coef"] = float(args.entropy_coef)
     if hasattr(args, "enable_gt_penalty"):
         overrides["enable_gt_penalty"] = bool(args.enable_gt_penalty)
     if hasattr(args, "gt_penalty_weight"):
@@ -401,6 +409,18 @@ def main() -> None:
         type=float,
         default=argparse.SUPPRESS,
         help="Optional CLI override for attack.position_opt.reward_baseline_momentum.",
+    )
+    parser.add_argument(
+        "--reward-mode",
+        choices=["poisoned_target_utility", "delta_target_utility"],
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.reward_mode.",
+    )
+    parser.add_argument(
+        "--entropy-coef",
+        type=float,
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.entropy_coef.",
     )
     parser.add_argument(
         "--enable-gt-penalty",
