@@ -1,5 +1,5 @@
 experiment:
-  name: attack_position_opt_shared_policy_ratio05
+  name: attack_position_opt_shared_policy_target_original_normalized_position_ratio1
 
 data:
   dataset_name: diginetica
@@ -21,14 +21,19 @@ seeds:
 attack:
   size: 0.01
   fake_session_generation_topk: 100
-  replacement_topk_ratio: 0.5
+  replacement_topk_ratio: 1.0
   position_opt:
     clean_surrogate_checkpoint: outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt
     outer_steps: 30
     policy_lr: 0.01
+    policy_embedding_dim: 16
+    policy_hidden_dim: 32
+    policy_feature_set: target_original_normalized_position
     fine_tune_steps: 20
     validation_subset_size: null
     reward_baseline_momentum: 0.9
+    reward_mode: poisoned_target_utility
+    entropy_coef: 0.0
     enable_gt_penalty: false
     gt_penalty_weight: 0.0
     gt_tolerance: 0.0
@@ -56,7 +61,7 @@ targets:
   reuse_saved_targets: true
 
 victims:
-  enabled: [tron]
+  enabled: [srgnn, tron]
   params:
     srgnn:
       train:
@@ -70,24 +75,10 @@ victims:
         step: 1
         patience: 10
         nonhybrid: false
-    miasrec:
-      train:
-        epochs: 4
-        train_batch_size: 64
-        eval_batch_size: 32
     tron:
       train:
         max_epochs: 8
   runtime:
-    miasrec:
-      python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"
-      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
-      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
-      device:
-        use_gpu: true
-        gpu_id: "0"
-      logging:
-        show_progress: false
     tron:
       python_executable: "C:\\Users\\User\\anaconda3\\envs\\tron-gpu\\python.exe"
       repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
