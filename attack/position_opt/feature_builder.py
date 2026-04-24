@@ -31,6 +31,8 @@ class CandidateFeatureMetadata:
     right_item: int
     left_is_boundary: bool
     right_is_boundary: bool
+    prefix_score: float
+    has_prefix: bool
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,8 @@ class CandidateFeatureTensors:
     position_indices: torch.Tensor
     normalized_positions: torch.Tensor
     session_lengths: torch.Tensor
+    prefix_scores: torch.Tensor
+    has_prefixes: torch.Tensor
 
     def __post_init__(self) -> None:
         if self.target_item_ids.ndim != 1:
@@ -54,6 +58,8 @@ class CandidateFeatureTensors:
             self.position_indices,
             self.normalized_positions,
             self.session_lengths,
+            self.prefix_scores,
+            self.has_prefixes,
         )
         if expected_size <= 0:
             raise ValueError("CandidateFeatureTensors must contain at least one candidate.")
@@ -76,6 +82,8 @@ class CandidateFeatureTensors:
             position_indices=self.position_indices.to(device=device),
             normalized_positions=self.normalized_positions.to(device=device),
             session_lengths=self.session_lengths.to(device=device),
+            prefix_scores=self.prefix_scores.to(device=device),
+            has_prefixes=self.has_prefixes.to(device=device),
         )
 
 
@@ -126,6 +134,8 @@ def build_session_candidate_features(
     *,
     target_item: int,
     special_item_ids: PolicySpecialItemIds,
+    prefix_scores: Sequence[float] | None = None,
+    has_prefixes: Sequence[bool] | None = None,
 ) -> SessionCandidateFeatures:
     session_items = [int(item) for item in session]
     if not session_items:
@@ -137,6 +147,22 @@ def build_session_candidate_features(
     normalized_target_item = int(target_item)
     if normalized_target_item <= 0:
         raise ValueError("target_item must be a positive item id.")
+
+    candidate_count = len(candidate_positions)
+    normalized_prefix_scores = (
+        [0.0] * candidate_count
+        if prefix_scores is None
+        else [float(value) for value in prefix_scores]
+    )
+    normalized_has_prefixes = (
+        [False] * candidate_count
+        if has_prefixes is None
+        else [bool(value) for value in has_prefixes]
+    )
+    if len(normalized_prefix_scores) != candidate_count:
+        raise ValueError("prefix_scores must align 1:1 with candidate_positions.")
+    if len(normalized_has_prefixes) != candidate_count:
+        raise ValueError("has_prefixes must align 1:1 with candidate_positions.")
 
     feature_rows: list[CandidateFeatureMetadata] = []
     for candidate_index, raw_position in enumerate(candidate_positions):
@@ -168,6 +194,8 @@ def build_session_candidate_features(
                 right_item=int(right_item),
                 left_is_boundary=bool(left_is_boundary),
                 right_is_boundary=bool(right_is_boundary),
+                prefix_score=float(normalized_prefix_scores[candidate_index]),
+                has_prefix=bool(normalized_has_prefixes[candidate_index]),
             )
         )
 
@@ -211,6 +239,14 @@ def build_candidate_feature_tensors(
         ),
         session_lengths=torch.tensor(
             [row.session_length for row in normalized_rows],
+            dtype=torch.float32,
+        ),
+        prefix_scores=torch.tensor(
+            [row.prefix_score for row in normalized_rows],
+            dtype=torch.float32,
+        ),
+        has_prefixes=torch.tensor(
+            [1.0 if row.has_prefix else 0.0 for row in normalized_rows],
             dtype=torch.float32,
         ),
     )

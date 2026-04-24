@@ -1,0 +1,35 @@
+name: shared_policy_variants_metrics_split_by_target_item
+
+input: results\comparisons\diginetica_shared_policy_variants_compare\merged_long_table.csv
+output_dir: results\comparisons\diginetica_shared_policy_variants_compare
+filters:
+  poison_model: srgnn
+  target_type: popular
+  attack_size: 0.01
+  metric_name: [recall, mrr]
+  metric_scope: [ground_truth, targeted]
+  k: [10, 20, 30]
+
+split_by:
+  - target_item
+
+rows:
+  - victim_model
+  - attack_method
+
+cols:
+  - metric_name
+  - k
+  - metric_scope
+
+value_col: value
+agg: first
+auto_context: true
+require_unique_cells: true
+
+ground_truth_relative_to_clean:
+  enabled: true
+  baseline_attack_method: clean
+  ignore_pairing_columns:
+    - run_id
+    - replacement_topk_ratio

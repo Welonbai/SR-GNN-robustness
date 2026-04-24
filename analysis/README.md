@@ -82,6 +82,7 @@ The config supports shared defaults and multiple jobs:
 - `defaults.requested_target_count`
 - `jobs[*].summary`
 - `jobs[*].output_name`
+- `jobs[*].attack_method_override`
 - `jobs[*].slice_policy`
 - `jobs[*].requested_victims`
 - `jobs[*].requested_target_count`

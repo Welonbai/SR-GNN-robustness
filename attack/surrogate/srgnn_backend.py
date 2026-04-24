@@ -9,12 +9,21 @@ import torch
 from attack.common.config import Config
 from attack.data.poisoned_dataset_builder import PoisonedDataset
 from attack.models._srgnn_base import SRGNNBaseRunner
+from attack.pipeline.core.evaluator import evaluate_targeted_metrics
 from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
 from attack.position_opt.types import SurrogateScoreResult, TruncatedFineTuneConfig
 from attack.surrogate.base import PoisonedTrainInput, SessionBatch
 from pytorch_code.model import forward as srg_forward
 from pytorch_code.model import trans_to_cpu, trans_to_cuda
 from pytorch_code.utils import Data
+
+_TARGET_SCORE_METRIC_TOPK = 20
+_TARGET_SCORE_TARGETED_METRICS = ("mrr", "recall")
+_TARGET_SCORE_REQUIRED_KEYS = (
+    "targeted_mrr@10",
+    "targeted_recall@10",
+    "targeted_recall@20",
+)
 
 
 @dataclass
@@ -167,7 +176,12 @@ class SRGNNBackend:
     ) -> SurrogateScoreResult:
         normalized_sessions = _normalize_sessions(eval_sessions)
         target_items = [int(target_item)] * len(normalized_sessions)
-        return self._score_item_probabilities(model, normalized_sessions, target_items)
+        return self._score_item_probabilities(
+            model,
+            normalized_sessions,
+            target_items,
+            target_item=int(target_item),
+        )
 
     def score_gt(
         self,
@@ -189,11 +203,14 @@ class SRGNNBackend:
         model: object,
         sessions: list[list[int]],
         item_ids: Sequence[int],
+        *,
+        target_item: int | None = None,
     ) -> SurrogateScoreResult:
         handle = self._as_model_handle(model)
         data = Data((sessions, [1] * len(sessions)), shuffle=False)
         torch_model = handle.model
         values: list[float] = []
+        rankings: list[list[int]] = []
         cursor = 0
 
         torch_model.eval()
@@ -212,9 +229,30 @@ class SRGNNBackend:
                     raise ValueError("One or more item ids are outside the SR-GNN score range.")
                 batch_scores = probabilities.gather(1, item_tensor.unsqueeze(1)).squeeze(1)
                 values.extend(float(value) for value in trans_to_cpu(batch_scores).tolist())
+                if target_item is not None:
+                    topk = min(_TARGET_SCORE_METRIC_TOPK, scores.shape[1])
+                    topk_indices = scores.topk(topk)[1]
+                    topk_indices = trans_to_cpu(topk_indices).detach().numpy()
+                    rankings.extend(
+                        [int(item) + 1 for item in row.tolist()]
+                        for row in topk_indices
+                    )
                 cursor += batch_size
 
-        return SurrogateScoreResult.from_values(values)
+        metrics = None
+        if target_item is not None:
+            targeted_metrics, _ = evaluate_targeted_metrics(
+                rankings,
+                target_item=int(target_item),
+                metrics=_TARGET_SCORE_TARGETED_METRICS,
+                topk=[10, 20],
+            )
+            metrics = {
+                metric_key: float(targeted_metrics[metric_key])
+                for metric_key in _TARGET_SCORE_REQUIRED_KEYS
+            }
+
+        return SurrogateScoreResult.from_values(values, metrics=metrics)
 
     def _resolve_path(self, path: str | Path) -> Path:
         path = Path(path)

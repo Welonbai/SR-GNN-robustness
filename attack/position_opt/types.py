@@ -26,15 +26,26 @@ class SelectedPositionResult:
 class SurrogateScoreResult:
     values: tuple[float, ...]
     mean: float
+    metrics: dict[str, float] | None = None
 
     @classmethod
-    def from_values(cls, values: Sequence[float]) -> "SurrogateScoreResult":
+    def from_values(
+        cls,
+        values: Sequence[float],
+        *,
+        metrics: Mapping[str, float] | None = None,
+    ) -> "SurrogateScoreResult":
         normalized = tuple(float(value) for value in values)
         if normalized:
             mean = float(sum(normalized) / len(normalized))
         else:
             mean = float("nan")
-        return cls(values=normalized, mean=mean)
+        normalized_metrics = None
+        if metrics is not None:
+            normalized_metrics = {
+                str(key): float(value) for key, value in metrics.items()
+            }
+        return cls(values=normalized, mean=mean, metrics=normalized_metrics)
 
 
 @dataclass(frozen=True)
@@ -84,6 +95,8 @@ def resolve_position_opt_config(
 def position_opt_identity_payload(config: PositionOptConfig) -> dict[str, Any]:
     payload = asdict(config)
     payload.pop("clean_surrogate_checkpoint", None)
+    if payload.get("policy_feature_set") == "local_context":
+        payload.pop("policy_feature_set", None)
     return payload
 
 

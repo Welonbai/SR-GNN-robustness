@@ -1,0 +1,7 @@
+comparison_id: diginetica_shared_policy_variants_compare
+
+runs:
+  - diginetica_clean_shared_policy_variants_compare
+  - diginetica_prefix_nonzero_shared_policy_variants_compare
+  - diginetica_shared_policy_ratio1_entropy0_shared_policy_variants_compare
+  - diginetica_shared_policy_delta_lowk_rank_utility_ratio1_entropy0_shared_policy_variants_compare

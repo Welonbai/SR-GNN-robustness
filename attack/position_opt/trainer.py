@@ -33,10 +33,23 @@ from attack.position_opt.types import (
     PositionOptConfig,
     PositionOptArtifactPaths,
     SelectedPositionResult,
+    SurrogateScoreResult,
     TruncatedFineTuneConfig,
     resolve_position_opt_config,
 )
 from attack.surrogate.base import SurrogateBackend
+
+_LOWK_TARGET_METRIC_KEYS = (
+    "targeted_mrr@10",
+    "targeted_recall@10",
+    "targeted_recall@20",
+)
+_PREFIX_SCORE_FEATURE_SET = "local_context_prefix_score_prob"
+_LOWK_TARGET_METRIC_WEIGHTS = {
+    "targeted_mrr@10": 0.6,
+    "targeted_recall@10": 0.3,
+    "targeted_recall@20": 0.1,
+}
 
 
 @dataclass(frozen=True)
@@ -75,6 +88,7 @@ class PositionOptMVPTrainer:
         self._trained_config: Config | None = None
         self._reward_baseline: float | None = None
         self._clean_target_utility: float | None = None
+        self._clean_target_metrics: dict[str, float | None] = _empty_lowk_target_metrics()
         self._final_selected_positions: list[SelectedPositionResult] | None = None
         self._final_poisoned_sessions: list[list[int]] | None = None
 
@@ -102,6 +116,7 @@ class PositionOptMVPTrainer:
         self._trained_config = config
         self._reward_baseline = None
         self._clean_target_utility = None
+        self._clean_target_metrics = _empty_lowk_target_metrics()
         self._final_selected_positions = None
         self._final_poisoned_sessions = None
         self.training_history = []
@@ -111,11 +126,14 @@ class PositionOptMVPTrainer:
             target_item=target_id,
             replacement_topk_ratio=config.attack.replacement_topk_ratio,
         )
+        if self._prefix_score_enabled():
+            self._session_states = self._build_prefix_scored_session_states(target_item=target_id)
         candidate_sizes = [len(state.metadata.positions) for state in self._session_states]
         self.policy = SharedContextualPositionPolicy(
             num_item_embeddings=self._policy_special_item_ids.num_item_embeddings,
             embedding_dim=int(self.position_opt_config.policy_embedding_dim),
             hidden_dim=int(self.position_opt_config.policy_hidden_dim),
+            policy_feature_set=str(self.position_opt_config.policy_feature_set),
         )
         candidate_avg = sum(candidate_sizes) / len(candidate_sizes)
         print(
@@ -146,9 +164,17 @@ class PositionOptMVPTrainer:
 
         # Compute the clean baseline only after the validation subset is finalized
         # so the clean and poisoned utilities are measured on the same prefixes.
-        self._clean_target_utility = self._precompute_clean_target_utility(
+        clean_target_result = self._precompute_clean_target_result(
             validation_sessions=validation_sessions,
             target_item=target_id,
+        )
+        self._clean_target_metrics = _extract_lowk_target_metrics(
+            clean_target_result,
+            required=(self.position_opt_config.reward_mode == "delta_lowk_rank_utility"),
+        )
+        self._clean_target_utility = _resolve_scored_target_utility(
+            reward_mode=self.position_opt_config.reward_mode,
+            target_result=clean_target_result,
         )
         clean_gt_utility = None
         if self.position_opt_config.enable_gt_penalty:
@@ -238,6 +264,14 @@ class PositionOptMVPTrainer:
                         if step_state["poisoned_gt_utility"] is None
                         else float(step_state["poisoned_gt_utility"])
                     ),
+                    **_lowk_target_metric_history_fields(
+                        step_state["clean_target_metrics"],
+                        prefix="clean",
+                    ),
+                    **_lowk_target_metric_history_fields(
+                        step_state["poisoned_target_metrics"],
+                        prefix="poisoned",
+                    ),
                     "selected_positions": [int(pos) for pos in step_state["selected_positions"]],
                     "selected_candidate_indices": [
                         int(idx) for idx in step_state["selected_candidate_indices"]
@@ -259,6 +293,14 @@ class PositionOptMVPTrainer:
             "reward_baseline": self._reward_baseline,
             "reward_mode": str(self.position_opt_config.reward_mode),
             "clean_target_utility": self._clean_target_utility,
+            "policy_scalar_feature_names": (
+                None if self.policy is None else list(self.policy.scalar_feature_names)
+            ),
+            **_lowk_target_metric_history_fields(
+                self._clean_target_metrics,
+                prefix="clean",
+            ),
+            **self._prefix_score_metadata(),
         }
 
     def export_final_selected_positions(self) -> list[SelectedPositionResult]:
@@ -331,8 +373,16 @@ class PositionOptMVPTrainer:
                 "policy_update": "reinforce",
                 "reward_baseline_final": self._reward_baseline,
                 "reward_mode": str(self.position_opt_config.reward_mode),
+                "policy_scalar_feature_names": (
+                    None if self.policy is None else list(self.policy.scalar_feature_names)
+                ),
                 "clean_target_utility": self._clean_target_utility,
+                **_lowk_target_metric_history_fields(
+                    self._clean_target_metrics,
+                    prefix="clean",
+                ),
                 "outer_eval_source": "real_validation_sessions",
+                **self._prefix_score_metadata(),
                 "training_history": self.training_history,
                 "final_selected_positions": [asdict(result) for result in final_positions],
             }
@@ -342,12 +392,12 @@ class PositionOptMVPTrainer:
         if paths.learned_logits is not None:
             torch.save(self._build_learned_logits_payload(), paths.learned_logits)
 
-    def _precompute_clean_target_utility(
+    def _precompute_clean_target_result(
         self,
         *,
         validation_sessions: Sequence[Sequence[int]],
         target_item: int,
-    ) -> float:
+    ) -> SurrogateScoreResult:
         self.surrogate_backend.load_clean_checkpoint(self.clean_surrogate_checkpoint_path)
         clean_model = self.surrogate_backend.clone_clean_model()
         # score_target() owns the evaluation path and applies eval/no_grad before
@@ -357,7 +407,7 @@ class PositionOptMVPTrainer:
             validation_sessions,
             target_item,
         )
-        return float(clean_result.mean)
+        return clean_result
 
     def _precompute_clean_gt_utility(
         self,
@@ -446,7 +496,14 @@ class PositionOptMVPTrainer:
             validation_sessions,
             target_item,
         )
-        poisoned_target_utility = float(target_result.mean)
+        poisoned_target_metrics = _extract_lowk_target_metrics(
+            target_result,
+            required=(self.position_opt_config.reward_mode == "delta_lowk_rank_utility"),
+        )
+        poisoned_target_utility = _resolve_scored_target_utility(
+            reward_mode=self.position_opt_config.reward_mode,
+            target_result=target_result,
+        )
         target_utility_tensor = joint_log_prob.new_tensor(poisoned_target_utility)
         reward_target_utility = _resolve_reward_target_utility(
             reward_mode=self.position_opt_config.reward_mode,
@@ -506,8 +563,10 @@ class PositionOptMVPTrainer:
             "gt_penalty_tensor": objective.gt_penalty,
             "gt_drop_tensor": objective.gt_drop,
             "clean_target_utility": clean_target_utility,
+            "clean_target_metrics": dict(self._clean_target_metrics),
             "clean_gt_utility": clean_gt_utility,
             "poisoned_gt_utility": poisoned_gt_utility,
+            "poisoned_target_metrics": poisoned_target_metrics,
             "selected_positions": selected_positions,
             "selected_candidate_indices": selected_candidate_indices,
             "position_opt_step_seed": int(position_opt_step_seed),
@@ -529,6 +588,92 @@ class PositionOptMVPTrainer:
         if self.policy is None:
             raise RuntimeError("Policy is not initialized.")
         return self.policy.score_candidates(session_state.features.tensors)
+
+    def _prefix_score_enabled(self) -> bool:
+        return str(self.position_opt_config.policy_feature_set) == _PREFIX_SCORE_FEATURE_SET
+
+    def _prefix_score_metadata(self) -> dict[str, Any]:
+        enabled = self._prefix_score_enabled()
+        return {
+            "policy_feature_set": str(self.position_opt_config.policy_feature_set),
+            "prefix_score_enabled": bool(enabled),
+            "prefix_score_type": ("probability" if enabled else None),
+            "pos0_prefix_handling": (
+                "score_zero_has_prefix_false" if enabled else None
+            ),
+        }
+
+    def _build_prefix_scored_session_states(
+        self,
+        *,
+        target_item: int,
+    ) -> list[_SessionCandidateState]:
+        if self._policy_special_item_ids is None:
+            raise RuntimeError("Policy special-item ids are not initialized.")
+
+        self.surrogate_backend.load_clean_checkpoint(self.clean_surrogate_checkpoint_path)
+        clean_model = self.surrogate_backend.clone_clean_model()
+        prefix_scored_states: list[_SessionCandidateState] = []
+        for session_state in self._session_states:
+            prefix_scores, has_prefixes = self._score_session_prefix_probabilities(
+                clean_model,
+                session_state=session_state,
+                target_item=target_item,
+            )
+            features = build_session_candidate_features(
+                session_state.original_session,
+                session_state.metadata.positions,
+                target_item=target_item,
+                special_item_ids=self._policy_special_item_ids,
+                prefix_scores=prefix_scores,
+                has_prefixes=has_prefixes,
+            )
+            prefix_scored_states.append(
+                _SessionCandidateState(
+                    original_session=list(session_state.original_session),
+                    metadata=session_state.metadata,
+                    features=features,
+                    candidate_sessions=[list(session) for session in session_state.candidate_sessions],
+                )
+            )
+        return prefix_scored_states
+
+    def _score_session_prefix_probabilities(
+        self,
+        clean_model: object,
+        *,
+        session_state: _SessionCandidateState,
+        target_item: int,
+    ) -> tuple[list[float], list[bool]]:
+        positions = [int(position) for position in session_state.metadata.positions]
+        prefix_scores = [0.0] * len(positions)
+        has_prefixes = [False] * len(positions)
+        nonzero_prefixes: list[list[int]] = []
+        nonzero_candidate_indices: list[int] = []
+
+        for candidate_index, position in enumerate(positions):
+            if position <= 0:
+                continue
+            nonzero_prefixes.append(list(session_state.original_session[:position]))
+            nonzero_candidate_indices.append(int(candidate_index))
+            has_prefixes[candidate_index] = True
+
+        if not nonzero_prefixes:
+            return prefix_scores, has_prefixes
+
+        target_result = self.surrogate_backend.score_target(
+            clean_model,
+            nonzero_prefixes,
+            target_item,
+        )
+        if len(target_result.values) != len(nonzero_candidate_indices):
+            raise RuntimeError("Prefix score count does not match scored candidate positions.")
+        for candidate_index, prefix_score in zip(
+            nonzero_candidate_indices,
+            target_result.values,
+        ):
+            prefix_scores[candidate_index] = float(prefix_score)
+        return prefix_scores, has_prefixes
 
     def _build_learned_logits_payload(self) -> dict[str, Any]:
         if self.policy is None:
@@ -559,8 +704,11 @@ class PositionOptMVPTrainer:
                 "embedding_dim": int(self.position_opt_config.policy_embedding_dim),
                 "hidden_dim": int(self.position_opt_config.policy_hidden_dim),
                 "num_item_embeddings": int(self.policy.num_item_embeddings),
+                "policy_feature_set": str(self.position_opt_config.policy_feature_set),
+                "scalar_feature_names": list(self.policy.scalar_feature_names),
             },
             "special_item_ids": self._policy_special_item_ids.to_payload(),
+            **self._prefix_score_metadata(),
             "sessions": sessions_payload,
             "policy_state_dict": {
                 key: value.detach().cpu().clone()
@@ -701,13 +849,83 @@ def _resolve_reward_target_utility(
 ) -> float:
     if reward_mode == "poisoned_target_utility":
         return float(poisoned_target_utility)
-    if reward_mode == "delta_target_utility":
+    if reward_mode in {"delta_target_utility", "delta_lowk_rank_utility"}:
         if clean_target_utility is None:
             raise ValueError(
-                "clean_target_utility is required when reward_mode='delta_target_utility'."
+                f"clean_target_utility is required when reward_mode={reward_mode!r}."
             )
         return float(poisoned_target_utility) - float(clean_target_utility)
     raise ValueError(f"Unsupported reward_mode: {reward_mode!r}")
+
+
+def _resolve_scored_target_utility(
+    *,
+    reward_mode: str,
+    target_result: SurrogateScoreResult,
+) -> float:
+    if reward_mode in {"poisoned_target_utility", "delta_target_utility"}:
+        return float(target_result.mean)
+    if reward_mode == "delta_lowk_rank_utility":
+        return _compute_lowk_target_utility(target_result.metrics)
+    raise ValueError(f"Unsupported reward_mode: {reward_mode!r}")
+
+
+def _compute_lowk_target_utility(metrics: Mapping[str, float] | None) -> float:
+    resolved_metrics = _coerce_lowk_target_metrics(metrics, required=True)
+    return float(
+        sum(
+            _LOWK_TARGET_METRIC_WEIGHTS[metric_key] * float(resolved_metrics[metric_key])
+            for metric_key in _LOWK_TARGET_METRIC_KEYS
+        )
+    )
+
+
+def _extract_lowk_target_metrics(
+    target_result: SurrogateScoreResult,
+    *,
+    required: bool,
+) -> dict[str, float | None]:
+    return _coerce_lowk_target_metrics(target_result.metrics, required=required)
+
+
+def _coerce_lowk_target_metrics(
+    metrics: Mapping[str, float] | None,
+    *,
+    required: bool,
+) -> dict[str, float | None]:
+    normalized = _empty_lowk_target_metrics()
+    source = {} if metrics is None else dict(metrics)
+    missing_keys: list[str] = []
+    for metric_key in _LOWK_TARGET_METRIC_KEYS:
+        value = source.get(metric_key)
+        if value is None:
+            if required:
+                missing_keys.append(metric_key)
+            continue
+        normalized[metric_key] = float(value)
+    if missing_keys:
+        raise ValueError(
+            "Missing low-k target metrics: " + ", ".join(sorted(missing_keys))
+        )
+    return normalized
+
+
+def _empty_lowk_target_metrics() -> dict[str, float | None]:
+    return {metric_key: None for metric_key in _LOWK_TARGET_METRIC_KEYS}
+
+
+def _lowk_target_metric_history_fields(
+    metrics: Mapping[str, float | None] | None,
+    *,
+    prefix: str,
+) -> dict[str, float | None]:
+    normalized = _coerce_lowk_target_metrics(metrics, required=False)
+    return {
+        f"{prefix}_{metric_key.replace('@', '_at_')}": (
+            None if normalized[metric_key] is None else float(normalized[metric_key])
+        )
+        for metric_key in _LOWK_TARGET_METRIC_KEYS
+    }
 
 
 def _summarize_inner_history(history: Mapping[str, Any] | None) -> dict[str, Any]:

@@ -102,7 +102,8 @@ def run_position_opt_shared_policy(
         f"{_SHARED_POLICY_LOG_PREFIX} "
         f"candidate_sizes(min/avg/max)="
         f"{candidate_summary['min']}/{candidate_summary['avg']:.2f}/{candidate_summary['max']} "
-        f"clean_surrogate_checkpoint={clean_checkpoint}"
+        f"clean_surrogate_checkpoint={clean_checkpoint} "
+        f"policy_feature_set={resolved_position_opt_config.policy_feature_set}"
     )
 
     def build_poisoned(target_item: int) -> TargetPoisonOutput:
@@ -198,12 +199,30 @@ def run_position_opt_shared_policy(
             "position_opt_policy_update": "reinforce",
             "position_opt_outer_eval_source": "real_validation_sessions",
             "position_opt_reward_mode": str(trainer.position_opt_config.reward_mode),
+            "position_opt_clean_target_utility": trainer_result.get("clean_target_utility"),
+            "position_opt_clean_targeted_mrr_at_10": trainer_result.get(
+                "clean_targeted_mrr_at_10"
+            ),
+            "position_opt_clean_targeted_recall_at_10": trainer_result.get(
+                "clean_targeted_recall_at_10"
+            ),
+            "position_opt_clean_targeted_recall_at_20": trainer_result.get(
+                "clean_targeted_recall_at_20"
+            ),
             "position_opt_validation_subset_size": (
                 None
                 if trainer.position_opt_config.validation_subset_size is None
                 else int(trainer.position_opt_config.validation_subset_size)
             ),
             "position_opt_entropy_coef": float(trainer.position_opt_config.entropy_coef),
+            "position_opt_policy_feature_set": str(trainer.position_opt_config.policy_feature_set),
+            "position_opt_prefix_score_enabled": bool(
+                trainer_result.get("prefix_score_enabled", False)
+            ),
+            "position_opt_prefix_score_type": trainer_result.get("prefix_score_type"),
+            "position_opt_pos0_prefix_handling": trainer_result.get(
+                "pos0_prefix_handling"
+            ),
         }
         return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
 
@@ -274,7 +293,15 @@ def _save_position_opt_run_metadata(
         "resolved_seeds": asdict(config.seeds),
         "replacement_topk_ratio": float(config.attack.replacement_topk_ratio),
         "reward_mode": str(trainer.position_opt_config.reward_mode),
+        "policy_feature_set": str(trainer.position_opt_config.policy_feature_set),
+        "prefix_score_enabled": trainer_result.get("prefix_score_enabled"),
+        "prefix_score_type": trainer_result.get("prefix_score_type"),
+        "pos0_prefix_handling": trainer_result.get("pos0_prefix_handling"),
+        "policy_scalar_feature_names": trainer_result.get("policy_scalar_feature_names"),
         "clean_target_utility": trainer_result.get("clean_target_utility"),
+        "clean_targeted_mrr_at_10": trainer_result.get("clean_targeted_mrr_at_10"),
+        "clean_targeted_recall_at_10": trainer_result.get("clean_targeted_recall_at_10"),
+        "clean_targeted_recall_at_20": trainer_result.get("clean_targeted_recall_at_20"),
         "position_opt_config": asdict(trainer.position_opt_config),
         "trainer_result": trainer_result,
         "artifact_paths": {
@@ -412,7 +439,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--reward-mode",
-        choices=["poisoned_target_utility", "delta_target_utility"],
+        choices=[
+            "poisoned_target_utility",
+            "delta_target_utility",
+            "delta_lowk_rank_utility",
+        ],
         default=argparse.SUPPRESS,
         help="Optional CLI override for attack.position_opt.reward_mode.",
     )

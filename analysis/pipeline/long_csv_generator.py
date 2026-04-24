@@ -101,6 +101,7 @@ class LongCsvDefaultsSpec:
     """Optional shared defaults applied to every batch job."""
 
     output_name: str | None
+    attack_method_override: str | None
     slice_policy: str | None
     requested_victims: list[str] | None
     requested_target_count: int | None
@@ -112,6 +113,7 @@ class LongCsvJobSpec:
 
     summary_path: Path
     output_name: str | None
+    attack_method_override: str | None
     slice_policy: str | None
     requested_victims: list[str] | None
     requested_victims_source_override: str | None
@@ -168,14 +170,16 @@ def generate_long_table_bundle(
     *,
     summary_path: str | Path,
     output_name: str | None,
-    slice_policy: str | None,
-    requested_victims: list[str] | None,
-    requested_target_count: int | None,
+    attack_method_override: str | None = None,
+    slice_policy: str | None = None,
+    requested_victims: list[str] | None = None,
+    requested_target_count: int | None = None,
 ) -> dict[str, object]:
     """Generate one slice-aware long-table bundle and return its key paths."""
     return _generate_long_table_bundle(
         summary_path=summary_path,
         output_name=output_name,
+        attack_method_override=attack_method_override,
         slice_policy=slice_policy,
         requested_victims=requested_victims,
         requested_target_count=requested_target_count,
@@ -191,6 +195,7 @@ def build_long_table_bundles(spec: LongCsvBatchSpec) -> list[dict[str, object]]:
             _generate_long_table_bundle(
                 summary_path=job.summary_path,
                 output_name=job.output_name,
+                attack_method_override=job.attack_method_override,
                 slice_policy=job.slice_policy,
                 requested_victims=job.requested_victims,
                 requested_target_count=job.requested_target_count,
@@ -204,6 +209,7 @@ def _generate_long_table_bundle(
     *,
     summary_path: str | Path,
     output_name: str | None,
+    attack_method_override: str | None,
     slice_policy: str | None,
     requested_victims: list[str] | None,
     requested_target_count: int | None,
@@ -228,7 +234,11 @@ def _generate_long_table_bundle(
         target_registry_payload=target_registry_payload,
     )
 
-    metadata = extract_run_metadata(summary_payload, resolved_config_payload)
+    metadata = extract_run_metadata(
+        summary_payload,
+        resolved_config_payload,
+        attack_method_override=attack_method_override,
+    )
     resolved_requested_victims, requested_victims_source = resolve_requested_victims(
         run_coverage_payload,
         requested_victims=requested_victims,
@@ -365,6 +375,7 @@ def parse_long_csv_defaults_spec(value: Any, *, label: str) -> LongCsvDefaultsSp
     if value is None:
         return LongCsvDefaultsSpec(
             output_name=None,
+            attack_method_override=None,
             slice_policy=None,
             requested_victims=None,
             requested_target_count=None,
@@ -375,6 +386,10 @@ def parse_long_csv_defaults_spec(value: Any, *, label: str) -> LongCsvDefaultsSp
         output_name=normalize_optional_output_name(
             payload.get("output_name"),
             label=f"{label}.output_name",
+        ),
+        attack_method_override=normalize_optional_attack_method_override(
+            payload.get("attack_method_override"),
+            label=f"{label}.attack_method_override",
         ),
         slice_policy=normalize_optional_slice_policy(
             payload.get("slice_policy"),
@@ -407,6 +422,11 @@ def parse_long_csv_job_spec(
         key="output_name",
         default=defaults.output_name,
     )
+    raw_attack_method_override = config_value_or_default(
+        payload,
+        key="attack_method_override",
+        default=defaults.attack_method_override,
+    )
     raw_slice_policy = config_value_or_default(
         payload,
         key="slice_policy",
@@ -432,6 +452,10 @@ def parse_long_csv_job_spec(
         output_name=normalize_optional_output_name(
             raw_output_name,
             label=f"{label}.output_name",
+        ),
+        attack_method_override=normalize_optional_attack_method_override(
+            raw_attack_method_override,
+            label=f"{label}.attack_method_override",
         ),
         slice_policy=normalize_optional_slice_policy(
             raw_slice_policy,
@@ -1140,6 +1164,8 @@ def build_slice_manifest(
 def extract_run_metadata(
     summary_payload: Mapping[str, Any],
     resolved_config_payload: Mapping[str, Any],
+    *,
+    attack_method_override: str | None,
 ) -> RunMetadata:
     """Collect required run-level metadata from the summary and resolved config."""
     summary_run_type = optional_nonempty_string(summary_payload.get("run_type"))
@@ -1153,7 +1179,7 @@ def extract_run_metadata(
             get_nested_value(resolved_config_payload, ("result_config", "data", "dataset_name")),
             label="resolved_config.result_config.data.dataset_name",
         ),
-        attack_method=summary_run_type or fallback_run_type,
+        attack_method=attack_method_override or summary_run_type or fallback_run_type,
         target_type=require_nonempty_string(
             get_nested_value(resolved_config_payload, ("result_config", "targets", "bucket")),
             label="resolved_config.result_config.targets.bucket",
@@ -1226,6 +1252,13 @@ def normalize_optional_output_name(value: Any, *, label: str) -> str | None:
     if "\\" in output_name or "/" in output_name:
         raise AnalysisError(f"The '{label}' value must be a single folder name, not a path.")
     return output_name
+
+
+def normalize_optional_attack_method_override(value: Any, *, label: str) -> str | None:
+    """Normalize one optional attack_method_override from config."""
+    if value is None:
+        return None
+    return require_nonempty_string(value, label=label)
 
 
 def normalize_optional_slice_policy(value: Any, *, label: str) -> str | None:

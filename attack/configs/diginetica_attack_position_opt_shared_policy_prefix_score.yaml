@@ -1,5 +1,5 @@
 experiment:
-  name: attack_position_opt_shared_policy_delta_target_utility_ratio1
+  name: attack_position_opt_shared_policy_prefix_score_ratio1
 
 data:
   dataset_name: diginetica
@@ -26,10 +26,10 @@ attack:
     clean_surrogate_checkpoint: outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt
     outer_steps: 30
     policy_lr: 0.01
+    policy_feature_set: local_context_prefix_score_prob
     fine_tune_steps: 20
     validation_subset_size: null
     reward_baseline_momentum: 0.9
-    reward_mode: delta_target_utility
     enable_gt_penalty: false
     gt_penalty_weight: 0.0
     gt_tolerance: 0.0
@@ -50,14 +50,14 @@ attack:
         nonhybrid: false
 
 targets:
-  mode: explicit_list
-  explicit_list: [5334, 11103]
+  mode: sampled
+  explicit_list: []
   bucket: popular
-  count: 2
+  count: 3
   reuse_saved_targets: true
 
 victims:
-  enabled: [tron]
+  enabled: [srgnn, miasrec, tron]
   params:
     srgnn:
       train:

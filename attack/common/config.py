@@ -11,6 +11,11 @@ _ALLOWED_EVAL_METRICS = {"precision", "recall", "mrr", "ndcg"}
 _ALLOWED_POSITION_OPT_REWARD_MODES = {
     "poisoned_target_utility",
     "delta_target_utility",
+    "delta_lowk_rank_utility",
+}
+_ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS = {
+    "local_context",
+    "local_context_prefix_score_prob",
 }
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
@@ -69,6 +74,7 @@ class PositionOptConfig:
     policy_lr: float = 0.05
     policy_embedding_dim: int = 16
     policy_hidden_dim: int = 32
+    policy_feature_set: str = "local_context"
     fine_tune_steps: int = 20
     validation_subset_size: int | None = None
     reward_baseline_momentum: float = 0.9
@@ -118,6 +124,18 @@ class PositionOptConfig:
         if policy_hidden_dim <= 0:
             raise ValueError("attack.position_opt.policy_hidden_dim must be positive.")
         object.__setattr__(self, "policy_hidden_dim", policy_hidden_dim)
+
+        policy_feature_set = _as_str(
+            self.policy_feature_set,
+            "attack.position_opt.policy_feature_set",
+        ).strip().lower()
+        if policy_feature_set not in _ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS:
+            allowed_feature_sets = ", ".join(sorted(_ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS))
+            raise ValueError(
+                "attack.position_opt.policy_feature_set must be one of: "
+                f"{allowed_feature_sets}."
+            )
+        object.__setattr__(self, "policy_feature_set", policy_feature_set)
 
         fine_tune_steps = _as_int(
             self.fine_tune_steps,
@@ -643,6 +661,11 @@ def _normalize_position_opt_config(value: Any, context: str) -> dict[str, Any]:
         payload["policy_hidden_dim"] = _as_int(
             mapping["policy_hidden_dim"],
             f"{context}.policy_hidden_dim",
+        )
+    if "policy_feature_set" in mapping:
+        payload["policy_feature_set"] = _as_str(
+            mapping["policy_feature_set"],
+            f"{context}.policy_feature_set",
         )
     if "fine_tune_steps" in mapping:
         payload["fine_tune_steps"] = _as_int(

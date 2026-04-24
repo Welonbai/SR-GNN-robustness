@@ -1,0 +1,22 @@
+defaults:
+  slice_policy: largest_complete_prefix
+  requested_victims:
+    - srgnn
+    - miasrec
+    - tron
+  requested_target_count: 3
+
+jobs:
+  - summary: outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/summary_current.json
+    output_name: diginetica_clean_shared_policy_variants_compare
+
+  - summary: outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/summary_current.json
+    output_name: diginetica_prefix_nonzero_shared_policy_variants_compare
+
+  - summary: outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/summary_current.json
+    output_name: diginetica_shared_policy_ratio1_entropy0_shared_policy_variants_compare
+    attack_method_override: position_opt_shared_policy_ratio1_entropy0
+
+  - summary: outputs/runs/diginetica/attack_position_opt_shared_policy_delta_lowk_rank_utility_ratio1/run_group_9cdffbad63/summary_current.json
+    output_name: diginetica_shared_policy_delta_lowk_rank_utility_ratio1_entropy0_shared_policy_variants_compare
+    attack_method_override: position_opt_shared_policy_delta_lowk_rank_utility_ratio1_entropy0
