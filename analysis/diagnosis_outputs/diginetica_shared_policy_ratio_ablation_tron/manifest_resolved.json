@@ -1,0 +1,55 @@
+{
+  "config_path": "analysis/configs/diagnosis/diginetica_shared_policy_ratio_ablation_tron.yaml",
+  "dataset": "diginetica",
+  "methods": {
+    "clean": {
+      "attack_method": "clean",
+      "label": "Clean",
+      "replacement_topk_ratio": null,
+      "run_root": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757",
+      "summary_current": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/summary_current.json"
+    },
+    "posopt_mvp": {
+      "attack_method": "position_opt_mvp",
+      "label": "PosOptMVP",
+      "replacement_topk_ratio": null,
+      "run_root": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46",
+      "summary_current": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/summary_current.json"
+    },
+    "prefix_nz": {
+      "attack_method": "prefix_nonzero_when_possible",
+      "label": "Prefix-NZ",
+      "replacement_topk_ratio": null,
+      "run_root": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6",
+      "summary_current": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/summary_current.json"
+    },
+    "shared_policy_ratio05": {
+      "attack_method": "position_opt_shared_policy",
+      "label": "Shared Policy ratio=0.5",
+      "replacement_topk_ratio": 0.5,
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio05/run_group_fe8cbbe7c1",
+      "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio05/run_group_fe8cbbe7c1/summary_current.json"
+    },
+    "shared_policy_ratio1": {
+      "attack_method": "position_opt_shared_policy",
+      "label": "Shared Policy ratio=1.0",
+      "replacement_topk_ratio": 1.0,
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f",
+      "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/summary_current.json"
+    }
+  },
+  "optional_targets": [
+    39588
+  ],
+  "report_id": "diginetica_shared_policy_ratio_ablation_tron",
+  "required_targets": [
+    5334,
+    11103
+  ],
+  "selected_targets": [
+    5334,
+    11103
+  ],
+  "shared_fake_sessions": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/fake_sessions.pkl",
+  "victim_model": "tron"
+}

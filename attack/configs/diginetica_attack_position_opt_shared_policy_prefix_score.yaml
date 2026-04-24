@@ -50,14 +50,14 @@ attack:
         nonhybrid: false
 
 targets:
-  mode: sampled
-  explicit_list: []
+  mode: explicit_list
+  explicit_list: [5334, 11103]
   bucket: popular
-  count: 3
+  count: 2
   reuse_saved_targets: true
 
 victims:
-  enabled: [srgnn, miasrec, tron]
+  enabled: [tron]
   params:
     srgnn:
       train:
