@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import replace
-from pathlib import Path
+import json
 import shutil
+from dataclasses import replace
+from itertools import combinations
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -18,13 +20,20 @@ from attack.common.paths import (
     shared_attack_artifact_key,
     victim_prediction_key,
 )
+from attack.common.position_opt_policy_feature_sets import (
+    POSITION_OPT_POLICY_FEATURE_SET_SPECS,
+)
 from attack.position_opt.feature_builder import (
     build_policy_special_item_ids,
     build_session_candidate_features,
 )
 from attack.position_opt.policy import SharedContextualPositionPolicy
 from attack.position_opt.trainer import PositionOptMVPTrainer
-from attack.position_opt.types import SurrogateScoreResult, position_opt_identity_payload
+from attack.position_opt.types import (
+    PositionOptArtifactPaths,
+    SurrogateScoreResult,
+    position_opt_identity_payload,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +44,62 @@ PREFIX_SCORE_CONFIG_PATH = (
     / "configs"
     / "diginetica_attack_position_opt_shared_policy_prefix_score.yaml"
 )
+_POLICY_EMBEDDING_DIM = 8
+_FEATURE_SET_EXPECTATIONS = {
+    "local_context": {
+        "item_features": [
+            "target_item",
+            "original_item",
+            "left_item",
+            "right_item",
+        ],
+        "scalar_features": [
+            "position_index",
+            "normalized_position",
+            "session_length",
+        ],
+    },
+    "local_context_prefix_score_prob": {
+        "item_features": [
+            "target_item",
+            "original_item",
+            "left_item",
+            "right_item",
+        ],
+        "scalar_features": [
+            "position_index",
+            "normalized_position",
+            "session_length",
+            "prefix_score",
+            "has_prefix",
+        ],
+    },
+    "normalized_position_only": {
+        "item_features": [],
+        "scalar_features": ["normalized_position"],
+    },
+    "target_normalized_position": {
+        "item_features": ["target_item"],
+        "scalar_features": ["normalized_position"],
+    },
+    "target_original_normalized_position": {
+        "item_features": ["target_item", "original_item"],
+        "scalar_features": ["normalized_position"],
+    },
+    "full_context_normalized_position": {
+        "item_features": [
+            "target_item",
+            "original_item",
+            "left_item",
+            "right_item",
+        ],
+        "scalar_features": ["normalized_position"],
+    },
+}
+
+
+def test_policy_feature_set_specs_cover_all_supported_modes() -> None:
+    assert set(POSITION_OPT_POLICY_FEATURE_SET_SPECS) == set(_FEATURE_SET_EXPECTATIONS)
 
 
 def test_prefix_score_config_loads_from_yaml_and_identity_omits_default() -> None:
@@ -59,6 +124,18 @@ def test_prefix_score_config_loads_from_yaml_and_identity_omits_default() -> Non
     }
 
 
+@pytest.mark.parametrize("policy_feature_set", sorted(_FEATURE_SET_EXPECTATIONS))
+def test_policy_feature_set_config_accepts_supported_modes(policy_feature_set: str) -> None:
+    config = PositionOptConfig(policy_feature_set=policy_feature_set)
+
+    assert config.policy_feature_set == policy_feature_set
+
+
+def test_policy_feature_set_config_rejects_invalid_mode() -> None:
+    with pytest.raises(ValueError, match="policy_feature_set"):
+        PositionOptConfig(policy_feature_set="normalized_position_with_magic")
+
+
 def test_build_session_candidate_features_records_prefix_score_and_has_prefix() -> None:
     features = build_session_candidate_features(
         [4, 5, 6],
@@ -80,34 +157,63 @@ def test_build_session_candidate_features_records_prefix_score_and_has_prefix() 
     assert features.tensors.has_prefixes.tolist() == pytest.approx([0.0, 1.0, 1.0])
 
 
-def test_shared_policy_prefix_feature_set_expands_scalar_input_dim() -> None:
-    baseline_policy = SharedContextualPositionPolicy(
+@pytest.mark.parametrize(
+    "policy_feature_set,expected",
+    sorted(_FEATURE_SET_EXPECTATIONS.items()),
+)
+def test_policy_feature_set_controls_item_and_scalar_inputs(
+    policy_feature_set: str,
+    expected: dict[str, list[str]],
+) -> None:
+    policy = SharedContextualPositionPolicy(
         num_item_embeddings=32,
-        embedding_dim=8,
+        embedding_dim=_POLICY_EMBEDDING_DIM,
         hidden_dim=16,
-        policy_feature_set="local_context",
-    )
-    prefix_policy = SharedContextualPositionPolicy(
-        num_item_embeddings=32,
-        embedding_dim=8,
-        hidden_dim=16,
-        policy_feature_set="local_context_prefix_score_prob",
+        policy_feature_set=policy_feature_set,
     )
 
-    assert list(baseline_policy.scalar_feature_names) == [
-        "position_index",
-        "normalized_position",
-        "session_length",
-    ]
-    assert list(prefix_policy.scalar_feature_names) == [
-        "position_index",
-        "normalized_position",
-        "session_length",
-        "prefix_score",
-        "has_prefix",
-    ]
-    assert baseline_policy.scorer[0].in_features == (8 * 4) + 3
-    assert prefix_policy.scorer[0].in_features == (8 * 4) + 5
+    expected_input_dim = (
+        len(expected["item_features"]) * _POLICY_EMBEDDING_DIM
+    ) + len(expected["scalar_features"])
+
+    assert list(policy.active_item_features) == expected["item_features"]
+    assert list(policy.active_scalar_features) == expected["scalar_features"]
+    assert list(policy.item_feature_names) == expected["item_features"]
+    assert list(policy.scalar_feature_names) == expected["scalar_features"]
+    assert policy.policy_input_dim == expected_input_dim
+    assert policy.scorer[0].in_features == expected_input_dim
+    assert (policy.item_embedding is None) is (len(expected["item_features"]) == 0)
+    assert policy.input_metadata() == {
+        "policy_feature_set": policy_feature_set,
+        "active_item_features": expected["item_features"],
+        "active_scalar_features": expected["scalar_features"],
+        "policy_input_dim": expected_input_dim,
+        "policy_embedding_dim": _POLICY_EMBEDDING_DIM,
+        "policy_hidden_dim": 16,
+    }
+
+
+@pytest.mark.parametrize("policy_feature_set", sorted(_FEATURE_SET_EXPECTATIONS))
+def test_policy_feature_set_forward_pass_smoke(policy_feature_set: str) -> None:
+    features = build_session_candidate_features(
+        [4, 5, 6],
+        [0, 1, 2],
+        target_item=9,
+        special_item_ids=build_policy_special_item_ids(20),
+        prefix_scores=[0.0, 0.125, 0.25],
+        has_prefixes=[False, True, True],
+    )
+    policy = SharedContextualPositionPolicy(
+        num_item_embeddings=32,
+        embedding_dim=_POLICY_EMBEDDING_DIM,
+        hidden_dim=16,
+        policy_feature_set=policy_feature_set,
+    )
+
+    logits = policy.score_candidates(features.tensors)
+
+    assert tuple(logits.shape) == (3,)
+    assert torch.isfinite(logits).all()
 
 
 def test_trainer_prefix_features_cache_probabilities_and_skip_empty_prefixes() -> None:
@@ -126,7 +232,7 @@ def test_trainer_prefix_features_cache_probabilities_and_skip_empty_prefixes() -
         ),
     )
 
-    trainer.train(
+    trainer_result = trainer.train(
         fake_sessions=[[7, 8, 9], [4]],
         target_item=12,
         shared_artifacts=SimpleNamespace(
@@ -153,6 +259,134 @@ def test_trainer_prefix_features_cache_probabilities_and_skip_empty_prefixes() -
         for call in backend.score_target_calls
         for session in call["sessions"]
     )
+    assert trainer_result["prefix_score_enabled"] is True
+    assert trainer_result["policy_item_feature_names"] == [
+        "target_item",
+        "original_item",
+        "left_item",
+        "right_item",
+    ]
+    assert trainer_result["active_scalar_features"] == [
+        "position_index",
+        "normalized_position",
+        "session_length",
+        "prefix_score",
+        "has_prefix",
+    ]
+
+
+def test_trainer_skips_prefix_score_enrichment_when_feature_set_does_not_need_it() -> None:
+    base_config = load_config(BASE_CONFIG_PATH)
+    if base_config.attack.position_opt is None:
+        raise AssertionError("Shared-policy config must include attack.position_opt.")
+
+    trainer = PositionOptMVPTrainer(
+        _RecordingPrefixSurrogateBackend(),
+        object(),
+        clean_surrogate_checkpoint_path="unused-clean-surrogate.pt",
+        position_opt_config=replace(
+            base_config.attack.position_opt,
+            outer_steps=0,
+            policy_feature_set="normalized_position_only",
+        ),
+    )
+
+    trainer_result = trainer.train(
+        fake_sessions=[[7, 8, 9], [4]],
+        target_item=12,
+        shared_artifacts=SimpleNamespace(
+            clean_sessions=[[1, 2]],
+            clean_labels=[3],
+            validation_sessions=[[5, 6]],
+            validation_labels=[7],
+        ),
+        config=base_config,
+    )
+
+    backend = trainer.surrogate_backend
+
+    assert backend.load_clean_checkpoint_calls == 1
+    assert backend.clone_clean_model_calls == 1
+    assert len(backend.score_target_calls) == 1
+    assert backend.score_target_calls[0]["sessions"] == [[5, 6]]
+    assert trainer_result["prefix_score_enabled"] is False
+    assert trainer_result["active_item_features"] == []
+    assert trainer_result["active_scalar_features"] == ["normalized_position"]
+    assert trainer_result["policy_input_dim"] == 1
+
+
+def test_trainer_artifacts_log_active_features_and_policy_dims() -> None:
+    config = load_config(BASE_CONFIG_PATH)
+    if config.attack.position_opt is None:
+        raise AssertionError("Shared-policy config must include attack.position_opt.")
+
+    temp_root = REPO_ROOT / "outputs" / ".pytest_policy_feature_metadata" / uuid4().hex
+    try:
+        temp_root.mkdir(parents=True, exist_ok=True)
+        trainer = PositionOptMVPTrainer(
+            _RecordingPrefixSurrogateBackend(),
+            object(),
+            clean_surrogate_checkpoint_path=temp_root / "clean_surrogate.pt",
+            position_opt_config=replace(
+                config.attack.position_opt,
+                outer_steps=0,
+                policy_feature_set="target_original_normalized_position",
+                policy_embedding_dim=7,
+                policy_hidden_dim=11,
+            ),
+        )
+
+        trainer_result = trainer.train(
+            fake_sessions=[[7, 8, 9], [4, 5]],
+            target_item=12,
+            shared_artifacts=SimpleNamespace(
+                clean_sessions=[[1, 2]],
+                clean_labels=[3],
+                validation_sessions=[[5, 6]],
+                validation_labels=[7],
+            ),
+            config=config,
+        )
+        artifact_paths = PositionOptArtifactPaths(
+            base_dir=temp_root / "artifacts",
+            clean_surrogate_checkpoint=temp_root / "artifacts" / "clean_surrogate.pt",
+            optimized_poisoned_sessions=temp_root / "artifacts" / "optimized_poisoned_sessions.pkl",
+            training_history=temp_root / "artifacts" / "training_history.json",
+            learned_logits=temp_root / "artifacts" / "learned_logits.pt",
+        )
+        trainer.save_artifacts(artifact_paths)
+
+        training_history_payload = json.loads(
+            artifact_paths.training_history.read_text(encoding="utf-8")
+        )
+        learned_logits_payload = torch.load(artifact_paths.learned_logits, map_location="cpu")
+
+        assert trainer_result["policy_item_feature_names"] == [
+            "target_item",
+            "original_item",
+        ]
+        assert trainer_result["active_scalar_features"] == ["normalized_position"]
+        assert trainer_result["policy_input_dim"] == 15
+        assert training_history_payload["policy_item_feature_names"] == [
+            "target_item",
+            "original_item",
+        ]
+        assert training_history_payload["active_scalar_features"] == ["normalized_position"]
+        assert training_history_payload["policy_input_dim"] == 15
+        assert training_history_payload["policy_embedding_dim"] == 7
+        assert training_history_payload["policy_hidden_dim"] == 11
+        assert learned_logits_payload["policy_config"]["active_item_features"] == [
+            "target_item",
+            "original_item",
+        ]
+        assert learned_logits_payload["policy_config"]["active_scalar_features"] == [
+            "normalized_position"
+        ]
+        assert learned_logits_payload["policy_config"]["policy_input_dim"] == 15
+        assert learned_logits_payload["policy_config"]["policy_embedding_dim"] == 7
+        assert learned_logits_payload["policy_config"]["policy_hidden_dim"] == 11
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
 
 
 def test_policy_feature_set_splits_position_opt_and_victim_cache_but_not_generation_cache() -> None:
@@ -162,54 +396,60 @@ def test_policy_feature_set_splits_position_opt_and_victim_cache_but_not_generat
         temp_root.mkdir(parents=True, exist_ok=True)
         checkpoint_path = temp_root / "clean_surrogate.pt"
         checkpoint_path.write_bytes(b"fake clean surrogate checkpoint")
+        resolved = {
+            policy_feature_set: _config_with_policy_feature_set(
+                config,
+                policy_feature_set=policy_feature_set,
+                checkpoint_path=checkpoint_path,
+            )
+            for policy_feature_set in _FEATURE_SET_EXPECTATIONS
+        }
 
-        baseline_config, baseline_context = _config_with_policy_feature_set(
-            config,
-            policy_feature_set="local_context",
-            checkpoint_path=checkpoint_path,
-        )
-        prefix_config, prefix_context = _config_with_policy_feature_set(
-            config,
-            policy_feature_set="local_context_prefix_score_prob",
-            checkpoint_path=checkpoint_path,
-        )
+        for left_feature_set, right_feature_set in combinations(
+            sorted(_FEATURE_SET_EXPECTATIONS),
+            2,
+        ):
+            left_config, left_context = resolved[left_feature_set]
+            right_config, right_context = resolved[right_feature_set]
+            assert attack_key(
+                left_config,
+                run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+                attack_identity_context=left_context,
+            ) != attack_key(
+                right_config,
+                run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+                attack_identity_context=right_context,
+            )
+            assert run_group_key(
+                left_config,
+                run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+                attack_identity_context=left_context,
+            ) != run_group_key(
+                right_config,
+                run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+                attack_identity_context=right_context,
+            )
+            assert victim_prediction_key(
+                left_config,
+                "srgnn",
+                run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+                attack_identity_context=left_context,
+            ) != victim_prediction_key(
+                right_config,
+                "srgnn",
+                run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+                attack_identity_context=right_context,
+            )
 
-        assert attack_key(
-            baseline_config,
-            run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
-            attack_identity_context=baseline_context,
-        ) != attack_key(
-            prefix_config,
-            run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
-            attack_identity_context=prefix_context,
-        )
-        assert run_group_key(
-            baseline_config,
-            run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
-            attack_identity_context=baseline_context,
-        ) != run_group_key(
-            prefix_config,
-            run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
-            attack_identity_context=prefix_context,
-        )
-        assert victim_prediction_key(
-            baseline_config,
-            "srgnn",
-            run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
-            attack_identity_context=baseline_context,
-        ) != victim_prediction_key(
-            prefix_config,
-            "srgnn",
-            run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
-            attack_identity_context=prefix_context,
-        )
-        assert shared_attack_artifact_key(
-            baseline_config,
-            run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
-        ) == shared_attack_artifact_key(
-            prefix_config,
-            run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
-        )
+        baseline_config, _ = resolved["local_context"]
+        for policy_feature_set, (feature_config, _) in resolved.items():
+            assert shared_attack_artifact_key(
+                baseline_config,
+                run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+            ) == shared_attack_artifact_key(
+                feature_config,
+                run_type=POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+            ), policy_feature_set
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 

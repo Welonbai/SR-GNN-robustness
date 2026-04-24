@@ -25,7 +25,10 @@ from attack.position_opt.feature_builder import (
     infer_max_item_id,
 )
 from attack.position_opt.objective import compute_position_opt_objective
-from attack.position_opt.policy import SharedContextualPositionPolicy
+from attack.position_opt.policy import (
+    SharedContextualPositionPolicy,
+    resolve_policy_feature_set_spec,
+)
 from attack.position_opt.poison_builder import replace_item_at_position
 from attack.position_opt.selector import sample_position_reinforce, select_position_eval
 from attack.position_opt.types import (
@@ -44,7 +47,6 @@ _LOWK_TARGET_METRIC_KEYS = (
     "targeted_recall@10",
     "targeted_recall@20",
 )
-_PREFIX_SCORE_FEATURE_SET = "local_context_prefix_score_prob"
 _LOWK_TARGET_METRIC_WEIGHTS = {
     "targeted_mrr@10": 0.6,
     "targeted_recall@10": 0.3,
@@ -79,6 +81,9 @@ class PositionOptMVPTrainer:
         self.inner_trainer = inner_trainer
         self.clean_surrogate_checkpoint_path = checkpoint_path
         self.position_opt_config = resolve_position_opt_config(position_opt_config)
+        self._policy_feature_set_spec = resolve_policy_feature_set_spec(
+            self.position_opt_config.policy_feature_set
+        )
 
         self.policy: SharedContextualPositionPolicy | None = None
         self.training_history: list[dict[str, Any]] = []
@@ -150,7 +155,11 @@ class PositionOptMVPTrainer:
             f"fine_tune_steps={int(self.position_opt_config.fine_tune_steps)} "
             f"reward_mode={self.position_opt_config.reward_mode} "
             f"entropy_coef={float(self.position_opt_config.entropy_coef):g} "
-            f"checkpoint={self.clean_surrogate_checkpoint_path}"
+            f"checkpoint={self.clean_surrogate_checkpoint_path} "
+            f"policy_feature_set={self.policy.policy_feature_set} "
+            f"active_item_features={list(self.policy.active_item_features)} "
+            f"active_scalar_features={list(self.policy.active_scalar_features)} "
+            f"policy_input_dim={int(self.policy.policy_input_dim)}"
         )
 
         optimizer = torch.optim.Adam(
@@ -284,6 +293,7 @@ class PositionOptMVPTrainer:
 
         final_positions = self.export_final_selected_positions()
         final_sessions = self.export_final_poisoned_sessions()
+        policy_input_metadata = self._policy_input_metadata()
         return {
             "training_history": list(self.training_history),
             "final_selected_positions": [asdict(result) for result in final_positions],
@@ -296,6 +306,12 @@ class PositionOptMVPTrainer:
             "policy_scalar_feature_names": (
                 None if self.policy is None else list(self.policy.scalar_feature_names)
             ),
+            "policy_item_feature_names": policy_input_metadata["active_item_features"],
+            "active_item_features": policy_input_metadata["active_item_features"],
+            "active_scalar_features": policy_input_metadata["active_scalar_features"],
+            "policy_input_dim": policy_input_metadata["policy_input_dim"],
+            "policy_embedding_dim": policy_input_metadata["policy_embedding_dim"],
+            "policy_hidden_dim": policy_input_metadata["policy_hidden_dim"],
             **_lowk_target_metric_history_fields(
                 self._clean_target_metrics,
                 prefix="clean",
@@ -361,6 +377,7 @@ class PositionOptMVPTrainer:
                 json.dump(payload, handle, indent=2, sort_keys=True)
 
         if paths.training_history is not None:
+            policy_input_metadata = self._policy_input_metadata()
             payload = {
                 "target_item": self._target_item,
                 "position_opt_config": asdict(self.position_opt_config),
@@ -376,6 +393,12 @@ class PositionOptMVPTrainer:
                 "policy_scalar_feature_names": (
                     None if self.policy is None else list(self.policy.scalar_feature_names)
                 ),
+                "policy_item_feature_names": policy_input_metadata["active_item_features"],
+                "active_item_features": policy_input_metadata["active_item_features"],
+                "active_scalar_features": policy_input_metadata["active_scalar_features"],
+                "policy_input_dim": policy_input_metadata["policy_input_dim"],
+                "policy_embedding_dim": policy_input_metadata["policy_embedding_dim"],
+                "policy_hidden_dim": policy_input_metadata["policy_hidden_dim"],
                 "clean_target_utility": self._clean_target_utility,
                 **_lowk_target_metric_history_fields(
                     self._clean_target_metrics,
@@ -590,7 +613,7 @@ class PositionOptMVPTrainer:
         return self.policy.score_candidates(session_state.features.tensors)
 
     def _prefix_score_enabled(self) -> bool:
-        return str(self.position_opt_config.policy_feature_set) == _PREFIX_SCORE_FEATURE_SET
+        return bool(self._policy_feature_set_spec.requires_prefix_features)
 
     def _prefix_score_metadata(self) -> dict[str, Any]:
         enabled = self._prefix_score_enabled()
@@ -603,6 +626,17 @@ class PositionOptMVPTrainer:
             ),
         }
 
+    def _policy_input_metadata(self) -> dict[str, Any]:
+        if self.policy is None:
+            return {
+                "active_item_features": None,
+                "active_scalar_features": None,
+                "policy_input_dim": None,
+                "policy_embedding_dim": int(self.position_opt_config.policy_embedding_dim),
+                "policy_hidden_dim": int(self.position_opt_config.policy_hidden_dim),
+            }
+        return self.policy.input_metadata()
+
     def _build_prefix_scored_session_states(
         self,
         *,
@@ -611,11 +645,13 @@ class PositionOptMVPTrainer:
         if self._policy_special_item_ids is None:
             raise RuntimeError("Policy special-item ids are not initialized.")
 
-        self.surrogate_backend.load_clean_checkpoint(self.clean_surrogate_checkpoint_path)
-        clean_model = self.surrogate_backend.clone_clean_model()
+        clean_model: object | None = None
+        if self._policy_feature_set_spec.requires_prefix_scores:
+            self.surrogate_backend.load_clean_checkpoint(self.clean_surrogate_checkpoint_path)
+            clean_model = self.surrogate_backend.clone_clean_model()
         prefix_scored_states: list[_SessionCandidateState] = []
         for session_state in self._session_states:
-            prefix_scores, has_prefixes = self._score_session_prefix_probabilities(
+            prefix_scores, has_prefixes = self._resolve_session_prefix_features(
                 clean_model,
                 session_state=session_state,
                 target_item=target_item,
@@ -638,9 +674,9 @@ class PositionOptMVPTrainer:
             )
         return prefix_scored_states
 
-    def _score_session_prefix_probabilities(
+    def _resolve_session_prefix_features(
         self,
-        clean_model: object,
+        clean_model: object | None,
         *,
         session_state: _SessionCandidateState,
         target_item: int,
@@ -658,8 +694,10 @@ class PositionOptMVPTrainer:
             nonzero_candidate_indices.append(int(candidate_index))
             has_prefixes[candidate_index] = True
 
-        if not nonzero_prefixes:
+        if not nonzero_prefixes or not self._policy_feature_set_spec.requires_prefix_scores:
             return prefix_scores, has_prefixes
+        if clean_model is None:
+            raise RuntimeError("clean_model is required when prefix scores are active.")
 
         target_result = self.surrogate_backend.score_target(
             clean_model,
@@ -697,14 +735,19 @@ class PositionOptMVPTrainer:
                     }
                 )
 
+        policy_input_metadata = self._policy_input_metadata()
         return {
             "target_item": self._target_item,
             "policy_representation": "shared_contextual_mlp",
             "policy_config": {
-                "embedding_dim": int(self.position_opt_config.policy_embedding_dim),
-                "hidden_dim": int(self.position_opt_config.policy_hidden_dim),
+                "policy_embedding_dim": policy_input_metadata["policy_embedding_dim"],
+                "policy_hidden_dim": policy_input_metadata["policy_hidden_dim"],
+                "policy_input_dim": policy_input_metadata["policy_input_dim"],
                 "num_item_embeddings": int(self.policy.num_item_embeddings),
                 "policy_feature_set": str(self.position_opt_config.policy_feature_set),
+                "active_item_features": policy_input_metadata["active_item_features"],
+                "active_scalar_features": policy_input_metadata["active_scalar_features"],
+                "item_feature_names": policy_input_metadata["active_item_features"],
                 "scalar_feature_names": list(self.policy.scalar_feature_names),
             },
             "special_item_ids": self._policy_special_item_ids.to_payload(),

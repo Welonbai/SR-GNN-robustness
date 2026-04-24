@@ -4,6 +4,10 @@ from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from attack.common.position_opt_policy_feature_sets import (
+    ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS,
+)
+
 
 _ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron"}
 _ALLOWED_TARGET_BUCKETS = {"popular", "unpopular", "all"}
@@ -12,10 +16,6 @@ _ALLOWED_POSITION_OPT_REWARD_MODES = {
     "poisoned_target_utility",
     "delta_target_utility",
     "delta_lowk_rank_utility",
-}
-_ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS = {
-    "local_context",
-    "local_context_prefix_score_prob",
 }
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
@@ -129,8 +129,8 @@ class PositionOptConfig:
             self.policy_feature_set,
             "attack.position_opt.policy_feature_set",
         ).strip().lower()
-        if policy_feature_set not in _ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS:
-            allowed_feature_sets = ", ".join(sorted(_ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS))
+        if policy_feature_set not in ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS:
+            allowed_feature_sets = ", ".join(sorted(ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS))
             raise ValueError(
                 "attack.position_opt.policy_feature_set must be one of: "
                 f"{allowed_feature_sets}."

@@ -216,6 +216,11 @@ def run_position_opt_shared_policy(
             ),
             "position_opt_entropy_coef": float(trainer.position_opt_config.entropy_coef),
             "position_opt_policy_feature_set": str(trainer.position_opt_config.policy_feature_set),
+            "position_opt_active_item_features": trainer_result.get("active_item_features"),
+            "position_opt_active_scalar_features": trainer_result.get("active_scalar_features"),
+            "position_opt_policy_input_dim": trainer_result.get("policy_input_dim"),
+            "position_opt_policy_embedding_dim": trainer_result.get("policy_embedding_dim"),
+            "position_opt_policy_hidden_dim": trainer_result.get("policy_hidden_dim"),
             "position_opt_prefix_score_enabled": bool(
                 trainer_result.get("prefix_score_enabled", False)
             ),
@@ -297,7 +302,13 @@ def _save_position_opt_run_metadata(
         "prefix_score_enabled": trainer_result.get("prefix_score_enabled"),
         "prefix_score_type": trainer_result.get("prefix_score_type"),
         "pos0_prefix_handling": trainer_result.get("pos0_prefix_handling"),
+        "policy_item_feature_names": trainer_result.get("policy_item_feature_names"),
         "policy_scalar_feature_names": trainer_result.get("policy_scalar_feature_names"),
+        "active_item_features": trainer_result.get("active_item_features"),
+        "active_scalar_features": trainer_result.get("active_scalar_features"),
+        "policy_input_dim": trainer_result.get("policy_input_dim"),
+        "policy_embedding_dim": trainer_result.get("policy_embedding_dim"),
+        "policy_hidden_dim": trainer_result.get("policy_hidden_dim"),
         "clean_target_utility": trainer_result.get("clean_target_utility"),
         "clean_targeted_mrr_at_10": trainer_result.get("clean_targeted_mrr_at_10"),
         "clean_targeted_recall_at_10": trainer_result.get("clean_targeted_recall_at_10"),
@@ -342,6 +353,8 @@ def _resolve_position_opt_overrides(args: argparse.Namespace) -> dict[str, Any]:
         overrides["policy_embedding_dim"] = int(args.policy_embedding_dim)
     if hasattr(args, "policy_hidden_dim"):
         overrides["policy_hidden_dim"] = int(args.policy_hidden_dim)
+    if hasattr(args, "policy_feature_set"):
+        overrides["policy_feature_set"] = str(args.policy_feature_set)
     if hasattr(args, "fine_tune_steps"):
         overrides["fine_tune_steps"] = int(args.fine_tune_steps)
     if hasattr(args, "validation_subset_size"):
@@ -415,6 +428,11 @@ def main() -> None:
         type=int,
         default=argparse.SUPPRESS,
         help="Optional CLI override for attack.position_opt.policy_hidden_dim.",
+    )
+    parser.add_argument(
+        "--policy-feature-set",
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.policy_feature_set.",
     )
     parser.add_argument(
         "--fine-tune-steps",
