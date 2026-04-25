@@ -135,6 +135,9 @@ def test_prefix_score_config_loads_from_yaml_and_identity_omits_default() -> Non
         "gt_penalty_weight": 0.0,
         "gt_tolerance": 0.0,
         "final_selection": "argmax",
+        "deterministic_eval_every": 0,
+        "deterministic_eval_include_final": True,
+        "final_policy_selection": "last",
     }
 
 

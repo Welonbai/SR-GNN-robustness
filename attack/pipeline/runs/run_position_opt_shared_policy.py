@@ -200,6 +200,24 @@ def run_position_opt_shared_policy(
             "position_opt_outer_eval_source": "real_validation_sessions",
             "position_opt_reward_mode": str(trainer.position_opt_config.reward_mode),
             "position_opt_clean_target_utility": trainer_result.get("clean_target_utility"),
+            "position_opt_deterministic_eval_every": trainer_result.get(
+                "deterministic_eval_every"
+            ),
+            "position_opt_deterministic_eval_include_final": trainer_result.get(
+                "deterministic_eval_include_final"
+            ),
+            "position_opt_final_policy_selection": trainer_result.get(
+                "final_policy_selection"
+            ),
+            "position_opt_best_deterministic_step": trainer_result.get(
+                "best_deterministic_step"
+            ),
+            "position_opt_best_deterministic_reward": trainer_result.get(
+                "best_deterministic_reward"
+            ),
+            "position_opt_exported_policy_source": trainer_result.get(
+                "exported_policy_source"
+            ),
             "position_opt_clean_targeted_mrr_at_10": trainer_result.get(
                 "clean_targeted_mrr_at_10"
             ),
@@ -298,6 +316,14 @@ def _save_position_opt_run_metadata(
         "resolved_seeds": asdict(config.seeds),
         "replacement_topk_ratio": float(config.attack.replacement_topk_ratio),
         "reward_mode": str(trainer.position_opt_config.reward_mode),
+        "deterministic_eval_every": trainer_result.get("deterministic_eval_every"),
+        "deterministic_eval_include_final": trainer_result.get(
+            "deterministic_eval_include_final"
+        ),
+        "final_policy_selection": trainer_result.get("final_policy_selection"),
+        "best_deterministic_step": trainer_result.get("best_deterministic_step"),
+        "best_deterministic_reward": trainer_result.get("best_deterministic_reward"),
+        "exported_policy_source": trainer_result.get("exported_policy_source"),
         "policy_feature_set": str(trainer.position_opt_config.policy_feature_set),
         "prefix_score_enabled": trainer_result.get("prefix_score_enabled"),
         "prefix_score_type": trainer_result.get("prefix_score_type"),
@@ -373,6 +399,14 @@ def _resolve_position_opt_overrides(args: argparse.Namespace) -> dict[str, Any]:
         overrides["gt_tolerance"] = float(args.gt_tolerance)
     if hasattr(args, "final_selection"):
         overrides["final_selection"] = str(args.final_selection)
+    if hasattr(args, "deterministic_eval_every"):
+        overrides["deterministic_eval_every"] = int(args.deterministic_eval_every)
+    if hasattr(args, "deterministic_eval_include_final"):
+        overrides["deterministic_eval_include_final"] = bool(
+            args.deterministic_eval_include_final
+        )
+    if hasattr(args, "final_policy_selection"):
+        overrides["final_policy_selection"] = str(args.final_policy_selection)
     return overrides
 
 
@@ -494,6 +528,27 @@ def main() -> None:
         choices=["argmax"],
         default=argparse.SUPPRESS,
         help="Optional CLI override for attack.position_opt.final_selection.",
+    )
+    parser.add_argument(
+        "--deterministic-eval-every",
+        type=int,
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.deterministic_eval_every.",
+    )
+    parser.add_argument(
+        "--deterministic-eval-include-final",
+        action=argparse.BooleanOptionalAction,
+        default=argparse.SUPPRESS,
+        help=(
+            "Optional CLI override for attack.position_opt."
+            "deterministic_eval_include_final."
+        ),
+    )
+    parser.add_argument(
+        "--final-policy-selection",
+        choices=["last", "best_deterministic"],
+        default=argparse.SUPPRESS,
+        help="Optional CLI override for attack.position_opt.final_policy_selection.",
     )
     args = parser.parse_args()
 

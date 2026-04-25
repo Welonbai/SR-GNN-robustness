@@ -62,6 +62,37 @@ class _SessionCandidateState:
     candidate_sessions: list[list[int]]
 
 
+@dataclass(frozen=True)
+class _ArgmaxSelectionSnapshot:
+    selected_position_results: tuple[SelectedPositionResult, ...]
+    selected_candidate_indices: tuple[int, ...]
+    selected_positions: tuple[int, ...]
+    poisoned_sessions: tuple[tuple[int, ...], ...]
+    selected_pos0_pct: float
+    selected_pos_le_1_pct: float
+    selected_pos_le_2_pct: float
+
+
+@dataclass(frozen=True)
+class _DeterministicCheckpointState:
+    outer_step: int
+    reward: float
+    target_utility: float
+    poisoned_target_utility: float
+    delta_target_utility: float | None
+    gt_penalty: float
+    gt_drop: float
+    poisoned_gt_utility: float | None
+    selected_position_results: tuple[SelectedPositionResult, ...]
+    selected_candidate_indices: tuple[int, ...]
+    selected_positions: tuple[int, ...]
+    poisoned_sessions: tuple[tuple[int, ...], ...]
+    selected_pos0_pct: float
+    selected_pos_le_1_pct: float
+    selected_pos_le_2_pct: float
+    policy_state_dict: dict[str, torch.Tensor]
+
+
 class PositionOptMVPTrainer:
     """Joint-MVP trainer with one sampled poison set per outer step."""
 
@@ -96,6 +127,10 @@ class PositionOptMVPTrainer:
         self._clean_target_metrics: dict[str, float | None] = _empty_lowk_target_metrics()
         self._final_selected_positions: list[SelectedPositionResult] | None = None
         self._final_poisoned_sessions: list[list[int]] | None = None
+        self._best_deterministic_checkpoint: _DeterministicCheckpointState | None = None
+        self._last_deterministic_checkpoint: _DeterministicCheckpointState | None = None
+        self._deterministic_eval_schedule: tuple[int, ...] = ()
+        self._exported_policy_source: str | None = None
 
     def train(
         self,
@@ -124,6 +159,10 @@ class PositionOptMVPTrainer:
         self._clean_target_metrics = _empty_lowk_target_metrics()
         self._final_selected_positions = None
         self._final_poisoned_sessions = None
+        self._best_deterministic_checkpoint = None
+        self._last_deterministic_checkpoint = None
+        self._deterministic_eval_schedule = ()
+        self._exported_policy_source = None
         self.training_history = []
 
         self._session_states, self._policy_special_item_ids = _build_session_states(
@@ -140,6 +179,25 @@ class PositionOptMVPTrainer:
             hidden_dim=int(self.position_opt_config.policy_hidden_dim),
             policy_feature_set=str(self.position_opt_config.policy_feature_set),
         )
+        total_outer_steps = int(self.position_opt_config.outer_steps)
+        deterministic_eval_schedule = _resolve_deterministic_eval_schedule(
+            total_outer_steps=total_outer_steps,
+            deterministic_eval_every=int(self.position_opt_config.deterministic_eval_every),
+            deterministic_eval_include_final=bool(
+                self.position_opt_config.deterministic_eval_include_final
+            ),
+        )
+        self._deterministic_eval_schedule = tuple(deterministic_eval_schedule)
+        if (
+            self.position_opt_config.final_policy_selection == "best_deterministic"
+            and not deterministic_eval_schedule
+        ):
+            raise ValueError(
+                "attack.position_opt.final_policy_selection='best_deterministic' "
+                "requires at least one deterministic evaluation step. Set "
+                "attack.position_opt.deterministic_eval_every > 0 with outer_steps > 0, "
+                "or use attack.position_opt.final_policy_selection='last'."
+            )
         candidate_avg = sum(candidate_sizes) / len(candidate_sizes)
         print(
             "[position-opt] "
@@ -150,7 +208,7 @@ class PositionOptMVPTrainer:
         )
         print(
             "[position-opt] "
-            f"outer_steps={int(self.position_opt_config.outer_steps)} "
+            f"outer_steps={total_outer_steps} "
             f"policy_lr={float(self.position_opt_config.policy_lr):g} "
             f"fine_tune_steps={int(self.position_opt_config.fine_tune_steps)} "
             f"reward_mode={self.position_opt_config.reward_mode} "
@@ -160,6 +218,14 @@ class PositionOptMVPTrainer:
             f"active_item_features={list(self.policy.active_item_features)} "
             f"active_scalar_features={list(self.policy.active_scalar_features)} "
             f"policy_input_dim={int(self.policy.policy_input_dim)}"
+        )
+        print(
+            "[position-opt] "
+            f"deterministic_eval_every={int(self.position_opt_config.deterministic_eval_every)} "
+            f"deterministic_eval_include_final="
+            f"{bool(self.position_opt_config.deterministic_eval_include_final)} "
+            f"final_policy_selection={self.position_opt_config.final_policy_selection} "
+            f"deterministic_eval_steps={deterministic_eval_schedule}"
         )
 
         optimizer = torch.optim.Adam(
@@ -196,7 +262,7 @@ class PositionOptMVPTrainer:
             f"clean_target_utility={float(self._clean_target_utility):.6f}"
         )
 
-        for outer_step in range(int(self.position_opt_config.outer_steps)):
+        for outer_step in range(total_outer_steps):
             optimizer.zero_grad()
             step_state = self._run_training_step(
                 clean_sessions=clean_sessions,
@@ -212,6 +278,25 @@ class PositionOptMVPTrainer:
             step_state["policy_loss_tensor"].backward()
             optimizer.step()
             self._update_reward_baseline(step_state["reward"])
+            current_outer_step = int(outer_step) + 1
+            deterministic_checkpoint = None
+            is_best_deterministic_checkpoint = False
+            if current_outer_step in deterministic_eval_schedule:
+                deterministic_checkpoint = self._run_deterministic_checkpoint_eval(
+                    clean_sessions=clean_sessions,
+                    clean_labels=clean_labels,
+                    validation_sessions=validation_sessions,
+                    validation_labels=validation_labels,
+                    target_item=target_id,
+                    fine_tune_config=fine_tune_config,
+                    clean_target_utility=self._clean_target_utility,
+                    clean_gt_utility=clean_gt_utility,
+                    outer_step=current_outer_step,
+                )
+                self._last_deterministic_checkpoint = deterministic_checkpoint
+                is_best_deterministic_checkpoint = self._update_best_deterministic_checkpoint(
+                    deterministic_checkpoint
+                )
             baseline_value = step_state["baseline"]
             baseline_text = "None" if baseline_value is None else f"{float(baseline_value):.6f}"
             delta_text = (
@@ -221,7 +306,7 @@ class PositionOptMVPTrainer:
             )
             print(
                 "[position-opt] "
-                f"step {outer_step + 1}/{int(self.position_opt_config.outer_steps)} "
+                f"step {current_outer_step}/{total_outer_steps} "
                 f"reward={step_state['reward']:.6f} "
                 f"baseline={baseline_text} "
                 f"poisoned_target={float(step_state['target_utility_tensor'].item()):.6f} "
@@ -230,6 +315,16 @@ class PositionOptMVPTrainer:
                 f"entropy={step_state['mean_entropy']:.6f} "
                 f"entropy_loss={float(step_state['entropy_loss_tensor'].item()):.6f}"
             )
+            if deterministic_checkpoint is not None:
+                print(
+                    "[position-opt] "
+                    f"deterministic_eval step {current_outer_step}/{total_outer_steps} "
+                    f"reward={deterministic_checkpoint.reward:.6f} "
+                    f"target_utility={deterministic_checkpoint.target_utility:.6f} "
+                    f"gt_penalty={deterministic_checkpoint.gt_penalty:.6f} "
+                    f"best={is_best_deterministic_checkpoint}"
+                )
+            best_deterministic_checkpoint = self._best_deterministic_checkpoint
             self.training_history.append(
                 {
                     "outer_step": int(outer_step),
@@ -288,12 +383,91 @@ class PositionOptMVPTrainer:
                     "position_opt_step_seed": int(step_state["position_opt_step_seed"]),
                     "surrogate_train_step_seed": int(step_state["surrogate_train_step_seed"]),
                     "inner_train": step_state["inner_train_summary"],
+                    "deterministic_eval_ran": bool(deterministic_checkpoint is not None),
+                    "deterministic_reward": (
+                        None
+                        if deterministic_checkpoint is None
+                        else float(deterministic_checkpoint.reward)
+                    ),
+                    "deterministic_target_utility": (
+                        None
+                        if deterministic_checkpoint is None
+                        else float(deterministic_checkpoint.target_utility)
+                    ),
+                    "deterministic_poisoned_target_utility": (
+                        None
+                        if deterministic_checkpoint is None
+                        else float(deterministic_checkpoint.poisoned_target_utility)
+                    ),
+                    "deterministic_delta_target_utility": (
+                        None
+                        if deterministic_checkpoint is None
+                        or deterministic_checkpoint.delta_target_utility is None
+                        else float(deterministic_checkpoint.delta_target_utility)
+                    ),
+                    "deterministic_gt_penalty": (
+                        None
+                        if deterministic_checkpoint is None
+                        else float(deterministic_checkpoint.gt_penalty)
+                    ),
+                    "deterministic_gt_drop": (
+                        None
+                        if deterministic_checkpoint is None
+                        else float(deterministic_checkpoint.gt_drop)
+                    ),
+                    "deterministic_poisoned_gt_utility": (
+                        None
+                        if deterministic_checkpoint is None
+                        or deterministic_checkpoint.poisoned_gt_utility is None
+                        else float(deterministic_checkpoint.poisoned_gt_utility)
+                    ),
+                    "deterministic_selected_pos0_pct": (
+                        None
+                        if deterministic_checkpoint is None
+                        else float(deterministic_checkpoint.selected_pos0_pct)
+                    ),
+                    "deterministic_selected_pos_leq_1_pct": (
+                        None
+                        if deterministic_checkpoint is None
+                        else float(deterministic_checkpoint.selected_pos_le_1_pct)
+                    ),
+                    "deterministic_selected_pos_leq_2_pct": (
+                        None
+                        if deterministic_checkpoint is None
+                        else float(deterministic_checkpoint.selected_pos_le_2_pct)
+                    ),
+                    "is_best_deterministic_checkpoint": bool(
+                        is_best_deterministic_checkpoint
+                    ),
+                    "best_deterministic_step_so_far": (
+                        None
+                        if best_deterministic_checkpoint is None
+                        else int(best_deterministic_checkpoint.outer_step)
+                    ),
+                    "best_deterministic_reward_so_far": (
+                        None
+                        if best_deterministic_checkpoint is None
+                        else float(best_deterministic_checkpoint.reward)
+                    ),
                 }
             )
 
         final_positions = self.export_final_selected_positions()
         final_sessions = self.export_final_poisoned_sessions()
         policy_input_metadata = self._policy_input_metadata()
+        best_deterministic_checkpoint = self._best_deterministic_checkpoint
+        last_deterministic_checkpoint = self._last_deterministic_checkpoint
+        last_deterministic_reward = (
+            None
+            if last_deterministic_checkpoint is None
+            or last_deterministic_checkpoint.outer_step != total_outer_steps
+            else float(last_deterministic_checkpoint.reward)
+        )
+        best_minus_last_deterministic_reward = (
+            None
+            if best_deterministic_checkpoint is None or last_deterministic_reward is None
+            else float(best_deterministic_checkpoint.reward - last_deterministic_reward)
+        )
         return {
             "training_history": list(self.training_history),
             "final_selected_positions": [asdict(result) for result in final_positions],
@@ -303,6 +477,34 @@ class PositionOptMVPTrainer:
             "reward_baseline": self._reward_baseline,
             "reward_mode": str(self.position_opt_config.reward_mode),
             "clean_target_utility": self._clean_target_utility,
+            "deterministic_eval_every": int(self.position_opt_config.deterministic_eval_every),
+            "deterministic_eval_include_final": bool(
+                self.position_opt_config.deterministic_eval_include_final
+            ),
+            "final_policy_selection": str(self.position_opt_config.final_policy_selection),
+            "best_deterministic_step": (
+                None
+                if best_deterministic_checkpoint is None
+                else int(best_deterministic_checkpoint.outer_step)
+            ),
+            "best_deterministic_reward": (
+                None
+                if best_deterministic_checkpoint is None
+                else float(best_deterministic_checkpoint.reward)
+            ),
+            "best_deterministic_target_utility": (
+                None
+                if best_deterministic_checkpoint is None
+                else float(best_deterministic_checkpoint.target_utility)
+            ),
+            "best_deterministic_gt_penalty": (
+                None
+                if best_deterministic_checkpoint is None
+                else float(best_deterministic_checkpoint.gt_penalty)
+            ),
+            "last_deterministic_reward": last_deterministic_reward,
+            "best_minus_last_deterministic_reward": best_minus_last_deterministic_reward,
+            "exported_policy_source": str(self._resolve_final_policy_source()),
             "policy_scalar_feature_names": (
                 None if self.policy is None else list(self.policy.scalar_feature_names)
             ),
@@ -322,31 +524,19 @@ class PositionOptMVPTrainer:
     def export_final_selected_positions(self) -> list[SelectedPositionResult]:
         if self.policy is None or not self._session_states:
             raise RuntimeError("train() must be called before exporting final selections.")
+        if self._final_selected_positions is not None:
+            return list(self._final_selected_positions)
 
-        results: list[SelectedPositionResult] = []
-        with torch.no_grad():
-            for session_state in self._session_states:
-                logits = self._score_session_candidates(session_state)
-                if self.position_opt_config.final_selection != "argmax":
-                    raise ValueError(
-                        "Unsupported final_selection for the current position-opt MVP."
-                    )
-                candidate_index = select_position_eval(logits)
-                position = session_state.metadata.positions[candidate_index]
-                results.append(
-                    SelectedPositionResult(
-                        position=int(position),
-                        candidate_index=int(candidate_index),
-                        score=float(logits[candidate_index].detach().cpu().item()),
-                    )
-                )
-
-        self._final_selected_positions = results
-        return list(results)
+        self._ensure_export_policy_selected()
+        selection_snapshot = self._collect_argmax_selection_snapshot()
+        self._final_selected_positions = list(selection_snapshot.selected_position_results)
+        return list(self._final_selected_positions)
 
     def export_final_poisoned_sessions(self) -> list[list[int]]:
         if not self._session_states:
             raise RuntimeError("train() must be called before exporting final sessions.")
+        if self._final_poisoned_sessions is not None:
+            return [list(session) for session in self._final_poisoned_sessions]
 
         selection_results = self._final_selected_positions or self.export_final_selected_positions()
         poisoned_sessions = [
@@ -365,8 +555,12 @@ class PositionOptMVPTrainer:
             raise RuntimeError("train() must be called before saving artifacts.")
 
         paths = ensure_position_opt_artifact_dirs(artifact_paths)
-        final_sessions = self.export_final_poisoned_sessions()
         final_positions = self.export_final_selected_positions()
+        final_sessions = self.export_final_poisoned_sessions()
+        exported_policy_source = self._resolve_final_policy_source()
+        best_deterministic_checkpoint = self._best_deterministic_checkpoint
+        last_deterministic_reward = self._last_deterministic_reward()
+        best_minus_last_deterministic_reward = self._best_minus_last_deterministic_reward()
 
         with paths.optimized_poisoned_sessions.open("wb") as handle:
             pickle.dump(final_sessions, handle)
@@ -390,6 +584,34 @@ class PositionOptMVPTrainer:
                 "policy_update": "reinforce",
                 "reward_baseline_final": self._reward_baseline,
                 "reward_mode": str(self.position_opt_config.reward_mode),
+                "deterministic_eval_every": int(self.position_opt_config.deterministic_eval_every),
+                "deterministic_eval_include_final": bool(
+                    self.position_opt_config.deterministic_eval_include_final
+                ),
+                "final_policy_selection": str(self.position_opt_config.final_policy_selection),
+                "best_deterministic_step": (
+                    None
+                    if best_deterministic_checkpoint is None
+                    else int(best_deterministic_checkpoint.outer_step)
+                ),
+                "best_deterministic_reward": (
+                    None
+                    if best_deterministic_checkpoint is None
+                    else float(best_deterministic_checkpoint.reward)
+                ),
+                "best_deterministic_target_utility": (
+                    None
+                    if best_deterministic_checkpoint is None
+                    else float(best_deterministic_checkpoint.target_utility)
+                ),
+                "best_deterministic_gt_penalty": (
+                    None
+                    if best_deterministic_checkpoint is None
+                    else float(best_deterministic_checkpoint.gt_penalty)
+                ),
+                "last_deterministic_reward": last_deterministic_reward,
+                "best_minus_last_deterministic_reward": best_minus_last_deterministic_reward,
+                "exported_policy_source": str(exported_policy_source),
                 "policy_scalar_feature_names": (
                     None if self.policy is None else list(self.policy.scalar_feature_names)
                 ),
@@ -597,6 +819,218 @@ class PositionOptMVPTrainer:
             "inner_train_summary": _summarize_inner_history(inner_result.history),
         }
 
+    def _run_deterministic_checkpoint_eval(
+        self,
+        *,
+        clean_sessions: Sequence[Sequence[int]],
+        clean_labels: Sequence[int],
+        validation_sessions: Sequence[Sequence[int]],
+        validation_labels: Sequence[int],
+        target_item: int,
+        fine_tune_config: TruncatedFineTuneConfig,
+        clean_target_utility: float | None,
+        clean_gt_utility: float | None,
+        outer_step: int,
+    ) -> _DeterministicCheckpointState:
+        if self.policy is None:
+            raise RuntimeError("Policy is not initialized.")
+        if self._trained_config is None:
+            raise RuntimeError("train() must be called with a Config before running steps.")
+
+        selection_snapshot = self._collect_argmax_selection_snapshot()
+        poisoned_train_data = build_poisoned_dataset(
+            clean_sessions,
+            clean_labels,
+            [list(session) for session in selection_snapshot.poisoned_sessions],
+        )
+        surrogate_train_step_seed = derive_seed(
+            self._trained_config.seeds.surrogate_train_seed,
+            "surrogate_train_deterministic_eval",
+            int(target_item),
+            int(outer_step),
+        )
+        inner_result = self.inner_trainer.run(
+            self.surrogate_backend,
+            self.clean_surrogate_checkpoint_path,
+            poisoned_train_data,
+            config=fine_tune_config,
+            seed=surrogate_train_step_seed,
+        )
+        surrogate_model = inner_result.model
+        target_result = self.surrogate_backend.score_target(
+            surrogate_model,
+            validation_sessions,
+            target_item,
+        )
+        poisoned_target_utility = _resolve_scored_target_utility(
+            reward_mode=self.position_opt_config.reward_mode,
+            target_result=target_result,
+        )
+        target_utility = _resolve_reward_target_utility(
+            reward_mode=self.position_opt_config.reward_mode,
+            poisoned_target_utility=poisoned_target_utility,
+            clean_target_utility=clean_target_utility,
+        )
+        delta_target_utility = (
+            None
+            if clean_target_utility is None
+            else float(poisoned_target_utility - float(clean_target_utility))
+        )
+
+        poisoned_gt_utility = None
+        if self.position_opt_config.enable_gt_penalty:
+            poisoned_gt_result = self.surrogate_backend.score_gt(
+                surrogate_model,
+                validation_sessions,
+                validation_labels,
+            )
+            poisoned_gt_utility = float(poisoned_gt_result.mean)
+
+        objective = compute_position_opt_objective(
+            float(target_utility),
+            clean_gt_utility=clean_gt_utility,
+            poisoned_gt_utility=poisoned_gt_utility,
+            enable_gt_penalty=bool(self.position_opt_config.enable_gt_penalty),
+            gt_penalty_weight=float(self.position_opt_config.gt_penalty_weight),
+            gt_tolerance=float(self.position_opt_config.gt_tolerance),
+        )
+        return _DeterministicCheckpointState(
+            outer_step=int(outer_step),
+            reward=float(objective.reward.detach().item()),
+            target_utility=float(target_utility),
+            poisoned_target_utility=float(poisoned_target_utility),
+            delta_target_utility=delta_target_utility,
+            gt_penalty=float(objective.gt_penalty.detach().item()),
+            gt_drop=float(objective.gt_drop.detach().item()),
+            poisoned_gt_utility=(
+                None if poisoned_gt_utility is None else float(poisoned_gt_utility)
+            ),
+            selected_position_results=selection_snapshot.selected_position_results,
+            selected_candidate_indices=selection_snapshot.selected_candidate_indices,
+            selected_positions=selection_snapshot.selected_positions,
+            poisoned_sessions=selection_snapshot.poisoned_sessions,
+            selected_pos0_pct=float(selection_snapshot.selected_pos0_pct),
+            selected_pos_le_1_pct=float(selection_snapshot.selected_pos_le_1_pct),
+            selected_pos_le_2_pct=float(selection_snapshot.selected_pos_le_2_pct),
+            policy_state_dict=self._capture_policy_state_dict(),
+        )
+
+    def _update_best_deterministic_checkpoint(
+        self,
+        checkpoint_state: _DeterministicCheckpointState,
+    ) -> bool:
+        best_checkpoint = self._best_deterministic_checkpoint
+        if (
+            best_checkpoint is None
+            or float(checkpoint_state.reward) > float(best_checkpoint.reward)
+        ):
+            self._best_deterministic_checkpoint = checkpoint_state
+            return True
+        return False
+
+    def _collect_argmax_selection_snapshot(self) -> _ArgmaxSelectionSnapshot:
+        if self.policy is None:
+            raise RuntimeError("Policy is not initialized.")
+        if self.position_opt_config.final_selection != "argmax":
+            raise ValueError(
+                "Unsupported final_selection for the current position-opt MVP."
+            )
+
+        was_training = bool(self.policy.training)
+        self.policy.eval()
+        results: list[SelectedPositionResult] = []
+        selected_candidate_indices: list[int] = []
+        selected_positions: list[int] = []
+        poisoned_sessions: list[tuple[int, ...]] = []
+        try:
+            with torch.no_grad():
+                for session_state in self._session_states:
+                    logits = self._score_session_candidates(session_state)
+                    candidate_index = select_position_eval(logits)
+                    position = int(session_state.metadata.positions[candidate_index])
+                    results.append(
+                        SelectedPositionResult(
+                            position=position,
+                            candidate_index=int(candidate_index),
+                            score=float(logits[candidate_index].detach().cpu().item()),
+                        )
+                    )
+                    selected_candidate_indices.append(int(candidate_index))
+                    selected_positions.append(position)
+                    poisoned_sessions.append(
+                        tuple(session_state.candidate_sessions[candidate_index])
+                    )
+        finally:
+            if was_training:
+                self.policy.train()
+
+        return _ArgmaxSelectionSnapshot(
+            selected_position_results=tuple(results),
+            selected_candidate_indices=tuple(selected_candidate_indices),
+            selected_positions=tuple(selected_positions),
+            poisoned_sessions=tuple(poisoned_sessions),
+            selected_pos0_pct=_selected_position_pct(selected_positions, max_position=0),
+            selected_pos_le_1_pct=_selected_position_pct(selected_positions, max_position=1),
+            selected_pos_le_2_pct=_selected_position_pct(selected_positions, max_position=2),
+        )
+
+    def _capture_policy_state_dict(self) -> dict[str, torch.Tensor]:
+        if self.policy is None:
+            raise RuntimeError("Policy is not initialized.")
+        return {
+            key: value.detach().cpu().clone()
+            for key, value in self.policy.state_dict().items()
+        }
+
+    def _ensure_export_policy_selected(self) -> None:
+        if self.policy is None:
+            raise RuntimeError("Policy is not initialized.")
+        desired_source = self._resolve_final_policy_source()
+        if self._exported_policy_source == desired_source:
+            return
+        if desired_source == "best_deterministic":
+            best_checkpoint = self._best_deterministic_checkpoint
+            if best_checkpoint is None:
+                raise ValueError(
+                    "attack.position_opt.final_policy_selection='best_deterministic' "
+                    "requires at least one deterministic checkpoint evaluation."
+                )
+            self.policy.load_state_dict(best_checkpoint.policy_state_dict)
+        self._final_selected_positions = None
+        self._final_poisoned_sessions = None
+        self._exported_policy_source = desired_source
+
+    def _resolve_final_policy_source(self) -> str:
+        if self.position_opt_config.final_policy_selection == "last":
+            return "last"
+        if self.position_opt_config.final_policy_selection == "best_deterministic":
+            if self._best_deterministic_checkpoint is None:
+                raise ValueError(
+                    "attack.position_opt.final_policy_selection='best_deterministic' "
+                    "requires at least one deterministic checkpoint evaluation."
+                )
+            return "best_deterministic"
+        raise ValueError(
+            "Unsupported final_policy_selection: "
+            f"{self.position_opt_config.final_policy_selection!r}"
+        )
+
+    def _last_deterministic_reward(self) -> float | None:
+        last_checkpoint = self._last_deterministic_checkpoint
+        if (
+            last_checkpoint is None
+            or int(last_checkpoint.outer_step) != int(self.position_opt_config.outer_steps)
+        ):
+            return None
+        return float(last_checkpoint.reward)
+
+    def _best_minus_last_deterministic_reward(self) -> float | None:
+        best_checkpoint = self._best_deterministic_checkpoint
+        last_reward = self._last_deterministic_reward()
+        if best_checkpoint is None or last_reward is None:
+            return None
+        return float(best_checkpoint.reward - last_reward)
+
     def _update_reward_baseline(self, reward: float) -> None:
         momentum = float(self.position_opt_config.reward_baseline_momentum)
         if self._reward_baseline is None:
@@ -719,6 +1153,9 @@ class PositionOptMVPTrainer:
         if self._policy_special_item_ids is None:
             raise RuntimeError("Policy special-item ids are not initialized.")
 
+        final_selected_positions = self.export_final_selected_positions()
+        exported_policy_source = self._resolve_final_policy_source()
+        best_deterministic_checkpoint = self._best_deterministic_checkpoint
         sessions_payload: list[dict[str, Any]] = []
         with torch.no_grad():
             for session_idx, session_state in enumerate(self._session_states):
@@ -739,6 +1176,25 @@ class PositionOptMVPTrainer:
         return {
             "target_item": self._target_item,
             "policy_representation": "shared_contextual_mlp",
+            "exported_policy_source": str(exported_policy_source),
+            "deterministic_eval_every": int(self.position_opt_config.deterministic_eval_every),
+            "deterministic_eval_include_final": bool(
+                self.position_opt_config.deterministic_eval_include_final
+            ),
+            "final_policy_selection": str(self.position_opt_config.final_policy_selection),
+            "best_deterministic_step": (
+                None
+                if best_deterministic_checkpoint is None
+                else int(best_deterministic_checkpoint.outer_step)
+            ),
+            "best_deterministic_reward": (
+                None
+                if best_deterministic_checkpoint is None
+                else float(best_deterministic_checkpoint.reward)
+            ),
+            "exported_selected_positions": [
+                asdict(result) for result in final_selected_positions
+            ],
             "policy_config": {
                 "policy_embedding_dim": policy_input_metadata["policy_embedding_dim"],
                 "policy_hidden_dim": policy_input_metadata["policy_hidden_dim"],
@@ -868,6 +1324,44 @@ def _select_validation_subset(
     if subset_size is None or subset_size >= len(sessions):
         return sessions, labels
     return sessions[:subset_size], labels[:subset_size]
+
+
+def _resolve_deterministic_eval_schedule(
+    *,
+    total_outer_steps: int,
+    deterministic_eval_every: int,
+    deterministic_eval_include_final: bool,
+) -> list[int]:
+    if total_outer_steps < 0:
+        raise ValueError("total_outer_steps must be non-negative.")
+    if deterministic_eval_every < 0:
+        raise ValueError("deterministic_eval_every must be non-negative.")
+    if deterministic_eval_every == 0 or total_outer_steps == 0:
+        return []
+
+    schedule = list(
+        range(
+            int(deterministic_eval_every),
+            int(total_outer_steps) + 1,
+            int(deterministic_eval_every),
+        )
+    )
+    if deterministic_eval_include_final and (
+        not schedule or schedule[-1] != int(total_outer_steps)
+    ):
+        schedule.append(int(total_outer_steps))
+    return schedule
+
+
+def _selected_position_pct(
+    selected_positions: Sequence[int],
+    *,
+    max_position: int,
+) -> float:
+    if not selected_positions:
+        return 0.0
+    match_count = sum(1 for position in selected_positions if int(position) <= int(max_position))
+    return float(match_count) / float(len(selected_positions)) * 100.0
 
 
 def _build_policy_loss(

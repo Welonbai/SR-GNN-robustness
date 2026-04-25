@@ -17,6 +17,10 @@ _ALLOWED_POSITION_OPT_REWARD_MODES = {
     "delta_target_utility",
     "delta_lowk_rank_utility",
 }
+_ALLOWED_POSITION_OPT_FINAL_POLICY_SELECTIONS = {
+    "last",
+    "best_deterministic",
+}
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -84,6 +88,9 @@ class PositionOptConfig:
     gt_penalty_weight: float = 0.0
     gt_tolerance: float = 0.0
     final_selection: str = "argmax"
+    deterministic_eval_every: int = 0
+    deterministic_eval_include_final: bool = True
+    final_policy_selection: str = "last"
 
     def __post_init__(self) -> None:
         checkpoint = self.clean_surrogate_checkpoint
@@ -220,6 +227,40 @@ class PositionOptConfig:
                 "attack.position_opt.final_selection must be 'argmax' for the current MVP."
             )
         object.__setattr__(self, "final_selection", final_selection)
+
+        deterministic_eval_every = _as_int(
+            self.deterministic_eval_every,
+            "attack.position_opt.deterministic_eval_every",
+        )
+        if deterministic_eval_every < 0:
+            raise ValueError(
+                "attack.position_opt.deterministic_eval_every must be non-negative."
+            )
+        object.__setattr__(self, "deterministic_eval_every", deterministic_eval_every)
+
+        deterministic_eval_include_final = _as_bool(
+            self.deterministic_eval_include_final,
+            "attack.position_opt.deterministic_eval_include_final",
+        )
+        object.__setattr__(
+            self,
+            "deterministic_eval_include_final",
+            deterministic_eval_include_final,
+        )
+
+        final_policy_selection = _as_str(
+            self.final_policy_selection,
+            "attack.position_opt.final_policy_selection",
+        ).strip().lower()
+        if final_policy_selection not in _ALLOWED_POSITION_OPT_FINAL_POLICY_SELECTIONS:
+            allowed_final_policy_selections = ", ".join(
+                sorted(_ALLOWED_POSITION_OPT_FINAL_POLICY_SELECTIONS)
+            )
+            raise ValueError(
+                "attack.position_opt.final_policy_selection must be one of: "
+                f"{allowed_final_policy_selections}."
+            )
+        object.__setattr__(self, "final_policy_selection", final_policy_selection)
 
 
 @dataclass(frozen=True)
@@ -713,6 +754,21 @@ def _normalize_position_opt_config(value: Any, context: str) -> dict[str, Any]:
         payload["final_selection"] = _as_str(
             mapping["final_selection"],
             f"{context}.final_selection",
+        )
+    if "deterministic_eval_every" in mapping:
+        payload["deterministic_eval_every"] = _as_int(
+            mapping["deterministic_eval_every"],
+            f"{context}.deterministic_eval_every",
+        )
+    if "deterministic_eval_include_final" in mapping:
+        payload["deterministic_eval_include_final"] = _as_bool(
+            mapping["deterministic_eval_include_final"],
+            f"{context}.deterministic_eval_include_final",
+        )
+    if "final_policy_selection" in mapping:
+        payload["final_policy_selection"] = _as_str(
+            mapping["final_policy_selection"],
+            f"{context}.final_policy_selection",
         )
 
     return _primitive_from_obj(PositionOptConfig(**payload))
