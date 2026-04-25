@@ -113,6 +113,18 @@ POSITION_OPT_POLICY_FEATURE_SET_SPECS = {
         ),
         scalar_features=("normalized_position",),
     ),
+    "target_original_position_scalar": PositionOptPolicyFeatureSetSpec(
+        name="target_original_position_scalar",
+        item_features=(
+            "target_item",
+            "original_item",
+        ),
+        scalar_features=(
+            "position_index",
+            "normalized_position",
+            "session_length",
+        ),
+    ),
     "full_context_normalized_position": PositionOptPolicyFeatureSetSpec(
         name="full_context_normalized_position",
         item_features=(

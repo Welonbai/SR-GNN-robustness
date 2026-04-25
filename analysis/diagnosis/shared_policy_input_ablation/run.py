@@ -34,6 +34,9 @@ from analysis.diagnosis.prefix_vs_posopt.writers import (  # noqa: E402
     write_json,
     write_report,
 )
+from analysis.utils.position_stats_summary import (  # noqa: E402
+    PositionStatsSummaryError,
+)
 from analysis.utils.position_collapse_summary import summarize_position_collapse_file  # noqa: E402
 from analysis.utils.position_stats_summary import summarize_position_stats_file  # noqa: E402
 
@@ -957,7 +960,12 @@ def _load_artifacts_for_method_target(
 
     position_summary = None
     if position_stats_path.is_file():
-        position_summary = summarize_position_stats_file(position_stats_path, top_n=5)
+        try:
+            position_summary = summarize_position_stats_file(position_stats_path, top_n=5)
+        except PositionStatsSummaryError as exc:
+            if "total_sessions must be positive; got 0" not in str(exc):
+                raise
+            position_summary = None
 
     training_history_payload = None
     training_summary = None

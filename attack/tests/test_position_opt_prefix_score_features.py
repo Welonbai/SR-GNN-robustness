@@ -44,6 +44,12 @@ PREFIX_SCORE_CONFIG_PATH = (
     / "configs"
     / "diginetica_attack_position_opt_shared_policy_prefix_score.yaml"
 )
+TARGET_ORIGINAL_POSITION_SCALAR_CONFIG_PATH = (
+    REPO_ROOT
+    / "attack"
+    / "configs"
+    / "diginetica_attack_position_opt_shared_policy_target_original_position_scalar_tron_focus.yaml"
+)
 _POLICY_EMBEDDING_DIM = 8
 _FEATURE_SET_EXPECTATIONS = {
     "local_context": {
@@ -86,6 +92,14 @@ _FEATURE_SET_EXPECTATIONS = {
         "item_features": ["target_item", "original_item"],
         "scalar_features": ["normalized_position"],
     },
+    "target_original_position_scalar": {
+        "item_features": ["target_item", "original_item"],
+        "scalar_features": [
+            "position_index",
+            "normalized_position",
+            "session_length",
+        ],
+    },
     "full_context_normalized_position": {
         "item_features": [
             "target_item",
@@ -124,6 +138,19 @@ def test_prefix_score_config_loads_from_yaml_and_identity_omits_default() -> Non
     }
 
 
+def test_target_original_position_scalar_focus_config_loads_from_yaml() -> None:
+    config = load_config(TARGET_ORIGINAL_POSITION_SCALAR_CONFIG_PATH)
+
+    assert config.attack.position_opt is not None
+    assert (
+        config.attack.position_opt.policy_feature_set
+        == "target_original_position_scalar"
+    )
+    assert list(config.victims.enabled) == ["tron"]
+    assert config.targets.mode == "explicit_list"
+    assert list(config.targets.explicit_list) == [5334, 11103]
+
+
 @pytest.mark.parametrize("policy_feature_set", sorted(_FEATURE_SET_EXPECTATIONS))
 def test_policy_feature_set_config_accepts_supported_modes(policy_feature_set: str) -> None:
     config = PositionOptConfig(policy_feature_set=policy_feature_set)
@@ -155,6 +182,18 @@ def test_build_session_candidate_features_records_prefix_score_and_has_prefix() 
     assert features.metadata[2].has_prefix is True
     assert features.tensors.prefix_scores.tolist() == pytest.approx([0.0, 0.125, 0.25])
     assert features.tensors.has_prefixes.tolist() == pytest.approx([0.0, 1.0, 1.0])
+
+
+def test_target_original_position_scalar_spec_disables_prefix_features() -> None:
+    spec = POSITION_OPT_POLICY_FEATURE_SET_SPECS["target_original_position_scalar"]
+
+    assert list(spec.item_features) == ["target_item", "original_item"]
+    assert list(spec.scalar_features) == [
+        "position_index",
+        "normalized_position",
+        "session_length",
+    ]
+    assert spec.requires_prefix_features is False
 
 
 @pytest.mark.parametrize(
@@ -275,7 +314,24 @@ def test_trainer_prefix_features_cache_probabilities_and_skip_empty_prefixes() -
     ]
 
 
-def test_trainer_skips_prefix_score_enrichment_when_feature_set_does_not_need_it() -> None:
+@pytest.mark.parametrize(
+    "policy_feature_set,expected_item_features,expected_scalar_features,expected_input_dim",
+    [
+        ("normalized_position_only", [], ["normalized_position"], 1),
+        (
+            "target_original_position_scalar",
+            ["target_item", "original_item"],
+            ["position_index", "normalized_position", "session_length"],
+            (2 * _POLICY_EMBEDDING_DIM) + 3,
+        ),
+    ],
+)
+def test_trainer_skips_prefix_score_enrichment_when_feature_set_does_not_need_it(
+    policy_feature_set: str,
+    expected_item_features: list[str],
+    expected_scalar_features: list[str],
+    expected_input_dim: int,
+) -> None:
     base_config = load_config(BASE_CONFIG_PATH)
     if base_config.attack.position_opt is None:
         raise AssertionError("Shared-policy config must include attack.position_opt.")
@@ -287,7 +343,8 @@ def test_trainer_skips_prefix_score_enrichment_when_feature_set_does_not_need_it
         position_opt_config=replace(
             base_config.attack.position_opt,
             outer_steps=0,
-            policy_feature_set="normalized_position_only",
+            policy_feature_set=policy_feature_set,
+            policy_embedding_dim=_POLICY_EMBEDDING_DIM,
         ),
     )
 
@@ -310,9 +367,9 @@ def test_trainer_skips_prefix_score_enrichment_when_feature_set_does_not_need_it
     assert len(backend.score_target_calls) == 1
     assert backend.score_target_calls[0]["sessions"] == [[5, 6]]
     assert trainer_result["prefix_score_enabled"] is False
-    assert trainer_result["active_item_features"] == []
-    assert trainer_result["active_scalar_features"] == ["normalized_position"]
-    assert trainer_result["policy_input_dim"] == 1
+    assert trainer_result["active_item_features"] == expected_item_features
+    assert trainer_result["active_scalar_features"] == expected_scalar_features
+    assert trainer_result["policy_input_dim"] == expected_input_dim
 
 
 def test_trainer_artifacts_log_active_features_and_policy_dims() -> None:

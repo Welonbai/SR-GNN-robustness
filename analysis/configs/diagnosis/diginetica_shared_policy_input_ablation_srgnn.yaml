@@ -1,6 +1,6 @@
-report_id: diginetica_shared_policy_input_ablation_tron
+report_id: diginetica_shared_policy_input_ablation_srgnn
 dataset: diginetica
-victim_model: tron
+victim_model: srgnn
 reference_method: shared_policy_local_context
 
 targets:
@@ -76,20 +76,10 @@ methods:
     expected_active_scalar_features: [normalized_position]
     expected_prefix_score_enabled: false
 
-  shared_policy_local_context_prefix_score_prob:
-    label: Shared Policy local_context_prefix_score_prob
-    attack_method: position_opt_shared_policy
-    run_root: outputs/runs/diginetica/attack_position_opt_shared_policy_prefix_score_ratio1/run_group_f0464bd3f4
-    summary_current: outputs/runs/diginetica/attack_position_opt_shared_policy_prefix_score_ratio1/run_group_f0464bd3f4/summary_current.json
-    expected_policy_feature_set: local_context_prefix_score_prob
-    expected_active_item_features: [target_item, original_item, left_item, right_item]
-    expected_active_scalar_features: [position_index, normalized_position, session_length, prefix_score, has_prefix]
-    expected_prefix_score_enabled: true
-
 notes:
   authoritative_metrics_source: summary_current.json
   final_position_source: targets/<target_item>/position_stats.json
   posopt_training_history_source: targets/<target_item>/position_opt/training_history.json
   posopt_run_metadata_source: targets/<target_item>/position_opt/run_metadata.json
   posopt_learned_logits_source: targets/<target_item>/position_opt/learned_logits.pt
-  usage_note: Concrete run roots resolved on 2026-04-25 after the focused input-ablation runs completed.
+  availability_note: Shared prefix-score artifacts are currently available only for TRON, so this SR-GNN report uses Prefix-NZ as the prefix baseline.

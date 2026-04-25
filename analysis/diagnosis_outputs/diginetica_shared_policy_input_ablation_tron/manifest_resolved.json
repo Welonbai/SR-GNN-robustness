@@ -1,0 +1,146 @@
+{
+  "config_path": "analysis/configs/diagnosis/diginetica_shared_policy_input_ablation_tron.yaml",
+  "dataset": "diginetica",
+  "methods": {
+    "clean": {
+      "attack_method": "clean",
+      "expected_active_item_features": null,
+      "expected_active_scalar_features": null,
+      "expected_policy_feature_set": null,
+      "expected_prefix_score_enabled": null,
+      "label": "Clean",
+      "run_root": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757",
+      "summary_current": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/summary_current.json"
+    },
+    "posopt_mvp": {
+      "attack_method": "position_opt_mvp",
+      "expected_active_item_features": null,
+      "expected_active_scalar_features": null,
+      "expected_policy_feature_set": null,
+      "expected_prefix_score_enabled": null,
+      "label": "PosOptMVP",
+      "run_root": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46",
+      "summary_current": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/summary_current.json"
+    },
+    "prefix_nz": {
+      "attack_method": "prefix_nonzero_when_possible",
+      "expected_active_item_features": null,
+      "expected_active_scalar_features": null,
+      "expected_policy_feature_set": null,
+      "expected_prefix_score_enabled": null,
+      "label": "Prefix-NZ",
+      "run_root": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6",
+      "summary_current": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/summary_current.json"
+    },
+    "shared_policy_full_context_normalized_position": {
+      "attack_method": "position_opt_shared_policy",
+      "expected_active_item_features": [
+        "target_item",
+        "original_item",
+        "left_item",
+        "right_item"
+      ],
+      "expected_active_scalar_features": [
+        "normalized_position"
+      ],
+      "expected_policy_feature_set": "full_context_normalized_position",
+      "expected_prefix_score_enabled": false,
+      "label": "Shared Policy full_context_normalized_position",
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_full_context_normalized_position_ratio1/run_group_32d638f03c",
+      "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_full_context_normalized_position_ratio1/run_group_32d638f03c/summary_current.json"
+    },
+    "shared_policy_local_context": {
+      "attack_method": "position_opt_shared_policy",
+      "expected_active_item_features": [
+        "target_item",
+        "original_item",
+        "left_item",
+        "right_item"
+      ],
+      "expected_active_scalar_features": [
+        "position_index",
+        "normalized_position",
+        "session_length"
+      ],
+      "expected_policy_feature_set": "local_context",
+      "expected_prefix_score_enabled": false,
+      "label": "Shared Policy local_context",
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f",
+      "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/summary_current.json"
+    },
+    "shared_policy_local_context_prefix_score_prob": {
+      "attack_method": "position_opt_shared_policy",
+      "expected_active_item_features": [
+        "target_item",
+        "original_item",
+        "left_item",
+        "right_item"
+      ],
+      "expected_active_scalar_features": [
+        "position_index",
+        "normalized_position",
+        "session_length",
+        "prefix_score",
+        "has_prefix"
+      ],
+      "expected_policy_feature_set": "local_context_prefix_score_prob",
+      "expected_prefix_score_enabled": true,
+      "label": "Shared Policy local_context_prefix_score_prob",
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_prefix_score_ratio1/run_group_f0464bd3f4",
+      "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_prefix_score_ratio1/run_group_f0464bd3f4/summary_current.json"
+    },
+    "shared_policy_normalized_position_only": {
+      "attack_method": "position_opt_shared_policy",
+      "expected_active_item_features": [],
+      "expected_active_scalar_features": [
+        "normalized_position"
+      ],
+      "expected_policy_feature_set": "normalized_position_only",
+      "expected_prefix_score_enabled": false,
+      "label": "Shared Policy normalized_position_only",
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_normalized_position_only_ratio1/run_group_1805a7d400",
+      "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_normalized_position_only_ratio1/run_group_1805a7d400/summary_current.json"
+    },
+    "shared_policy_target_normalized_position": {
+      "attack_method": "position_opt_shared_policy",
+      "expected_active_item_features": [
+        "target_item"
+      ],
+      "expected_active_scalar_features": [
+        "normalized_position"
+      ],
+      "expected_policy_feature_set": "target_normalized_position",
+      "expected_prefix_score_enabled": false,
+      "label": "Shared Policy target_normalized_position",
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_target_normalized_position_ratio1/run_group_4a59a8ef6d",
+      "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_target_normalized_position_ratio1/run_group_4a59a8ef6d/summary_current.json"
+    },
+    "shared_policy_target_original_normalized_position": {
+      "attack_method": "position_opt_shared_policy",
+      "expected_active_item_features": [
+        "target_item",
+        "original_item"
+      ],
+      "expected_active_scalar_features": [
+        "normalized_position"
+      ],
+      "expected_policy_feature_set": "target_original_normalized_position",
+      "expected_prefix_score_enabled": false,
+      "label": "Shared Policy target_original_normalized_position",
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_target_original_normalized_position_ratio1/run_group_708bb15482",
+      "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_target_original_normalized_position_ratio1/run_group_708bb15482/summary_current.json"
+    }
+  },
+  "optional_targets": [],
+  "reference_method": "shared_policy_local_context",
+  "report_id": "diginetica_shared_policy_input_ablation_tron",
+  "required_targets": [
+    5334,
+    11103
+  ],
+  "selected_targets": [
+    5334,
+    11103
+  ],
+  "victim_model": "tron"
+}

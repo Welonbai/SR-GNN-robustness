@@ -672,3 +672,96 @@ def test_run_report_supports_mixed_methods_and_verification_outputs() -> None:
         assert "## F. Training Dynamics" in report_markdown
         assert "ratio=0.5" not in report_markdown
         assert "Compare Selected Positions Against ratio=1.0" not in report_markdown
+
+
+def test_run_report_treats_zero_session_clean_position_stats_as_missing_summary() -> None:
+    with _temp_test_dir() as temp_dir:
+        shared_root = _create_run_root(
+            temp_dir,
+            "shared_local_context",
+            target_metrics={11103: _metrics(0.20)},
+            position_stats_by_target={
+                11103: _position_stats_payload(11103, counts={0: 4, 1: 1, 2: 1})
+            },
+            training_history_by_target={
+                11103: _training_history_payload(
+                    11103,
+                    policy_feature_set="local_context",
+                    active_item_features=["target_item", "original_item", "left_item", "right_item"],
+                    active_scalar_features=["position_index", "normalized_position", "session_length"],
+                    policy_input_dim=67,
+                )
+            },
+            run_metadata_by_target={
+                11103: _run_metadata_payload(
+                    11103,
+                    policy_feature_set="local_context",
+                    active_item_features=["target_item", "original_item", "left_item", "right_item"],
+                    active_scalar_features=["position_index", "normalized_position", "session_length"],
+                    policy_input_dim=67,
+                )
+            },
+        )
+        clean_root = _create_run_root(
+            temp_dir,
+            "clean",
+            target_metrics={11103: _metrics(0.10)},
+            position_stats_by_target={
+                11103: {
+                    "run_type": "clean",
+                    "target_item": 11103,
+                    "total_sessions": 0,
+                    "overall": {
+                        "counts": {},
+                        "ratios": {},
+                    },
+                }
+            },
+        )
+
+        config_path = temp_dir / "manifest.yaml"
+        manifest_payload = {
+            "report_id": "unit_test_shared_policy_input_ablation_zero_clean_positions",
+            "dataset": "diginetica",
+            "victim_model": "tron",
+            "reference_method": "shared_policy_local_context",
+            "targets": {
+                "required": [11103],
+                "optional_if_available": [],
+            },
+            "methods": {
+                "shared_policy_local_context": {
+                    "label": "Shared local_context",
+                    "attack_method": "position_opt_shared_policy",
+                    "run_root": str(shared_root),
+                    "summary_current": str(shared_root / "summary_current.json"),
+                    "expected_policy_feature_set": "local_context",
+                    "expected_active_item_features": [
+                        "target_item",
+                        "original_item",
+                        "left_item",
+                        "right_item",
+                    ],
+                    "expected_active_scalar_features": [
+                        "position_index",
+                        "normalized_position",
+                        "session_length",
+                    ],
+                    "expected_prefix_score_enabled": False,
+                },
+                "clean": {
+                    "label": "Clean",
+                    "attack_method": "clean",
+                    "run_root": str(clean_root),
+                    "summary_current": str(clean_root / "summary_current.json"),
+                },
+            },
+        }
+        _write_yaml(config_path, manifest_payload)
+
+        output_dir = run_report(config_path=config_path, output_root=temp_dir / "outputs")
+        final_position_summary = pd.read_csv(output_dir / "final_position_summary.csv")
+
+        clean_row = final_position_summary[final_position_summary["method_key"] == "clean"].iloc[0]
+        assert pd.isna(clean_row["total"])
+        assert pd.isna(clean_row["dominant_position"])
