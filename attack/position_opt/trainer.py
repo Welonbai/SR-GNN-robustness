@@ -847,7 +847,6 @@ class PositionOptMVPTrainer:
             self._trained_config.seeds.surrogate_train_seed,
             "surrogate_train_deterministic_eval",
             int(target_item),
-            int(outer_step),
         )
         inner_result = self.inner_trainer.run(
             self.surrogate_backend,
@@ -1156,6 +1155,8 @@ class PositionOptMVPTrainer:
         final_selected_positions = self.export_final_selected_positions()
         exported_policy_source = self._resolve_final_policy_source()
         best_deterministic_checkpoint = self._best_deterministic_checkpoint
+        last_deterministic_reward = self._last_deterministic_reward()
+        best_minus_last_deterministic_reward = self._best_minus_last_deterministic_reward()
         sessions_payload: list[dict[str, Any]] = []
         with torch.no_grad():
             for session_idx, session_state in enumerate(self._session_states):
@@ -1192,6 +1193,8 @@ class PositionOptMVPTrainer:
                 if best_deterministic_checkpoint is None
                 else float(best_deterministic_checkpoint.reward)
             ),
+            "last_deterministic_reward": last_deterministic_reward,
+            "best_minus_last_deterministic_reward": best_minus_last_deterministic_reward,
             "exported_selected_positions": [
                 asdict(result) for result in final_selected_positions
             ],

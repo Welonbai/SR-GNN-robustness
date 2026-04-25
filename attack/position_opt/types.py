@@ -97,6 +97,14 @@ def position_opt_identity_payload(config: PositionOptConfig) -> dict[str, Any]:
     payload.pop("clean_surrogate_checkpoint", None)
     if payload.get("policy_feature_set") == "local_context":
         payload.pop("policy_feature_set", None)
+    if (
+        int(config.deterministic_eval_every) == 0
+        and bool(config.deterministic_eval_include_final)
+        and str(config.final_policy_selection) == "last"
+    ):
+        payload.pop("deterministic_eval_every", None)
+        payload.pop("deterministic_eval_include_final", None)
+        payload.pop("final_policy_selection", None)
     return payload
 
 

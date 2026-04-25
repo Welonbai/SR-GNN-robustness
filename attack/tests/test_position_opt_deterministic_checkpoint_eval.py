@@ -72,6 +72,14 @@ def test_deterministic_checkpoint_config_defaults_validation_and_cli_override() 
         PositionOptConfig(final_policy_selection="checkpoint_max")
 
 
+def test_default_checkpoint_fields_are_pruned_from_identity_payload() -> None:
+    payload = position_opt_identity_payload(PositionOptConfig())
+
+    assert "deterministic_eval_every" not in payload
+    assert "deterministic_eval_include_final" not in payload
+    assert "final_policy_selection" not in payload
+
+
 def test_checkpoint_eval_focus_yaml_loads_expected_fields() -> None:
     config = load_config(FOCUS_CONFIG_PATH)
 
@@ -271,8 +279,14 @@ def test_best_deterministic_checkpoint_is_tracked_and_exported() -> None:
         )
         assert "deterministic_selected_pos0_pct" in training_history_payload["training_history"][1]
         assert learned_logits_payload["exported_policy_source"] == "best_deterministic"
+        assert learned_logits_payload["deterministic_eval_include_final"] is True
+        assert learned_logits_payload["final_policy_selection"] == "best_deterministic"
         assert learned_logits_payload["best_deterministic_step"] == 2
         assert learned_logits_payload["best_deterministic_reward"] == pytest.approx(0.3)
+        assert learned_logits_payload["last_deterministic_reward"] == pytest.approx(0.2)
+        assert learned_logits_payload["best_minus_last_deterministic_reward"] == pytest.approx(
+            0.1
+        )
         assert learned_logits_payload["deterministic_eval_every"] == 1
         assert learned_logits_payload["exported_selected_positions"] == [
             asdict(result) for result in best_checkpoint.selected_position_results
@@ -317,6 +331,19 @@ def test_deterministic_checkpoint_config_changes_runtime_identity_but_not_shared
             deterministic_eval_include_final=True,
             final_policy_selection="best_deterministic",
         )
+        baseline_payload = position_opt_identity_payload(baseline_config.attack.position_opt)
+        eval_every_payload = position_opt_identity_payload(eval_every_config.attack.position_opt)
+        best_policy_payload = position_opt_identity_payload(best_policy_config.attack.position_opt)
+
+        assert "deterministic_eval_every" not in baseline_payload
+        assert "deterministic_eval_include_final" not in baseline_payload
+        assert "final_policy_selection" not in baseline_payload
+        assert eval_every_payload["deterministic_eval_every"] == 5
+        assert eval_every_payload["deterministic_eval_include_final"] is True
+        assert eval_every_payload["final_policy_selection"] == "last"
+        assert best_policy_payload["deterministic_eval_every"] == 5
+        assert best_policy_payload["deterministic_eval_include_final"] is True
+        assert best_policy_payload["final_policy_selection"] == "best_deterministic"
 
         for left_config, left_context, right_config, right_context in (
             (baseline_config, baseline_context, eval_every_config, eval_every_context),
@@ -378,6 +405,61 @@ def test_deterministic_checkpoint_config_changes_runtime_identity_but_not_shared
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def test_deterministic_checkpoint_eval_reuses_fixed_seed_across_steps() -> None:
+    config = load_config(BASE_CONFIG_PATH)
+    temp_root = REPO_ROOT / "outputs" / ".pytest_deterministic_checkpoint_eval" / uuid4().hex
+    try:
+        temp_root.mkdir(parents=True, exist_ok=True)
+        inner_trainer = _SequenceModelInnerTrainer(
+            ["sampled-0", "det-1", "sampled-1", "det-2"]
+        )
+        trainer = PositionOptMVPTrainer(
+            _ResultLookupSurrogateBackend(
+                clean_result=SurrogateScoreResult.from_values([0.00]),
+                results_by_model={
+                    "sampled-0": SurrogateScoreResult.from_values([0.25]),
+                    "det-1": SurrogateScoreResult.from_values([0.10]),
+                    "sampled-1": SurrogateScoreResult.from_values([0.35]),
+                    "det-2": SurrogateScoreResult.from_values([0.30]),
+                },
+            ),
+            inner_trainer,
+            clean_surrogate_checkpoint_path=temp_root / "clean_surrogate.pt",
+            position_opt_config=PositionOptConfig(
+                outer_steps=2,
+                fine_tune_steps=1,
+                deterministic_eval_every=1,
+                deterministic_eval_include_final=True,
+                final_policy_selection="last",
+            ),
+        )
+
+        trainer_result = trainer.train(
+            fake_sessions=[[1, 2, 3], [2, 3, 4]],
+            target_item=99,
+            shared_artifacts=SimpleNamespace(
+                clean_sessions=[[1, 2], [3, 4]],
+                clean_labels=[3, 5],
+                validation_sessions=[[4, 5], [5, 6]],
+                validation_labels=[7, 8],
+            ),
+            config=config,
+        )
+
+        assert len(inner_trainer.received_seeds) == 4
+        sampled_seed_step1, deterministic_seed_step1, sampled_seed_step2, deterministic_seed_step2 = (
+            inner_trainer.received_seeds
+        )
+        assert sampled_seed_step1 != sampled_seed_step2
+        assert deterministic_seed_step1 == deterministic_seed_step2
+        sampled_training_seeds = [
+            row["surrogate_train_step_seed"] for row in trainer_result["training_history"]
+        ]
+        assert sampled_training_seeds[0] != sampled_training_seeds[1]
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def _config_with_checkpoint_eval_fields(
     config,
     *,
@@ -434,8 +516,10 @@ class _SequenceModelInnerTrainer:
     def __init__(self, model_names: list[str]) -> None:
         self.model_names = list(model_names)
         self.run_calls = 0
+        self.received_seeds: list[int | None] = []
 
     def run(self, surrogate_backend, clean_checkpoint_path, poisoned_train_data, **kwargs):
+        self.received_seeds.append(kwargs.get("seed"))
         del surrogate_backend, clean_checkpoint_path, poisoned_train_data, kwargs
         model = self.model_names[self.run_calls]
         self.run_calls += 1
