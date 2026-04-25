@@ -16,6 +16,8 @@ Thumbs.db
 
 # ===== Logs =====
 *.log
+*.diff
+*.zip
 
 # ===== Jupyter =====
 .ipynb_checkpoints/

@@ -48,7 +48,7 @@ TARGET_ORIGINAL_POSITION_SCALAR_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_attack_position_opt_shared_policy_target_original_position_scalar_tron_focus.yaml"
+    / "diginetica_attack_position_opt_shared_policy_target_original_position_scalar.yaml"
 )
 _POLICY_EMBEDDING_DIM = 8
 _FEATURE_SET_EXPECTATIONS = {

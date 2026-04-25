@@ -1,5 +1,5 @@
 experiment:
-  name: attack_position_opt_shared_policy_target_original_position_scalar_tron_focus
+  name: attack_position_opt_shared_policy_target_original_position_scalar
 
 data:
   dataset_name: diginetica
