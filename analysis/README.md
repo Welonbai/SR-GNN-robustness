@@ -18,14 +18,24 @@ python analysis/pipeline/compare_runs.py `
   --config analysis/configs/comparisons/diginetica_attack_compare.yaml
 ```
 
-### 1.3 Build View Bundles
+### 1.3 Build Comparison Stats
+
+```powershell
+python analysis/pipeline/comparison_stats_builder.py `
+  --config analysis/configs/stats/diginetica_six_method_targeted_core_win_rates.yaml
+```
+
+This reads the comparison bundle directly and writes pairwise method win-rate stats without
+depending on any rendered view subset.
+
+### 1.4 Build View Bundles
 
 ```powershell
 python analysis/pipeline/view_table_builder.py `
   --config analysis/configs/views/attack_vs_victim_metrics_split_by_target_item.yaml
 ```
 
-### 1.4 Render From Propagated Metadata
+### 1.5 Render From Propagated Metadata
 
 Single bundle:
 
@@ -43,7 +53,7 @@ python analysis/pipeline/report_table_renderer.py `
   --config analysis/configs/render/attack_vs_victim_metrics_split_by_target_item.yaml
 ```
 
-### 1.5 Resolve Diagnosis Run Bundles
+### 1.6 Resolve Diagnosis Run Bundles
 
 Use this when you already know the completed `run_root` for each method and want one
 sanity-checked manifest that points at the fixed artifact layout under each run group.
@@ -155,6 +165,23 @@ Outputs under `results/comparisons/<comparison_id>/`:
 - `inventory.json`
 - `manifest.json`
 - `slice_manifest.json`
+
+Comparison-stats bundles can be built from `merged_long_table.csv` and typically write:
+
+- `summary.json`
+- `pairwise_results.csv`
+- `manifest.json`
+
+When `pairwise_method_win_rate.requested_pairs` is omitted:
+
+- all method pairs are computed
+- full square matrices are written by default
+
+When `pairwise_method_win_rate.requested_pairs` is provided:
+
+- only those listed pairs are computed
+- `pairwise_results.csv` stays compact
+- full matrices are skipped by default unless `write_full_matrices: true`
 
 ## 5. View Notes
 

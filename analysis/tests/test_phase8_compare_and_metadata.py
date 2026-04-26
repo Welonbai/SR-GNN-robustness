@@ -17,6 +17,10 @@ from analysis.pipeline.compare_runs import (
     RUNS_ROOT,
     build_comparison_bundle,
 )
+from analysis.pipeline.comparison_stats_builder import (
+    build_comparison_stats_bundle,
+    parse_comparison_stats_spec,
+)
 from analysis.pipeline.report_table_renderer import (
     BestValueBoldingSpec,
     TableStructure,
@@ -174,6 +178,41 @@ def _comparison_spec(*, token: str, run_ids: list[str], slice_compatibility: str
 
 def _load_json(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _rows_for_method_stats_case(
+    *,
+    run_id: str,
+    attack_method: str,
+    replacement_topk_ratio: float,
+    values: list[float],
+) -> list[dict[str, object]]:
+    units = [
+        ("miasrec", 111, "recall", 10, values[0]),
+        ("miasrec", 111, "ground_truth_recall", 10, values[1]),
+        ("tron", 222, "recall", 20, values[2]),
+        ("tron", 222, "ground_truth_recall", 20, values[3]),
+    ]
+    rows: list[dict[str, object]] = []
+    for victim_model, target_item, metric, k, value in units:
+        rows.append(
+            {
+                "run_id": run_id,
+                "dataset": "diginetica",
+                "attack_method": attack_method,
+                "victim_model": victim_model,
+                "target_item": target_item,
+                "target_type": "popular",
+                "attack_size": 0.1,
+                "poison_model": "heuristic",
+                "fake_session_generation_topk": 20,
+                "replacement_topk_ratio": replacement_topk_ratio,
+                "metric": metric,
+                "k": k,
+                "value": value,
+            }
+        )
+    return rows
 
 
 def test_compare_runs_strict_accepts_compatible_slice_manifests() -> None:
@@ -336,6 +375,190 @@ def test_relaxed_debug_comparison_is_clearly_labeled_non_default() -> None:
     assert manifest["slice_compatibility"]["debug_only"] is True
     assert manifest["slice_compatibility"]["compatible"] is False
     assert manifest["slice"]["selected_targets"] is None
+
+
+def test_comparison_stats_builder_reports_pairwise_win_rates_from_filtered_comparison_bundle() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        run_specs = [
+            (
+                f"phase8_{token}_stats_a",
+                "method_a",
+                0.2,
+                [0.9, 0.8, 0.7, 0.6],
+            ),
+            (
+                f"phase8_{token}_stats_b",
+                "method_b",
+                1.0,
+                [0.8, 0.9, 0.7, 0.5],
+            ),
+            (
+                f"phase8_{token}_stats_c",
+                "method_c",
+                0.5,
+                [0.1, 0.2, 0.3, 0.4],
+            ),
+        ]
+        run_ids: list[str] = []
+        for run_id, attack_method, replacement_topk_ratio, values in run_specs:
+            run_ids.append(run_id)
+            _write_run_bundle(
+                run_id=run_id,
+                rows=_rows_for_method_stats_case(
+                    run_id=run_id,
+                    attack_method=attack_method,
+                    replacement_topk_ratio=replacement_topk_ratio,
+                    values=values,
+                ),
+                slice_manifest=_base_slice_manifest(run_group_key=f"{run_id}_group"),
+                created_paths=created_paths,
+            )
+
+        comparison_spec = _comparison_spec(token=token, run_ids=run_ids)
+        created_paths.append(comparison_spec.output_dir)
+        comparison_result = build_comparison_bundle(comparison_spec)
+
+        output_dir = RESULTS_ROOT / "tests" / f"phase8_{token}_stats_bundle"
+        created_paths.append(output_dir)
+        stats_spec = parse_comparison_stats_spec(
+            {
+                "analysis_type": "pairwise_method_win_rate",
+                "input": str(comparison_result["merged_csv_path"]),
+                "output": str(output_dir),
+                "filters": {
+                    "metric_name": ["recall"],
+                    "metric_scope": ["targeted", "ground_truth"],
+                },
+                "pairing": {
+                    "auto_ignore_method_descriptor_columns": True,
+                },
+            },
+            source_spec_path=REPO_ROOT / "analysis" / "configs" / "stats" / f"{token}.yaml",
+        )
+        result = build_comparison_stats_bundle(stats_spec)
+        summary = _load_json(result["summary_path"])
+
+    assert result["method_count"] == 3
+    assert result["pair_count"] == 3
+    assert summary["row_count_after_filters"] == 12
+    assert summary["comparison_unit_count"] == 4
+    assert summary["pairing"]["explicit_ignore_columns"] == ["run_id"]
+    assert summary["pairing"]["auto_ignore_method_descriptor_columns"] == ["replacement_topk_ratio"]
+    assert summary["pairing"]["comparison_unit_columns"] == [
+        "dataset",
+        "victim_model",
+        "target_item",
+        "target_type",
+        "attack_size",
+        "poison_model",
+        "fake_session_generation_topk",
+        "metric",
+        "k",
+        "metric_name",
+        "metric_scope",
+    ]
+    method_a_vs_b = summary["pairwise_lookup"]["method_a"]["method_b"]
+    assert method_a_vs_b["comparable_result_count"] == 4
+    assert method_a_vs_b["left_win_count"] == 2
+    assert method_a_vs_b["right_win_count"] == 1
+    assert method_a_vs_b["tie_count"] == 1
+    assert method_a_vs_b["left_win_rate"] == 0.5
+    assert method_a_vs_b["right_win_rate"] == 0.25
+    assert method_a_vs_b["tie_rate"] == 0.25
+    assert summary["pairwise_lookup"]["method_b"]["method_a"]["left_win_count"] == 1
+
+
+def test_comparison_stats_builder_supports_requested_pairs_and_skips_full_matrices_by_default() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        run_specs = [
+            (
+                f"phase8_{token}_selected_a",
+                "method_a",
+                0.2,
+                [0.9, 0.8, 0.7, 0.6],
+            ),
+            (
+                f"phase8_{token}_selected_b",
+                "method_b",
+                1.0,
+                [0.8, 0.9, 0.7, 0.5],
+            ),
+            (
+                f"phase8_{token}_selected_c",
+                "method_c",
+                0.5,
+                [0.1, 0.2, 0.3, 0.4],
+            ),
+        ]
+        run_ids: list[str] = []
+        for run_id, attack_method, replacement_topk_ratio, values in run_specs:
+            run_ids.append(run_id)
+            _write_run_bundle(
+                run_id=run_id,
+                rows=_rows_for_method_stats_case(
+                    run_id=run_id,
+                    attack_method=attack_method,
+                    replacement_topk_ratio=replacement_topk_ratio,
+                    values=values,
+                ),
+                slice_manifest=_base_slice_manifest(run_group_key=f"{run_id}_group"),
+                created_paths=created_paths,
+            )
+
+        comparison_spec = _comparison_spec(token=token, run_ids=run_ids)
+        created_paths.append(comparison_spec.output_dir)
+        comparison_result = build_comparison_bundle(comparison_spec)
+
+        output_dir = RESULTS_ROOT / "tests" / f"phase8_{token}_selected_pairs_stats_bundle"
+        created_paths.append(output_dir)
+        stats_spec = parse_comparison_stats_spec(
+            {
+                "analysis_type": "pairwise_method_win_rate",
+                "input": str(comparison_result["merged_csv_path"]),
+                "output": str(output_dir),
+                "filters": {
+                    "metric_name": ["recall"],
+                    "metric_scope": ["targeted", "ground_truth"],
+                },
+                "pairing": {
+                    "auto_ignore_method_descriptor_columns": True,
+                },
+                "pairwise_method_win_rate": {
+                    "requested_pairs": [
+                        ["method_a", "method_b"],
+                        ["method_c", "method_b"],
+                    ]
+                },
+            },
+            source_spec_path=REPO_ROOT / "analysis" / "configs" / "stats" / f"{token}.yaml",
+        )
+        result = build_comparison_stats_bundle(stats_spec)
+        summary_path = result["summary_path"]
+        summary = _load_json(summary_path)
+        pairwise_results_csv_path = output_dir / "pairwise_results.csv"
+        win_rate_matrix_path = output_dir / "pairwise_win_rate_matrix.csv"
+        comparable_count_matrix_path = output_dir / "pairwise_comparable_count_matrix.csv"
+        pairwise_results_csv = pd.read_csv(pairwise_results_csv_path)
+
+    assert result["method_count"] == 3
+    assert result["pair_count"] == 2
+    assert summary["methods"] == ["method_a", "method_b", "method_c"]
+    assert summary["available_methods"] == ["method_a", "method_b", "method_c"]
+    assert summary["pair_selection"] == {
+        "mode": "selected_pairs",
+        "requested_pairs": [
+            {"left_method": "method_a", "right_method": "method_b"},
+            {"left_method": "method_c", "right_method": "method_b"},
+        ],
+        "method_count": 3,
+        "methods": ["method_a", "method_b", "method_c"],
+        "write_full_matrices": False,
+    }
+    assert list(pairwise_results_csv["left_method"]) == ["method_a", "method_c"]
+    assert list(pairwise_results_csv["right_method"]) == ["method_b", "method_b"]
+    assert not win_rate_matrix_path.exists()
+    assert not comparable_count_matrix_path.exists()
+    assert "method_c" not in summary["pairwise_lookup"]["method_a"]
 
 
 def test_view_table_builder_propagates_slice_metadata_into_meta_and_context() -> None:

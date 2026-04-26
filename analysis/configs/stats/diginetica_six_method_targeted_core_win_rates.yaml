@@ -1,0 +1,22 @@
+analysis_type: pairwise_method_win_rate
+
+input: results\comparisons\diginetica_six_method_compare\merged_long_table.csv
+output: results\comparisons\diginetica_six_method_compare\six_method_targeted_core_win_rates
+
+filters:
+  poison_model: srgnn
+  target_type: popular
+  attack_size: 0.01
+  metric_name: [recall, mrr]
+  metric_scope: targeted
+  k: [10, 20, 30]
+
+method_column: attack_method
+value_column: value
+
+pairing:
+  auto_ignore_method_descriptor_columns: true
+
+pairwise_method_win_rate:
+  higher_is_better: true
+  tie_tolerance: 0.0

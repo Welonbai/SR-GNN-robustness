@@ -21,7 +21,7 @@ seeds:
 attack:
   size: 0.01
   fake_session_generation_topk: 100
-  replacement_topk_ratio: 0.1
+  replacement_topk_ratio: 1
   poison_model:
     name: srgnn
     params:
@@ -45,7 +45,7 @@ targets:
   reuse_saved_targets: true
 
 victims:
-  enabled: [srgnn, tron]
+  enabled: [srgnn, miasrec, tron]
   params:
     srgnn:
       train:
