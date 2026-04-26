@@ -198,6 +198,13 @@ def _create_run_root(base_dir: Path, *, target_items: list[int], victims: list[s
 
     target_dir = run_root / "targets" / str(target_items[0])
     _write_json(target_dir / "position_stats.json", {"total_sessions": 2})
+    _write_json(target_dir / "position_summary.json", {"method_name": "bucket_abs_pos2"})
+    _write_json(target_dir / "bucket_diagnostics.json", {"fallback_ratio": 12.5})
+    target_dir.joinpath("selected_positions.jsonl").parent.mkdir(parents=True, exist_ok=True)
+    target_dir.joinpath("selected_positions.jsonl").write_text(
+        json.dumps({"selected_position": 2}) + "\n",
+        encoding="utf-8",
+    )
     _write_json(target_dir / "position_opt" / "training_history.json", {"training_history": []})
     _write_json(target_dir / "position_opt" / "run_metadata.json", {"target_item": target_items[0]})
     _write_json(target_dir / "position_opt" / "selected_positions.json", [{"position": 1}])
@@ -254,12 +261,18 @@ def test_load_bundles_from_manifest_derives_artifacts_from_run_root() -> None:
         assert bundle.nonzero_action_when_possible is True
         assert "canonical_split.train_sub" in bundle.shared_artifact_paths
         assert bundle.target_artifacts[11103].position_stats_path is not None
+        assert bundle.target_artifacts[11103].bucket_selected_positions_path is not None
+        assert bundle.target_artifacts[11103].bucket_position_summary_path is not None
+        assert bundle.target_artifacts[11103].bucket_diagnostics_path is not None
         assert bundle.target_artifacts[11103].training_history_path is not None
         assert bundle.target_artifacts[11103].victims["srgnn"].metrics_path is not None
 
         payload = bundle_to_dict(bundle)
         assert payload["artifacts"]["summary_current"].endswith("summary_current.json")
         assert payload["targets"]["11103"]["position_opt_dir"].endswith("/position_opt")
+        assert payload["targets"]["11103"]["bucket_selected_positions"].endswith(
+            "/selected_positions.jsonl"
+        )
 
 
 def test_loader_rejects_expected_targets_that_do_not_match_prefix() -> None:

@@ -61,6 +61,9 @@ class TargetArtifactPaths:
 
     target_dir: Path
     position_stats_path: Path | None
+    bucket_selected_positions_path: Path | None
+    bucket_position_summary_path: Path | None
+    bucket_diagnostics_path: Path | None
     prefix_metadata_path: Path | None
     random_nonzero_metadata_path: Path | None
     position_opt_dir: Path | None
@@ -413,6 +416,9 @@ def _target_artifacts_to_dict(paths: TargetArtifactPaths) -> dict[str, Any]:
     return {
         "target_dir": _repo_relative(paths.target_dir),
         "position_stats": _optional_repo_relative(paths.position_stats_path),
+        "bucket_selected_positions": _optional_repo_relative(paths.bucket_selected_positions_path),
+        "bucket_position_summary": _optional_repo_relative(paths.bucket_position_summary_path),
+        "bucket_diagnostics": _optional_repo_relative(paths.bucket_diagnostics_path),
         "prefix_metadata": _optional_repo_relative(paths.prefix_metadata_path),
         "random_nonzero_metadata": _optional_repo_relative(paths.random_nonzero_metadata_path),
         "position_opt_dir": _optional_repo_relative(paths.position_opt_dir),
@@ -450,6 +456,9 @@ def _target_artifact_paths(
     return TargetArtifactPaths(
         target_dir=target_dir.resolve(),
         position_stats_path=_optional_existing_file(target_dir / "position_stats.json"),
+        bucket_selected_positions_path=_optional_existing_file(target_dir / "selected_positions.jsonl"),
+        bucket_position_summary_path=_optional_existing_file(target_dir / "position_summary.json"),
+        bucket_diagnostics_path=_optional_existing_file(target_dir / "bucket_diagnostics.json"),
         prefix_metadata_path=_optional_existing_file(target_dir / "prefix_nonzero_when_possible_metadata.pkl"),
         random_nonzero_metadata_path=_optional_existing_file(target_dir / "random_nonzero_position_metadata.json"),
         position_opt_dir=position_opt_dir,

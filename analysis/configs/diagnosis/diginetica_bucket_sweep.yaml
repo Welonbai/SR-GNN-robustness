@@ -1,0 +1,49 @@
+report_id: diginetica_bucket_sweep
+dataset: diginetica
+output_dir: analysis/diagnosis_outputs/diginetica_bucket_sweep
+
+targets:
+  expected: []
+
+victims:
+  expected: []
+
+methods:
+  clean:
+    label: Clean
+    attack_method: clean
+    run_root: outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757
+  random_nz:
+    label: Random-NZ@1.0
+    attack_method: random_nonzero_when_possible
+    run_root: outputs/runs/diginetica/attack_random_nonzero_when_possible_ratio1/run_group_8679b974a1
+  bucket_first_nonzero:
+    label: FirstNonzero
+    attack_method: bucket_first_nonzero
+    run_root: outputs/runs/diginetica/attack_bucket_position_baselines_ratio1/run_group_2835ffd0b3
+  bucket_abs_pos2:
+    label: AbsPos2
+    attack_method: bucket_abs_pos2
+    run_root: outputs/runs/diginetica/attack_bucket_position_baselines_ratio1/run_group_9e1c264b4f
+  bucket_nonfirst_nonzero:
+    label: NonFirstNonzero
+    attack_method: bucket_nonfirst_nonzero
+    run_root: outputs/runs/diginetica/attack_bucket_position_baselines_ratio1/run_group_d1875087a3
+  bucket_abs_pos3plus:
+    label: AbsPos3Plus
+    attack_method: bucket_abs_pos3plus
+    run_root: outputs/runs/diginetica/attack_bucket_position_baselines_ratio1/run_group_b17b2a1a0f
+
+notes:
+  clean_method_key: clean
+  baseline_method_key: random_nz
+  bucket_method_keys:
+    - bucket_first_nonzero
+    - bucket_abs_pos2
+    - bucket_nonfirst_nonzero
+    - bucket_abs_pos3plus
+  expected_bucket_target_cohort_key: target_cohort_8be070ab82
+  expected_bucket_target_prefix:
+    - 11103
+    - 39588
+    - 5334
