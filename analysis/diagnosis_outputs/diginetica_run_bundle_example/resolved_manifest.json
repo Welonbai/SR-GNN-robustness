@@ -1,0 +1,1445 @@
+{
+  "bundles": {
+    "clean": {
+      "artifacts": {
+        "artifact_manifest": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/artifact_manifest.json",
+        "execution_log": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/execution_log.json",
+        "key_payloads": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/key_payloads.json",
+        "legacy_summary": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/summary_clean.json",
+        "progress": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/progress.json",
+        "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/resolved_config.json",
+        "run_coverage": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/run_coverage.json",
+        "summary_current": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/summary_current.json"
+      },
+      "attack_method": "clean",
+      "attack_size": 0.01,
+      "dataset": "diginetica",
+      "deterministic_eval_every": null,
+      "deterministic_eval_include_final": null,
+      "final_policy_selection": null,
+      "label": "Clean",
+      "method_key": "clean",
+      "nonzero_action_when_possible": null,
+      "policy_feature_set": null,
+      "replacement_topk_ratio": 0.2,
+      "reward_mode": null,
+      "run_group_key": "run_group_e0caef2757",
+      "run_root": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757",
+      "run_type": "clean",
+      "seeds": {
+        "fake_session_seed": 20260405,
+        "position_opt_seed": 20260405,
+        "surrogate_train_seed": 20260405,
+        "target_selection_seed": 20260405,
+        "victim_train_seed": 20260405
+      },
+      "shared_artifact_paths": {
+        "canonical_split.canonical_dir": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+        "canonical_split.item_map": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/item_map.pkl",
+        "canonical_split.metadata": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/metadata.json",
+        "canonical_split.test": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/test.pkl",
+        "canonical_split.train_sub": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/train_sub.pkl",
+        "canonical_split.valid": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/valid.pkl",
+        "legacy_target_selection.config_snapshot": "outputs/shared/diginetica/targets/targets_87c432645b/config.yaml",
+        "legacy_target_selection.legacy_target_info": "outputs/shared/diginetica/targets/targets_87c432645b/target_info.json",
+        "legacy_target_selection.selected_targets": "outputs/shared/diginetica/targets/targets_87c432645b/selected_targets.json",
+        "legacy_target_selection.shared_dir": "outputs/shared/diginetica/targets/targets_87c432645b",
+        "legacy_target_selection.target_selection_meta": "outputs/shared/diginetica/targets/targets_87c432645b/target_selection_meta.json",
+        "target_cohort.shared_dir": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82",
+        "target_cohort.target_registry": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82/target_registry.json"
+      },
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "targets": {
+        "11103": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/tron",
+              "train_history": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/11103/victims/tron/train_history.json"
+            }
+          }
+        },
+        "39588": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/tron",
+              "train_history": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/39588/victims/tron/train_history.json"
+            }
+          }
+        },
+        "5334": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/tron",
+              "train_history": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/targets/5334/victims/tron/train_history.json"
+            }
+          }
+        }
+      },
+      "victims": [
+        "miasrec",
+        "srgnn",
+        "tron"
+      ]
+    },
+    "dpsbr": {
+      "artifacts": {
+        "artifact_manifest": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/artifact_manifest.json",
+        "execution_log": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/execution_log.json",
+        "key_payloads": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/key_payloads.json",
+        "legacy_summary": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/summary_dpsbr_baseline.json",
+        "progress": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/progress.json",
+        "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/resolved_config.json",
+        "run_coverage": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/run_coverage.json",
+        "summary_current": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/summary_current.json"
+      },
+      "attack_method": "dpsbr",
+      "attack_size": 0.01,
+      "dataset": "diginetica",
+      "deterministic_eval_every": null,
+      "deterministic_eval_include_final": null,
+      "final_policy_selection": null,
+      "label": "DPSBR-random",
+      "method_key": "dpsbr",
+      "nonzero_action_when_possible": null,
+      "policy_feature_set": null,
+      "replacement_topk_ratio": 0.2,
+      "reward_mode": null,
+      "run_group_key": "run_group_7db577fb2e",
+      "run_root": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e",
+      "run_type": "dpsbr_baseline",
+      "seeds": {
+        "fake_session_seed": 20260405,
+        "position_opt_seed": 20260405,
+        "surrogate_train_seed": 20260405,
+        "target_selection_seed": 20260405,
+        "victim_train_seed": 20260405
+      },
+      "shared_artifact_paths": {
+        "canonical_split.canonical_dir": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+        "canonical_split.item_map": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/item_map.pkl",
+        "canonical_split.metadata": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/metadata.json",
+        "canonical_split.test": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/test.pkl",
+        "canonical_split.train_sub": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/train_sub.pkl",
+        "canonical_split.valid": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/valid.pkl",
+        "legacy_target_selection.config_snapshot": "outputs/shared/diginetica/targets/targets_87c432645b/config.yaml",
+        "legacy_target_selection.legacy_target_info": "outputs/shared/diginetica/targets/targets_87c432645b/target_info.json",
+        "legacy_target_selection.selected_targets": "outputs/shared/diginetica/targets/targets_87c432645b/selected_targets.json",
+        "legacy_target_selection.shared_dir": "outputs/shared/diginetica/targets/targets_87c432645b",
+        "legacy_target_selection.target_selection_meta": "outputs/shared/diginetica/targets/targets_87c432645b/target_selection_meta.json",
+        "poison_artifact.config_snapshot": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/config.yaml",
+        "poison_artifact.fake_sessions": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/fake_sessions.pkl",
+        "poison_artifact.poison_model": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_model.pt",
+        "poison_artifact.poison_train_history": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_train_history.json",
+        "poison_artifact.shared_dir": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3",
+        "target_cohort.shared_dir": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82",
+        "target_cohort.target_registry": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82/target_registry.json"
+      },
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "targets": {
+        "11103": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/11103/victims/tron/train_history.json"
+            }
+          }
+        },
+        "39588": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/39588/victims/tron/train_history.json"
+            }
+          }
+        },
+        "5334": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e/targets/5334/victims/tron/train_history.json"
+            }
+          }
+        }
+      },
+      "victims": [
+        "miasrec",
+        "srgnn",
+        "tron"
+      ]
+    },
+    "mvp": {
+      "artifacts": {
+        "artifact_manifest": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/artifact_manifest.json",
+        "execution_log": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/execution_log.json",
+        "key_payloads": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/key_payloads.json",
+        "legacy_summary": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/summary_position_opt_mvp.json",
+        "progress": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/progress.json",
+        "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/resolved_config.json",
+        "run_coverage": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/run_coverage.json",
+        "summary_current": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/summary_current.json"
+      },
+      "attack_method": "position_opt_mvp",
+      "attack_size": 0.01,
+      "dataset": "diginetica",
+      "deterministic_eval_every": null,
+      "deterministic_eval_include_final": null,
+      "final_policy_selection": null,
+      "label": "PosOptMVP@1.0",
+      "method_key": "mvp",
+      "nonzero_action_when_possible": null,
+      "policy_feature_set": null,
+      "replacement_topk_ratio": 1.0,
+      "reward_mode": null,
+      "run_group_key": "run_group_3becc51c46",
+      "run_root": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46",
+      "run_type": "position_opt_mvp",
+      "seeds": {
+        "fake_session_seed": 20260405,
+        "position_opt_seed": 20260405,
+        "surrogate_train_seed": 20260405,
+        "target_selection_seed": 20260405,
+        "victim_train_seed": 20260405
+      },
+      "shared_artifact_paths": {
+        "canonical_split.canonical_dir": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+        "canonical_split.item_map": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/item_map.pkl",
+        "canonical_split.metadata": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/metadata.json",
+        "canonical_split.test": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/test.pkl",
+        "canonical_split.train_sub": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/train_sub.pkl",
+        "canonical_split.valid": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/valid.pkl",
+        "legacy_target_selection.config_snapshot": "outputs/shared/diginetica/targets/targets_2a98e61218/config.yaml",
+        "legacy_target_selection.shared_dir": "outputs/shared/diginetica/targets/targets_2a98e61218",
+        "poison_artifact.config_snapshot": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/config.yaml",
+        "poison_artifact.fake_sessions": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/fake_sessions.pkl",
+        "poison_artifact.poison_model": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_model.pt",
+        "poison_artifact.poison_train_history": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_train_history.json",
+        "poison_artifact.shared_dir": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3",
+        "target_cohort.shared_dir": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82",
+        "target_cohort.target_registry": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82/target_registry.json"
+      },
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334,
+        5418,
+        14514,
+        32614
+      ],
+      "targets": {
+        "11103": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103",
+          "training_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/11103/victims/tron/train_history.json"
+            }
+          }
+        },
+        "14514": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514",
+          "training_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/14514/victims/tron/train_history.json"
+            }
+          }
+        },
+        "32614": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614",
+          "training_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/32614/victims/tron/train_history.json"
+            }
+          }
+        },
+        "39588": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588",
+          "training_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/39588/victims/tron/train_history.json"
+            }
+          }
+        },
+        "5334": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334",
+          "training_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5334/victims/tron/train_history.json"
+            }
+          }
+        },
+        "5418": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418",
+          "training_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/targets/5418/victims/tron/train_history.json"
+            }
+          }
+        }
+      },
+      "victims": [
+        "miasrec",
+        "srgnn",
+        "tron"
+      ]
+    },
+    "prefix_r02": {
+      "artifacts": {
+        "artifact_manifest": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/artifact_manifest.json",
+        "execution_log": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/execution_log.json",
+        "key_payloads": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/key_payloads.json",
+        "legacy_summary": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/summary_prefix_nonzero_when_possible.json",
+        "progress": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/progress.json",
+        "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/resolved_config.json",
+        "run_coverage": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/run_coverage.json",
+        "summary_current": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/summary_current.json"
+      },
+      "attack_method": "prefix_nonzero_when_possible",
+      "attack_size": 0.01,
+      "dataset": "diginetica",
+      "deterministic_eval_every": null,
+      "deterministic_eval_include_final": null,
+      "final_policy_selection": null,
+      "label": "Prefix-NZ@0.2",
+      "method_key": "prefix_r02",
+      "nonzero_action_when_possible": null,
+      "policy_feature_set": null,
+      "replacement_topk_ratio": 0.2,
+      "reward_mode": null,
+      "run_group_key": "run_group_14818d6dd6",
+      "run_root": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6",
+      "run_type": "prefix_nonzero_when_possible",
+      "seeds": {
+        "fake_session_seed": 20260405,
+        "position_opt_seed": 20260405,
+        "surrogate_train_seed": 20260405,
+        "target_selection_seed": 20260405,
+        "victim_train_seed": 20260405
+      },
+      "shared_artifact_paths": {
+        "canonical_split.canonical_dir": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+        "canonical_split.item_map": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/item_map.pkl",
+        "canonical_split.metadata": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/metadata.json",
+        "canonical_split.test": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/test.pkl",
+        "canonical_split.train_sub": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/train_sub.pkl",
+        "canonical_split.valid": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/valid.pkl",
+        "legacy_target_selection.config_snapshot": "outputs/shared/diginetica/targets/targets_87c432645b/config.yaml",
+        "legacy_target_selection.legacy_target_info": "outputs/shared/diginetica/targets/targets_87c432645b/target_info.json",
+        "legacy_target_selection.selected_targets": "outputs/shared/diginetica/targets/targets_87c432645b/selected_targets.json",
+        "legacy_target_selection.shared_dir": "outputs/shared/diginetica/targets/targets_87c432645b",
+        "legacy_target_selection.target_selection_meta": "outputs/shared/diginetica/targets/targets_87c432645b/target_selection_meta.json",
+        "poison_artifact.config_snapshot": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/config.yaml",
+        "poison_artifact.fake_sessions": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/fake_sessions.pkl",
+        "poison_artifact.poison_model": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_model.pt",
+        "poison_artifact.poison_train_history": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_train_history.json",
+        "poison_artifact.shared_dir": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3",
+        "target_cohort.shared_dir": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82",
+        "target_cohort.target_registry": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82/target_registry.json"
+      },
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "targets": {
+        "11103": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/position_stats.json",
+          "prefix_metadata": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/prefix_nonzero_when_possible_metadata.pkl",
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/11103/victims/tron/train_history.json"
+            }
+          }
+        },
+        "39588": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/position_stats.json",
+          "prefix_metadata": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/prefix_nonzero_when_possible_metadata.pkl",
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/39588/victims/tron/train_history.json"
+            }
+          }
+        },
+        "5334": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/position_stats.json",
+          "prefix_metadata": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/prefix_nonzero_when_possible_metadata.pkl",
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/targets/5334/victims/tron/train_history.json"
+            }
+          }
+        }
+      },
+      "victims": [
+        "miasrec",
+        "srgnn",
+        "tron"
+      ]
+    },
+    "prefix_r1": {
+      "artifacts": {
+        "artifact_manifest": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/artifact_manifest.json",
+        "execution_log": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/execution_log.json",
+        "key_payloads": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/key_payloads.json",
+        "legacy_summary": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/summary_prefix_nonzero_when_possible.json",
+        "progress": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/progress.json",
+        "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/resolved_config.json",
+        "run_coverage": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/run_coverage.json",
+        "summary_current": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/summary_current.json"
+      },
+      "attack_method": "prefix_nonzero_when_possible",
+      "attack_size": 0.01,
+      "dataset": "diginetica",
+      "deterministic_eval_every": null,
+      "deterministic_eval_include_final": null,
+      "final_policy_selection": null,
+      "label": "Prefix-NZ@1.0",
+      "method_key": "prefix_r1",
+      "nonzero_action_when_possible": null,
+      "policy_feature_set": null,
+      "replacement_topk_ratio": 1.0,
+      "reward_mode": null,
+      "run_group_key": "run_group_122a28bd27",
+      "run_root": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27",
+      "run_type": "prefix_nonzero_when_possible",
+      "seeds": {
+        "fake_session_seed": 20260405,
+        "position_opt_seed": 20260405,
+        "surrogate_train_seed": 20260405,
+        "target_selection_seed": 20260405,
+        "victim_train_seed": 20260405
+      },
+      "shared_artifact_paths": {
+        "canonical_split.canonical_dir": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+        "canonical_split.item_map": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/item_map.pkl",
+        "canonical_split.metadata": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/metadata.json",
+        "canonical_split.test": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/test.pkl",
+        "canonical_split.train_sub": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/train_sub.pkl",
+        "canonical_split.valid": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/valid.pkl",
+        "legacy_target_selection.config_snapshot": "outputs/shared/diginetica/targets/targets_87c432645b/config.yaml",
+        "legacy_target_selection.legacy_target_info": "outputs/shared/diginetica/targets/targets_87c432645b/target_info.json",
+        "legacy_target_selection.selected_targets": "outputs/shared/diginetica/targets/targets_87c432645b/selected_targets.json",
+        "legacy_target_selection.shared_dir": "outputs/shared/diginetica/targets/targets_87c432645b",
+        "legacy_target_selection.target_selection_meta": "outputs/shared/diginetica/targets/targets_87c432645b/target_selection_meta.json",
+        "poison_artifact.config_snapshot": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/config.yaml",
+        "poison_artifact.fake_sessions": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/fake_sessions.pkl",
+        "poison_artifact.poison_model": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_model.pt",
+        "poison_artifact.poison_train_history": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_train_history.json",
+        "poison_artifact.shared_dir": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3",
+        "target_cohort.shared_dir": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82",
+        "target_cohort.target_registry": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82/target_registry.json"
+      },
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "targets": {
+        "11103": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/position_stats.json",
+          "prefix_metadata": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/prefix_nonzero_when_possible_metadata.pkl",
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/11103/victims/tron/train_history.json"
+            }
+          }
+        },
+        "39588": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/position_stats.json",
+          "prefix_metadata": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/prefix_nonzero_when_possible_metadata.pkl",
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/39588/victims/tron/train_history.json"
+            }
+          }
+        },
+        "5334": {
+          "learned_logits": null,
+          "optimized_poisoned_sessions": null,
+          "position_opt_dir": null,
+          "position_stats": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/position_stats.json",
+          "prefix_metadata": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/prefix_nonzero_when_possible_metadata.pkl",
+          "random_nonzero_metadata": null,
+          "run_metadata": null,
+          "selected_positions": null,
+          "target_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334",
+          "training_history": null,
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/targets/5334/victims/tron/train_history.json"
+            }
+          }
+        }
+      },
+      "victims": [
+        "miasrec",
+        "srgnn",
+        "tron"
+      ]
+    },
+    "sp": {
+      "artifacts": {
+        "artifact_manifest": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/artifact_manifest.json",
+        "execution_log": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/execution_log.json",
+        "key_payloads": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/key_payloads.json",
+        "legacy_summary": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/summary_position_opt_shared_policy.json",
+        "progress": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/progress.json",
+        "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/resolved_config.json",
+        "run_coverage": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/run_coverage.json",
+        "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/summary_current.json"
+      },
+      "attack_method": "position_opt_shared_policy",
+      "attack_size": 0.01,
+      "dataset": "diginetica",
+      "deterministic_eval_every": null,
+      "deterministic_eval_include_final": null,
+      "final_policy_selection": null,
+      "label": "SharedPolicy-local_context@1.0",
+      "method_key": "sp",
+      "nonzero_action_when_possible": null,
+      "policy_feature_set": null,
+      "replacement_topk_ratio": 1.0,
+      "reward_mode": null,
+      "run_group_key": "run_group_c1835ab73f",
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f",
+      "run_type": "position_opt_shared_policy",
+      "seeds": {
+        "fake_session_seed": 20260405,
+        "position_opt_seed": 20260405,
+        "surrogate_train_seed": 20260405,
+        "target_selection_seed": 20260405,
+        "victim_train_seed": 20260405
+      },
+      "shared_artifact_paths": {
+        "canonical_split.canonical_dir": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+        "canonical_split.item_map": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/item_map.pkl",
+        "canonical_split.metadata": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/metadata.json",
+        "canonical_split.test": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/test.pkl",
+        "canonical_split.train_sub": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/train_sub.pkl",
+        "canonical_split.valid": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/valid.pkl",
+        "legacy_target_selection.config_snapshot": "outputs/shared/diginetica/targets/targets_87c432645b/config.yaml",
+        "legacy_target_selection.legacy_target_info": "outputs/shared/diginetica/targets/targets_87c432645b/target_info.json",
+        "legacy_target_selection.selected_targets": "outputs/shared/diginetica/targets/targets_87c432645b/selected_targets.json",
+        "legacy_target_selection.shared_dir": "outputs/shared/diginetica/targets/targets_87c432645b",
+        "legacy_target_selection.target_selection_meta": "outputs/shared/diginetica/targets/targets_87c432645b/target_selection_meta.json",
+        "poison_artifact.config_snapshot": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/config.yaml",
+        "poison_artifact.fake_sessions": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/fake_sessions.pkl",
+        "poison_artifact.poison_model": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_model.pt",
+        "poison_artifact.poison_train_history": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_train_history.json",
+        "poison_artifact.shared_dir": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3",
+        "target_cohort.shared_dir": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82",
+        "target_cohort.target_registry": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82/target_registry.json"
+      },
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "targets": {
+        "11103": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103",
+          "training_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/11103/victims/tron/train_history.json"
+            }
+          }
+        },
+        "39588": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588",
+          "training_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/39588/victims/tron/train_history.json"
+            }
+          }
+        },
+        "5334": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334",
+          "training_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/targets/5334/victims/tron/train_history.json"
+            }
+          }
+        }
+      },
+      "victims": [
+        "miasrec",
+        "srgnn",
+        "tron"
+      ]
+    },
+    "sp_nz": {
+      "artifacts": {
+        "artifact_manifest": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/artifact_manifest.json",
+        "execution_log": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/execution_log.json",
+        "key_payloads": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/key_payloads.json",
+        "legacy_summary": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/summary_position_opt_shared_policy.json",
+        "progress": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/progress.json",
+        "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/resolved_config.json",
+        "run_coverage": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/run_coverage.json",
+        "summary_current": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/summary_current.json"
+      },
+      "attack_method": "position_opt_shared_policy",
+      "attack_size": 0.01,
+      "dataset": "diginetica",
+      "deterministic_eval_every": 0,
+      "deterministic_eval_include_final": true,
+      "final_policy_selection": "last",
+      "label": "SharedPolicy-local_context-NZ@1.0",
+      "method_key": "sp_nz",
+      "nonzero_action_when_possible": true,
+      "policy_feature_set": "local_context",
+      "replacement_topk_ratio": 1.0,
+      "reward_mode": "poisoned_target_utility",
+      "run_group_key": "run_group_0bce31ef52",
+      "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52",
+      "run_type": "position_opt_shared_policy",
+      "seeds": {
+        "fake_session_seed": 20260405,
+        "position_opt_seed": 20260405,
+        "surrogate_train_seed": 20260405,
+        "target_selection_seed": 20260405,
+        "victim_train_seed": 20260405
+      },
+      "shared_artifact_paths": {
+        "canonical_split.canonical_dir": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+        "canonical_split.item_map": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/item_map.pkl",
+        "canonical_split.metadata": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/metadata.json",
+        "canonical_split.test": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/test.pkl",
+        "canonical_split.train_sub": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/train_sub.pkl",
+        "canonical_split.valid": "outputs/shared/diginetica/canonical/split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1/valid.pkl",
+        "legacy_target_selection.config_snapshot": "outputs/shared/diginetica/targets/targets_87c432645b/config.yaml",
+        "legacy_target_selection.legacy_target_info": "outputs/shared/diginetica/targets/targets_87c432645b/target_info.json",
+        "legacy_target_selection.selected_targets": "outputs/shared/diginetica/targets/targets_87c432645b/selected_targets.json",
+        "legacy_target_selection.shared_dir": "outputs/shared/diginetica/targets/targets_87c432645b",
+        "legacy_target_selection.target_selection_meta": "outputs/shared/diginetica/targets/targets_87c432645b/target_selection_meta.json",
+        "poison_artifact.config_snapshot": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/config.yaml",
+        "poison_artifact.fake_sessions": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/fake_sessions.pkl",
+        "poison_artifact.poison_model": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_model.pt",
+        "poison_artifact.poison_train_history": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3/poison_train_history.json",
+        "poison_artifact.shared_dir": "outputs/shared/diginetica/attack/attack_shared_1c4345bfa3",
+        "target_cohort.shared_dir": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82",
+        "target_cohort.target_registry": "outputs/shared/diginetica/target_cohorts/target_cohort_8be070ab82/target_registry.json"
+      },
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "targets": {
+        "11103": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103",
+          "training_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/11103/victims/tron/train_history.json"
+            }
+          }
+        },
+        "39588": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588",
+          "training_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/39588/victims/tron/train_history.json"
+            }
+          }
+        },
+        "5334": {
+          "learned_logits": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/position_opt/learned_logits.pt",
+          "optimized_poisoned_sessions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/position_opt/optimized_poisoned_sessions.pkl",
+          "position_opt_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/position_opt",
+          "position_stats": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/position_stats.json",
+          "prefix_metadata": null,
+          "random_nonzero_metadata": null,
+          "run_metadata": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/position_opt/run_metadata.json",
+          "selected_positions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/position_opt/selected_positions.json",
+          "target_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334",
+          "training_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/position_opt/training_history.json",
+          "victims": {
+            "miasrec": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/miasrec/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/miasrec/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/miasrec/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/miasrec/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/miasrec",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/miasrec/train_history.json"
+            },
+            "srgnn": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/srgnn/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/srgnn/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/srgnn/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/srgnn/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/srgnn",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/srgnn/train_history.json"
+            },
+            "tron": {
+              "config_snapshot": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/tron/config.yaml",
+              "metrics": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/tron/metrics.json",
+              "predictions": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/tron/predictions.json",
+              "resolved_config": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/tron/resolved_config.json",
+              "run_dir": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/tron",
+              "train_history": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/targets/5334/victims/tron/train_history.json"
+            }
+          }
+        }
+      },
+      "victims": [
+        "miasrec",
+        "srgnn",
+        "tron"
+      ]
+    }
+  },
+  "manifest": {
+    "dataset": "diginetica",
+    "expected_targets": [
+      11103,
+      39588,
+      5334
+    ],
+    "expected_victims": [
+      "srgnn",
+      "miasrec",
+      "tron"
+    ],
+    "methods": {
+      "clean": {
+        "attack_method": null,
+        "label": "Clean",
+        "run_root": "outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757",
+        "summary_current": null
+      },
+      "dpsbr": {
+        "attack_method": "dpsbr",
+        "label": "DPSBR-random",
+        "run_root": "outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e",
+        "summary_current": null
+      },
+      "mvp": {
+        "attack_method": "position_opt_mvp",
+        "label": "PosOptMVP@1.0",
+        "run_root": "outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46",
+        "summary_current": null
+      },
+      "prefix_r02": {
+        "attack_method": "prefix_nonzero_when_possible",
+        "label": "Prefix-NZ@0.2",
+        "run_root": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6",
+        "summary_current": null
+      },
+      "prefix_r1": {
+        "attack_method": "prefix_nonzero_when_possible",
+        "label": "Prefix-NZ@1.0",
+        "run_root": "outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27",
+        "summary_current": null
+      },
+      "sp": {
+        "attack_method": "position_opt_shared_policy",
+        "label": "SharedPolicy-local_context@1.0",
+        "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f",
+        "summary_current": null
+      },
+      "sp_nz": {
+        "attack_method": "position_opt_shared_policy",
+        "label": "SharedPolicy-local_context-NZ@1.0",
+        "run_root": "outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52",
+        "summary_current": null
+      }
+    },
+    "notes": {
+      "expected_targets_semantics": "expected targets must match the prefix of each run's targets_order.",
+      "expected_victims_semantics": "expected victims must be present in each run's run_coverage.json.",
+      "usage": "Fill run_root for each method you want included in a future diagnosis bundle."
+    },
+    "output_dir": "analysis/diagnosis_outputs/diginetica_run_bundle_example",
+    "path": "analysis/configs/diagnosis/diginetica_run_bundle_example.yaml",
+    "report_id": "diginetica_run_bundle_example"
+  }
+}

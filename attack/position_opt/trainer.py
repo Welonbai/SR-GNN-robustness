@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -16,7 +17,7 @@ from attack.data.poisoned_dataset_builder import (
 )
 from attack.inner_train.base import InnerTrainer
 from attack.position_opt.artifacts import ensure_position_opt_artifact_dirs
-from attack.position_opt.candidate_builder import build_candidate_positions
+from attack.position_opt.candidate_builder import build_candidate_position_result
 from attack.position_opt.feature_builder import (
     PolicySpecialItemIds,
     SessionCandidateFeatures,
@@ -127,6 +128,7 @@ class PositionOptMVPTrainer:
         self._clean_target_metrics: dict[str, float | None] = _empty_lowk_target_metrics()
         self._final_selected_positions: list[SelectedPositionResult] | None = None
         self._final_poisoned_sessions: list[list[int]] | None = None
+        self._candidate_space_diagnostics: dict[str, Any] | None = None
         self._best_deterministic_checkpoint: _DeterministicCheckpointState | None = None
         self._last_deterministic_checkpoint: _DeterministicCheckpointState | None = None
         self._deterministic_eval_schedule: tuple[int, ...] = ()
@@ -159,6 +161,7 @@ class PositionOptMVPTrainer:
         self._clean_target_metrics = _empty_lowk_target_metrics()
         self._final_selected_positions = None
         self._final_poisoned_sessions = None
+        self._candidate_space_diagnostics = None
         self._best_deterministic_checkpoint = None
         self._last_deterministic_checkpoint = None
         self._deterministic_eval_schedule = ()
@@ -169,6 +172,12 @@ class PositionOptMVPTrainer:
             normalized_fake_sessions,
             target_item=target_id,
             replacement_topk_ratio=config.attack.replacement_topk_ratio,
+            nonzero_action_when_possible=bool(
+                self.position_opt_config.nonzero_action_when_possible
+            ),
+        )
+        self._candidate_space_diagnostics = _build_candidate_space_diagnostics(
+            self._session_states
         )
         if self._prefix_score_enabled():
             self._session_states = self._build_prefix_scored_session_states(target_item=target_id)
@@ -473,6 +482,11 @@ class PositionOptMVPTrainer:
             "final_selected_positions": [asdict(result) for result in final_positions],
             "final_poisoned_session_count": int(len(final_sessions)),
             "target_item": target_id,
+            "nonzero_action_when_possible": bool(
+                self.position_opt_config.nonzero_action_when_possible
+            ),
+            "candidate_space_diagnostics": self._candidate_space_diagnostics_payload(),
+            "final_position_diagnostics": _build_final_position_diagnostics(final_positions),
             "policy_representation": "shared_contextual_mlp",
             "reward_baseline": self._reward_baseline,
             "reward_mode": str(self.position_opt_config.reward_mode),
@@ -582,6 +596,11 @@ class PositionOptMVPTrainer:
                 ),
                 "policy_representation": "shared_contextual_mlp",
                 "policy_update": "reinforce",
+                "nonzero_action_when_possible": bool(
+                    self.position_opt_config.nonzero_action_when_possible
+                ),
+                "candidate_space_diagnostics": self._candidate_space_diagnostics_payload(),
+                "final_position_diagnostics": _build_final_position_diagnostics(final_positions),
                 "reward_baseline_final": self._reward_baseline,
                 "reward_mode": str(self.position_opt_config.reward_mode),
                 "deterministic_eval_every": int(self.position_opt_config.deterministic_eval_every),
@@ -1070,6 +1089,11 @@ class PositionOptMVPTrainer:
             }
         return self.policy.input_metadata()
 
+    def _candidate_space_diagnostics_payload(self) -> dict[str, Any] | None:
+        if self._candidate_space_diagnostics is None:
+            return None
+        return dict(self._candidate_space_diagnostics)
+
     def _build_prefix_scored_session_states(
         self,
         *,
@@ -1165,7 +1189,20 @@ class PositionOptMVPTrainer:
                     {
                         "session_index": int(session_idx),
                         "session_length": int(session_state.metadata.session_length),
+                        "candidate_positions_before_mask": list(
+                            map(int, session_state.metadata.positions_before_mask)
+                        ),
                         "candidate_positions": list(map(int, session_state.metadata.positions)),
+                        "nonzero_action_when_possible": bool(
+                            session_state.metadata.nonzero_action_when_possible
+                        ),
+                        "pos0_removed": bool(session_state.metadata.pos0_removed),
+                        "forced_single_candidate": bool(
+                            session_state.metadata.forced_single_candidate
+                        ),
+                        "fallback_to_pos0_only": bool(
+                            session_state.metadata.fallback_to_pos0_only
+                        ),
                         "candidate_logits": logits,
                         "candidate_feature_metadata": [
                             asdict(row) for row in session_state.features.metadata
@@ -1178,6 +1215,13 @@ class PositionOptMVPTrainer:
             "target_item": self._target_item,
             "policy_representation": "shared_contextual_mlp",
             "exported_policy_source": str(exported_policy_source),
+            "nonzero_action_when_possible": bool(
+                self.position_opt_config.nonzero_action_when_possible
+            ),
+            "candidate_space_diagnostics": self._candidate_space_diagnostics_payload(),
+            "final_position_diagnostics": _build_final_position_diagnostics(
+                final_selected_positions
+            ),
             "deterministic_eval_every": int(self.position_opt_config.deterministic_eval_every),
             "deterministic_eval_include_final": bool(
                 self.position_opt_config.deterministic_eval_include_final
@@ -1224,6 +1268,7 @@ def _build_session_states(
     *,
     target_item: int,
     replacement_topk_ratio: float,
+    nonzero_action_when_possible: bool,
 ) -> tuple[list[_SessionCandidateState], PolicySpecialItemIds]:
     special_item_ids = build_policy_special_item_ids(
         infer_max_item_id(fake_sessions, target_item=target_item)
@@ -1231,11 +1276,25 @@ def _build_session_states(
     session_states: list[_SessionCandidateState] = []
     for session in fake_sessions:
         session_list = list(session)
-        candidate_positions = build_candidate_positions(session_list, replacement_topk_ratio)
+        candidate_build_result = build_candidate_position_result(
+            session_list,
+            replacement_topk_ratio,
+            nonzero_action_when_possible=nonzero_action_when_possible,
+        )
+        candidate_positions = list(candidate_build_result.positions)
         metadata = CandidateMetadata(
             session_length=len(session_list),
             replacement_topk_ratio=float(replacement_topk_ratio),
+            positions_before_mask=tuple(
+                int(position) for position in candidate_build_result.positions_before_mask
+            ),
             positions=tuple(int(position) for position in candidate_positions),
+            nonzero_action_when_possible=bool(
+                candidate_build_result.nonzero_action_when_possible
+            ),
+            pos0_removed=bool(candidate_build_result.pos0_removed),
+            forced_single_candidate=bool(candidate_build_result.forced_single_candidate),
+            fallback_to_pos0_only=bool(candidate_build_result.fallback_to_pos0_only),
         )
         features = build_session_candidate_features(
             session_list,
@@ -1365,6 +1424,119 @@ def _selected_position_pct(
         return 0.0
     match_count = sum(1 for position in selected_positions if int(position) <= int(max_position))
     return float(match_count) / float(len(selected_positions)) * 100.0
+
+
+def _build_candidate_space_diagnostics(
+    session_states: Sequence[_SessionCandidateState],
+) -> dict[str, Any]:
+    total_session_count = int(len(session_states))
+    if total_session_count == 0:
+        return {
+            "total_session_count": 0,
+            "pos0_removed_session_count": 0,
+            "pos0_removed_pct": 0.0,
+            "forced_single_candidate_count": 0,
+            "forced_single_candidate_pct": 0.0,
+            "fallback_to_pos0_only_count": 0,
+            "fallback_to_pos0_only_pct": 0.0,
+            "mean_candidate_count_before_mask": 0.0,
+            "mean_candidate_count_after_mask": 0.0,
+            "min_candidate_count_after_mask": 0,
+            "max_candidate_count_after_mask": 0,
+        }
+
+    before_counts = [
+        int(len(session_state.metadata.positions_before_mask))
+        for session_state in session_states
+    ]
+    after_counts = [
+        int(len(session_state.metadata.positions))
+        for session_state in session_states
+    ]
+    pos0_removed_session_count = sum(
+        1 for session_state in session_states if bool(session_state.metadata.pos0_removed)
+    )
+    forced_single_candidate_count = sum(
+        1
+        for session_state in session_states
+        if bool(session_state.metadata.forced_single_candidate)
+    )
+    fallback_to_pos0_only_count = sum(
+        1
+        for session_state in session_states
+        if bool(session_state.metadata.fallback_to_pos0_only)
+    )
+    return {
+        "total_session_count": total_session_count,
+        "pos0_removed_session_count": int(pos0_removed_session_count),
+        "pos0_removed_pct": (
+            float(pos0_removed_session_count) / float(total_session_count) * 100.0
+        ),
+        "forced_single_candidate_count": int(forced_single_candidate_count),
+        "forced_single_candidate_pct": (
+            float(forced_single_candidate_count) / float(total_session_count) * 100.0
+        ),
+        "fallback_to_pos0_only_count": int(fallback_to_pos0_only_count),
+        "fallback_to_pos0_only_pct": (
+            float(fallback_to_pos0_only_count) / float(total_session_count) * 100.0
+        ),
+        "mean_candidate_count_before_mask": (
+            float(sum(before_counts)) / float(total_session_count)
+        ),
+        "mean_candidate_count_after_mask": (
+            float(sum(after_counts)) / float(total_session_count)
+        ),
+        "min_candidate_count_after_mask": int(min(after_counts)),
+        "max_candidate_count_after_mask": int(max(after_counts)),
+    }
+
+
+def _build_final_position_diagnostics(
+    selected_positions: Sequence[SelectedPositionResult] | Sequence[int],
+) -> dict[str, Any]:
+    normalized_positions: list[int] = []
+    for value in selected_positions:
+        if isinstance(value, SelectedPositionResult):
+            normalized_positions.append(int(value.position))
+        else:
+            normalized_positions.append(int(value))
+
+    total_count = int(len(normalized_positions))
+    if total_count == 0:
+        return {
+            "final_pos0_pct": 0.0,
+            "final_pos1_pct": 0.0,
+            "final_pos_leq_2_pct": 0.0,
+            "dominant_position": None,
+            "top5_positions": [],
+        }
+
+    counts = Counter(normalized_positions)
+    top5_positions = [
+        {
+            "position": int(position),
+            "count": int(count),
+            "pct": float(count) / float(total_count) * 100.0,
+        }
+        for position, count in sorted(
+            counts.items(),
+            key=lambda item: (-int(item[1]), int(item[0])),
+        )[:5]
+    ]
+    dominant_position = (
+        None
+        if not top5_positions
+        else int(top5_positions[0]["position"])
+    )
+    return {
+        "final_pos0_pct": _selected_position_pct(normalized_positions, max_position=0),
+        "final_pos1_pct": (
+            float(counts.get(1, 0)) / float(total_count) * 100.0
+        ),
+        "final_pos_leq_2_pct": _selected_position_pct(normalized_positions, max_position=2),
+        "dominant_position": dominant_position,
+        "top5_positions": top5_positions,
+    }
 
 
 def _build_policy_loss(

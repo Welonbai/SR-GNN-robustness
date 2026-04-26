@@ -1,0 +1,60 @@
+# Example manifest for analysis.utils.run_bundle_loader.
+# Replace only methods.*.run_root when you want to point analysis at different completed runs.
+# The loader derives summary_current.json, resolved_config.json, artifact_manifest.json,
+# key_payloads.json, run_coverage.json, and target-level artifact paths from each run_root.
+#
+# Validation command:
+# python -m analysis.utils.run_bundle_loader `
+#   --config analysis/configs/diagnosis/diginetica_run_bundle_example.yaml `
+#   --output-json analysis/diagnosis_outputs/diginetica_run_bundle_example/resolved_manifest.json
+
+report_id: diginetica_run_bundle_example
+dataset: diginetica
+output_dir: analysis/diagnosis_outputs/diginetica_run_bundle_example
+
+targets:
+  expected: [11103, 39588, 5334]
+
+victims:
+  expected: [srgnn, miasrec, tron]
+
+methods:
+  clean:
+    label: Clean
+    run_root: outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757
+
+  prefix_r1:
+    label: Prefix-NZ@1.0
+    attack_method: prefix_nonzero_when_possible
+    run_root: outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27
+
+  sp_nz:
+    label: SharedPolicy-local_context-NZ@1.0
+    attack_method: position_opt_shared_policy
+    run_root: outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52
+
+  # Optional comparison methods:
+  prefix_r02:
+    label: Prefix-NZ@0.2
+    attack_method: prefix_nonzero_when_possible
+    run_root: outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6
+
+  sp:
+    label: SharedPolicy-local_context@1.0
+    attack_method: position_opt_shared_policy
+    run_root: outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f
+
+  mvp:
+    label: PosOptMVP@1.0
+    attack_method: position_opt_mvp
+    run_root: outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46
+
+  dpsbr:
+    label: DPSBR-random
+    attack_method: dpsbr
+    run_root: outputs/runs/diginetica/attack_dpsbr/run_group_7db577fb2e
+
+notes:
+  usage: Fill run_root for each method you want included in a future diagnosis bundle.
+  expected_targets_semantics: expected targets must match the prefix of each run's targets_order.
+  expected_victims_semantics: expected victims must be present in each run's run_coverage.json.

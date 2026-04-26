@@ -43,6 +43,25 @@ python analysis/pipeline/report_table_renderer.py `
   --config analysis/configs/render/attack_vs_victim_metrics_split_by_target_item.yaml
 ```
 
+### 1.5 Resolve Diagnosis Run Bundles
+
+Use this when you already know the completed `run_root` for each method and want one
+sanity-checked manifest that points at the fixed artifact layout under each run group.
+
+```powershell
+python -m analysis.utils.run_bundle_loader `
+  --config analysis/configs/diagnosis/diginetica_run_bundle_example.yaml `
+  --output-json analysis/diagnosis_outputs/diginetica_run_bundle_example/resolved_manifest.json
+```
+
+Fill paths here:
+
+- `analysis/configs/diagnosis/diginetica_run_bundle_example.yaml`
+- replace only `methods.*.run_root` for the completed runs you want to compare
+- the loader derives sibling artifacts like `summary_current.json`, `resolved_config.json`,
+  `artifact_manifest.json`, `key_payloads.json`, `run_coverage.json`, and target-level
+  artifacts under `targets/<target_item>/...`
+
 ## 2. Inputs and Trust Model
 
 This pipeline now assumes the appendable run-group architecture:

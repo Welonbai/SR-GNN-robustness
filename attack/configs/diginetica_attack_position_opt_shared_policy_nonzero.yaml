@@ -1,5 +1,5 @@
 experiment:
-  name: attack_prefix_nonzero_when_possible_ratio1
+  name: attack_position_opt_shared_policy_nonzero
 
 data:
   dataset_name: diginetica
@@ -22,6 +22,24 @@ attack:
   size: 0.01
   fake_session_generation_topk: 100
   replacement_topk_ratio: 1.0
+  position_opt:
+    clean_surrogate_checkpoint: outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt
+    outer_steps: 30
+    policy_lr: 0.01
+    policy_feature_set: local_context
+    nonzero_action_when_possible: true
+    fine_tune_steps: 20
+    validation_subset_size: null
+    reward_baseline_momentum: 0.9
+    reward_mode: poisoned_target_utility
+    entropy_coef: 0.0
+    enable_gt_penalty: false
+    gt_penalty_weight: 0.0
+    gt_tolerance: 0.0
+    final_selection: argmax
+    deterministic_eval_every: 0
+    deterministic_eval_include_final: true
+    final_policy_selection: last
   poison_model:
     name: srgnn
     params:

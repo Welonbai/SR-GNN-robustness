@@ -79,6 +79,7 @@ class PositionOptConfig:
     policy_embedding_dim: int = 16
     policy_hidden_dim: int = 32
     policy_feature_set: str = "local_context"
+    nonzero_action_when_possible: bool = False
     fine_tune_steps: int = 20
     validation_subset_size: int | None = None
     reward_baseline_momentum: float = 0.9
@@ -143,6 +144,16 @@ class PositionOptConfig:
                 f"{allowed_feature_sets}."
             )
         object.__setattr__(self, "policy_feature_set", policy_feature_set)
+
+        nonzero_action_when_possible = _as_bool(
+            self.nonzero_action_when_possible,
+            "attack.position_opt.nonzero_action_when_possible",
+        )
+        object.__setattr__(
+            self,
+            "nonzero_action_when_possible",
+            nonzero_action_when_possible,
+        )
 
         fine_tune_steps = _as_int(
             self.fine_tune_steps,
@@ -707,6 +718,11 @@ def _normalize_position_opt_config(value: Any, context: str) -> dict[str, Any]:
         payload["policy_feature_set"] = _as_str(
             mapping["policy_feature_set"],
             f"{context}.policy_feature_set",
+        )
+    if "nonzero_action_when_possible" in mapping:
+        payload["nonzero_action_when_possible"] = _as_bool(
+            mapping["nonzero_action_when_possible"],
+            f"{context}.nonzero_action_when_possible",
         )
     if "fine_tune_steps" in mapping:
         payload["fine_tune_steps"] = _as_int(

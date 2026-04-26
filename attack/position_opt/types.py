@@ -12,7 +12,12 @@ from attack.common.config import PositionOptConfig
 class CandidateMetadata:
     session_length: int
     replacement_topk_ratio: float
+    positions_before_mask: tuple[int, ...]
     positions: tuple[int, ...]
+    nonzero_action_when_possible: bool = False
+    pos0_removed: bool = False
+    forced_single_candidate: bool = False
+    fallback_to_pos0_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +102,8 @@ def position_opt_identity_payload(config: PositionOptConfig) -> dict[str, Any]:
     payload.pop("clean_surrogate_checkpoint", None)
     if payload.get("policy_feature_set") == "local_context":
         payload.pop("policy_feature_set", None)
+    if not bool(config.nonzero_action_when_possible):
+        payload.pop("nonzero_action_when_possible", None)
     if (
         int(config.deterministic_eval_every) == 0
         and bool(config.deterministic_eval_include_final)

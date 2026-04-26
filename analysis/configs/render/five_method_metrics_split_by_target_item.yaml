@@ -1,0 +1,75 @@
+style_name: six_method_metrics_split_by_target_item
+
+output_format: png
+
+title:
+  template: "Diginetica | target={target_item} | Clean / MVP / Prefix-R0.2 / Prefix-R1 / SP / SP-NZ"
+  align: center
+  font_size: 12
+  color: black
+
+figure:
+  width: 15.5
+  height: 6.2
+  dpi: 220
+  background_color: white
+
+table:
+  font_size: 12
+  round_digits: 6
+  signed_percent_round_digits: 3
+  text_color: black
+  show_grid: true
+  auto_shrink: false
+  wrap_text: false
+  cell_align: center
+  top_level_group_separators: true
+
+  display_alias:
+    labels:
+      attack_method: Attack
+      victim_model: Victim
+      metric_name: Metric
+      metric_scope: Scope
+      k: K
+
+    attack_method:
+      clean: Clean
+      mvp: MVP
+      prefix_r02: Prefix-R0.2
+      prefix_r1: Prefix-R1
+      sp: SP
+      sp_nz: SP-NZ
+
+    victim_model:
+      miasrec: MiaSRec
+      srgnn: SRGNN
+      tron: TRON
+
+    metric_name:
+      precision: Precision
+      recall: Recall
+      mrr: MRR
+      ndcg: NDCG
+
+    metric_scope:
+      ground_truth: GT
+      targeted: Target
+
+  value_alias: {}
+
+  dimension_value_orders:
+    attack_method:
+      - clean
+      - mvp
+      - prefix_r02
+      - prefix_r1
+      - sp
+      - sp_nz
+
+  best_value_bolding:
+    compare_along: rows
+    mode: max
+    underline_second_best: true
+    partition_by_levels:
+      - victim_model

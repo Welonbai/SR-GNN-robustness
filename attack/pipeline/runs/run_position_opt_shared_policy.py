@@ -92,6 +92,9 @@ def run_position_opt_shared_policy(
     candidate_summary = _candidate_size_summary(
         shared.template_sessions,
         replacement_topk_ratio=config.attack.replacement_topk_ratio,
+        nonzero_action_when_possible=bool(
+            resolved_position_opt_config.nonzero_action_when_possible
+        ),
     )
     print(
         f"{_SHARED_POLICY_LOG_PREFIX} "
@@ -103,7 +106,9 @@ def run_position_opt_shared_policy(
         f"candidate_sizes(min/avg/max)="
         f"{candidate_summary['min']}/{candidate_summary['avg']:.2f}/{candidate_summary['max']} "
         f"clean_surrogate_checkpoint={clean_checkpoint} "
-        f"policy_feature_set={resolved_position_opt_config.policy_feature_set}"
+        f"policy_feature_set={resolved_position_opt_config.policy_feature_set} "
+        f"nonzero_action_when_possible="
+        f"{bool(resolved_position_opt_config.nonzero_action_when_possible)}"
     )
 
     def build_poisoned(target_item: int) -> TargetPoisonOutput:
@@ -199,6 +204,15 @@ def run_position_opt_shared_policy(
             "position_opt_policy_update": "reinforce",
             "position_opt_outer_eval_source": "real_validation_sessions",
             "position_opt_reward_mode": str(trainer.position_opt_config.reward_mode),
+            "position_opt_nonzero_action_when_possible": bool(
+                trainer.position_opt_config.nonzero_action_when_possible
+            ),
+            "position_opt_candidate_space_diagnostics": trainer_result.get(
+                "candidate_space_diagnostics"
+            ),
+            "position_opt_final_position_diagnostics": trainer_result.get(
+                "final_position_diagnostics"
+            ),
             "position_opt_clean_target_utility": trainer_result.get("clean_target_utility"),
             "position_opt_deterministic_eval_every": trainer_result.get(
                 "deterministic_eval_every"
@@ -276,9 +290,16 @@ def _candidate_size_summary(
     fake_sessions: list[list[int]],
     *,
     replacement_topk_ratio: float,
+    nonzero_action_when_possible: bool,
 ) -> dict[str, float]:
     sizes = [
-        len(build_candidate_positions(list(session), replacement_topk_ratio))
+        len(
+            build_candidate_positions(
+                list(session),
+                replacement_topk_ratio,
+                nonzero_action_when_possible=nonzero_action_when_possible,
+            )
+        )
         for session in fake_sessions
     ]
     if not sizes:
@@ -315,6 +336,11 @@ def _save_position_opt_run_metadata(
         "validation_session_count": int(len(shared.canonical_dataset.valid)),
         "resolved_seeds": asdict(config.seeds),
         "replacement_topk_ratio": float(config.attack.replacement_topk_ratio),
+        "nonzero_action_when_possible": bool(
+            trainer.position_opt_config.nonzero_action_when_possible
+        ),
+        "candidate_space_diagnostics": trainer_result.get("candidate_space_diagnostics"),
+        "final_position_diagnostics": trainer_result.get("final_position_diagnostics"),
         "reward_mode": str(trainer.position_opt_config.reward_mode),
         "deterministic_eval_every": trainer_result.get("deterministic_eval_every"),
         "deterministic_eval_include_final": trainer_result.get(
