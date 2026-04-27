@@ -1,0 +1,603 @@
+{
+  "baseline_method_key": "random_nz",
+  "clean_method_key": "clean",
+  "expected_bucket_target_cohort_key": "target_cohort_8be070ab82",
+  "expected_bucket_target_prefix": [
+    11103,
+    39588,
+    5334
+  ],
+  "methods": {
+    "bucket_abs_pos2": {
+      "attack_size": 0.01,
+      "bucket_target_cohort_check": {
+        "actual_target_cohort_key": "target_cohort_8be070ab82",
+        "actual_target_prefix": [
+          11103,
+          39588,
+          5334
+        ],
+        "expected_target_cohort_key": "target_cohort_8be070ab82",
+        "expected_target_prefix": [
+          11103,
+          39588,
+          5334
+        ],
+        "passed": true
+      },
+      "canonical_split_metadata_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+      "checks_vs_random_nz": [
+        {
+          "baseline_value": "diginetica",
+          "check": "same dataset",
+          "method_value": "diginetica",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+          "check": "same canonical split",
+          "method_value": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+          "check": "same train/valid/test split identity",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "attack_shared_1c4345bfa3",
+          "check": "same fake sessions",
+          "method_value": "attack_shared_1c4345bfa3",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+          "check": "same fake session path",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+          "status": "yes"
+        },
+        {
+          "baseline_value": 0.01,
+          "check": "same poison size",
+          "method_value": 0.01,
+          "status": "yes"
+        },
+        {
+          "baseline_value": 1.0,
+          "check": "same replacement_topk_ratio",
+          "method_value": 1.0,
+          "status": "yes"
+        },
+        {
+          "baseline_value": true,
+          "check": "same nonzero_action_when_possible",
+          "method_value": true,
+          "status": "yes"
+        },
+        {
+          "baseline_value": [
+            5,
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+            50
+          ],
+          "check": "same metric K list",
+          "method_value": [
+            5,
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+            50
+          ],
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+          "check": "same clean baseline reference",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+          "status": "yes"
+        }
+      ],
+      "clean_reference": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+      "comparison_enabled_vs_random_nz": true,
+      "dataset": "diginetica",
+      "evaluation_topk": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        40,
+        50
+      ],
+      "method": "bucket_abs_pos2",
+      "nonzero_action_when_possible": true,
+      "replacement_topk_ratio": 1.0,
+      "run_group": "run_group_9e1c264b4f",
+      "run_root": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\attack_bucket_position_baselines_ratio1\\run_group_9e1c264b4f",
+      "run_type": "bucket_abs_pos2",
+      "shared_attack_artifact_key": "attack_shared_1c4345bfa3",
+      "shared_fake_sessions_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+      "shared_targets_with_random_nz": [
+        5334,
+        11103
+      ],
+      "shared_victims_with_random_nz": [
+        "srgnn",
+        "tron"
+      ],
+      "split_key": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "victims": [
+        "srgnn",
+        "tron"
+      ]
+    },
+    "bucket_abs_pos3plus": {
+      "attack_size": 0.01,
+      "bucket_target_cohort_check": {
+        "actual_target_cohort_key": "target_cohort_8be070ab82",
+        "actual_target_prefix": [
+          11103,
+          39588,
+          5334
+        ],
+        "expected_target_cohort_key": "target_cohort_8be070ab82",
+        "expected_target_prefix": [
+          11103,
+          39588,
+          5334
+        ],
+        "passed": true
+      },
+      "canonical_split_metadata_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+      "checks_vs_random_nz": [
+        {
+          "baseline_value": "diginetica",
+          "check": "same dataset",
+          "method_value": "diginetica",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+          "check": "same canonical split",
+          "method_value": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+          "check": "same train/valid/test split identity",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "attack_shared_1c4345bfa3",
+          "check": "same fake sessions",
+          "method_value": "attack_shared_1c4345bfa3",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+          "check": "same fake session path",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+          "status": "yes"
+        },
+        {
+          "baseline_value": 0.01,
+          "check": "same poison size",
+          "method_value": 0.01,
+          "status": "yes"
+        },
+        {
+          "baseline_value": 1.0,
+          "check": "same replacement_topk_ratio",
+          "method_value": 1.0,
+          "status": "yes"
+        },
+        {
+          "baseline_value": true,
+          "check": "same nonzero_action_when_possible",
+          "method_value": true,
+          "status": "yes"
+        },
+        {
+          "baseline_value": [
+            5,
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+            50
+          ],
+          "check": "same metric K list",
+          "method_value": [
+            5,
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+            50
+          ],
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+          "check": "same clean baseline reference",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+          "status": "yes"
+        }
+      ],
+      "clean_reference": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+      "comparison_enabled_vs_random_nz": true,
+      "dataset": "diginetica",
+      "evaluation_topk": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        40,
+        50
+      ],
+      "method": "bucket_abs_pos3plus",
+      "nonzero_action_when_possible": true,
+      "replacement_topk_ratio": 1.0,
+      "run_group": "run_group_b17b2a1a0f",
+      "run_root": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\attack_bucket_position_baselines_ratio1\\run_group_b17b2a1a0f",
+      "run_type": "bucket_abs_pos3plus",
+      "shared_attack_artifact_key": "attack_shared_1c4345bfa3",
+      "shared_fake_sessions_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+      "shared_targets_with_random_nz": [
+        5334,
+        11103
+      ],
+      "shared_victims_with_random_nz": [
+        "srgnn",
+        "tron"
+      ],
+      "split_key": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "victims": [
+        "srgnn",
+        "tron"
+      ]
+    },
+    "bucket_first_nonzero": {
+      "attack_size": 0.01,
+      "bucket_target_cohort_check": {
+        "actual_target_cohort_key": "target_cohort_8be070ab82",
+        "actual_target_prefix": [
+          11103,
+          39588,
+          5334
+        ],
+        "expected_target_cohort_key": "target_cohort_8be070ab82",
+        "expected_target_prefix": [
+          11103,
+          39588,
+          5334
+        ],
+        "passed": true
+      },
+      "canonical_split_metadata_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+      "checks_vs_random_nz": [
+        {
+          "baseline_value": "diginetica",
+          "check": "same dataset",
+          "method_value": "diginetica",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+          "check": "same canonical split",
+          "method_value": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+          "check": "same train/valid/test split identity",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "attack_shared_1c4345bfa3",
+          "check": "same fake sessions",
+          "method_value": "attack_shared_1c4345bfa3",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+          "check": "same fake session path",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+          "status": "yes"
+        },
+        {
+          "baseline_value": 0.01,
+          "check": "same poison size",
+          "method_value": 0.01,
+          "status": "yes"
+        },
+        {
+          "baseline_value": 1.0,
+          "check": "same replacement_topk_ratio",
+          "method_value": 1.0,
+          "status": "yes"
+        },
+        {
+          "baseline_value": true,
+          "check": "same nonzero_action_when_possible",
+          "method_value": true,
+          "status": "yes"
+        },
+        {
+          "baseline_value": [
+            5,
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+            50
+          ],
+          "check": "same metric K list",
+          "method_value": [
+            5,
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+            50
+          ],
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+          "check": "same clean baseline reference",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+          "status": "yes"
+        }
+      ],
+      "clean_reference": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+      "comparison_enabled_vs_random_nz": true,
+      "dataset": "diginetica",
+      "evaluation_topk": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        40,
+        50
+      ],
+      "method": "bucket_first_nonzero",
+      "nonzero_action_when_possible": true,
+      "replacement_topk_ratio": 1.0,
+      "run_group": "run_group_2835ffd0b3",
+      "run_root": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\attack_bucket_position_baselines_ratio1\\run_group_2835ffd0b3",
+      "run_type": "bucket_first_nonzero",
+      "shared_attack_artifact_key": "attack_shared_1c4345bfa3",
+      "shared_fake_sessions_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+      "shared_targets_with_random_nz": [
+        5334,
+        11103
+      ],
+      "shared_victims_with_random_nz": [
+        "srgnn",
+        "tron"
+      ],
+      "split_key": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "victims": [
+        "srgnn",
+        "tron"
+      ]
+    },
+    "bucket_nonfirst_nonzero": {
+      "attack_size": 0.01,
+      "bucket_target_cohort_check": {
+        "actual_target_cohort_key": "target_cohort_8be070ab82",
+        "actual_target_prefix": [
+          11103,
+          39588,
+          5334
+        ],
+        "expected_target_cohort_key": "target_cohort_8be070ab82",
+        "expected_target_prefix": [
+          11103,
+          39588,
+          5334
+        ],
+        "passed": true
+      },
+      "canonical_split_metadata_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+      "checks_vs_random_nz": [
+        {
+          "baseline_value": "diginetica",
+          "check": "same dataset",
+          "method_value": "diginetica",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+          "check": "same canonical split",
+          "method_value": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+          "check": "same train/valid/test split identity",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "attack_shared_1c4345bfa3",
+          "check": "same fake sessions",
+          "method_value": "attack_shared_1c4345bfa3",
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+          "check": "same fake session path",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+          "status": "yes"
+        },
+        {
+          "baseline_value": 0.01,
+          "check": "same poison size",
+          "method_value": 0.01,
+          "status": "yes"
+        },
+        {
+          "baseline_value": 1.0,
+          "check": "same replacement_topk_ratio",
+          "method_value": 1.0,
+          "status": "yes"
+        },
+        {
+          "baseline_value": true,
+          "check": "same nonzero_action_when_possible",
+          "method_value": true,
+          "status": "yes"
+        },
+        {
+          "baseline_value": [
+            5,
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+            50
+          ],
+          "check": "same metric K list",
+          "method_value": [
+            5,
+            10,
+            15,
+            20,
+            25,
+            30,
+            40,
+            50
+          ],
+          "status": "yes"
+        },
+        {
+          "baseline_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+          "check": "same clean baseline reference",
+          "method_value": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+          "status": "yes"
+        }
+      ],
+      "clean_reference": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+      "comparison_enabled_vs_random_nz": true,
+      "dataset": "diginetica",
+      "evaluation_topk": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        40,
+        50
+      ],
+      "method": "bucket_nonfirst_nonzero",
+      "nonzero_action_when_possible": true,
+      "replacement_topk_ratio": 1.0,
+      "run_group": "run_group_d1875087a3",
+      "run_root": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\attack_bucket_position_baselines_ratio1\\run_group_d1875087a3",
+      "run_type": "bucket_nonfirst_nonzero",
+      "shared_attack_artifact_key": "attack_shared_1c4345bfa3",
+      "shared_fake_sessions_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+      "shared_targets_with_random_nz": [
+        5334,
+        11103
+      ],
+      "shared_victims_with_random_nz": [
+        "srgnn",
+        "tron"
+      ],
+      "split_key": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+      "target_cohort_key": "target_cohort_8be070ab82",
+      "target_items": [
+        11103,
+        39588,
+        5334
+      ],
+      "victims": [
+        "srgnn",
+        "tron"
+      ]
+    },
+    "random_nz": {
+      "attack_size": 0.01,
+      "canonical_split_metadata_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\canonical\\split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1\\metadata.json",
+      "clean_reference": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\clean_run_no_attack\\run_group_e0caef2757",
+      "dataset": "diginetica",
+      "evaluation_topk": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        30,
+        40,
+        50
+      ],
+      "method": "random_nz",
+      "nonzero_action_when_possible": true,
+      "replacement_topk_ratio": 1.0,
+      "run_group": "run_group_8679b974a1",
+      "run_root": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\runs\\diginetica\\attack_random_nonzero_when_possible_ratio1\\run_group_8679b974a1",
+      "run_type": "random_nonzero_when_possible",
+      "shared_attack_artifact_key": "attack_shared_1c4345bfa3",
+      "shared_fake_sessions_path": "D:\\code_SBR_robustness\\SR-GNN-robustness\\outputs\\shared\\diginetica\\attack\\attack_shared_1c4345bfa3\\fake_sessions.pkl",
+      "split_key": "split_diginetica_unified_trainonly1_minitems5_minsess2_testdays7_valid0p1",
+      "target_cohort_key": "target_cohort_29c4b1d2f5",
+      "target_items": [
+        5334,
+        11103
+      ],
+      "victims": [
+        "miasrec",
+        "srgnn",
+        "tron"
+      ]
+    }
+  }
+}
