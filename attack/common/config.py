@@ -275,12 +275,108 @@ class PositionOptConfig:
 
 
 @dataclass(frozen=True)
+class RankBucketCEMConfig:
+    iterations: int = 3
+    population_size: int = 8
+    elite_ratio: float = 0.25
+    initial_std: float = 1.0
+    min_std: float = 0.2
+    smoothing: float = 0.3
+    reward_metric: str | None = None
+    save_candidate_selected_positions: bool = False
+    save_final_selected_positions: bool = False
+    save_optimized_poisoned_sessions: bool = True
+    save_replay_metadata: bool = True
+
+    def __post_init__(self) -> None:
+        iterations = _as_int(self.iterations, "attack.rank_bucket_cem.iterations")
+        if iterations <= 0:
+            raise ValueError("attack.rank_bucket_cem.iterations must be positive.")
+        object.__setattr__(self, "iterations", iterations)
+
+        population_size = _as_int(
+            self.population_size,
+            "attack.rank_bucket_cem.population_size",
+        )
+        if population_size <= 0:
+            raise ValueError("attack.rank_bucket_cem.population_size must be positive.")
+        object.__setattr__(self, "population_size", population_size)
+
+        elite_ratio = _as_float(self.elite_ratio, "attack.rank_bucket_cem.elite_ratio")
+        if not 0.0 < elite_ratio <= 1.0:
+            raise ValueError("attack.rank_bucket_cem.elite_ratio must be in (0, 1].")
+        object.__setattr__(self, "elite_ratio", elite_ratio)
+
+        initial_std = _as_float(self.initial_std, "attack.rank_bucket_cem.initial_std")
+        if initial_std <= 0.0:
+            raise ValueError("attack.rank_bucket_cem.initial_std must be positive.")
+        object.__setattr__(self, "initial_std", initial_std)
+
+        min_std = _as_float(self.min_std, "attack.rank_bucket_cem.min_std")
+        if min_std < 0.0:
+            raise ValueError("attack.rank_bucket_cem.min_std must be non-negative.")
+        object.__setattr__(self, "min_std", min_std)
+
+        smoothing = _as_float(self.smoothing, "attack.rank_bucket_cem.smoothing")
+        if not 0.0 <= smoothing <= 1.0:
+            raise ValueError("attack.rank_bucket_cem.smoothing must be in [0, 1].")
+        object.__setattr__(self, "smoothing", smoothing)
+
+        reward_metric = self.reward_metric
+        if reward_metric is not None:
+            reward_metric = _as_str(
+                reward_metric,
+                "attack.rank_bucket_cem.reward_metric",
+            ).strip()
+            if not reward_metric:
+                raise ValueError(
+                    "attack.rank_bucket_cem.reward_metric must be a non-empty string "
+                    "when provided."
+                )
+        object.__setattr__(self, "reward_metric", reward_metric)
+
+        object.__setattr__(
+            self,
+            "save_candidate_selected_positions",
+            _as_bool(
+                self.save_candidate_selected_positions,
+                "attack.rank_bucket_cem.save_candidate_selected_positions",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "save_final_selected_positions",
+            _as_bool(
+                self.save_final_selected_positions,
+                "attack.rank_bucket_cem.save_final_selected_positions",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "save_optimized_poisoned_sessions",
+            _as_bool(
+                self.save_optimized_poisoned_sessions,
+                "attack.rank_bucket_cem.save_optimized_poisoned_sessions",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "save_replay_metadata",
+            _as_bool(
+                self.save_replay_metadata,
+                "attack.rank_bucket_cem.save_replay_metadata",
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class AttackConfig:
     size: float
     fake_session_generation_topk: int
     replacement_topk_ratio: float
     poison_model: PoisonModelConfig
     position_opt: PositionOptConfig | None = None
+    rank_bucket_cem: RankBucketCEMConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -669,6 +765,14 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
             if "position_opt" in attack and attack["position_opt"] is not None
             else None
         ),
+        "rank_bucket_cem": (
+            _normalize_rank_bucket_cem_config(
+                attack["rank_bucket_cem"],
+                "attack.rank_bucket_cem",
+            )
+            if "rank_bucket_cem" in attack and attack["rank_bucket_cem"] is not None
+            else None
+        ),
     }
 
     if not 0.0 < normalized["size"] <= 1.0:
@@ -788,6 +892,75 @@ def _normalize_position_opt_config(value: Any, context: str) -> dict[str, Any]:
         )
 
     return _primitive_from_obj(PositionOptConfig(**payload))
+
+
+def _normalize_rank_bucket_cem_config(value: Any, context: str) -> dict[str, Any]:
+    mapping = _as_mapping(value, context)
+    allowed_fields = {field.name for field in fields(RankBucketCEMConfig)}
+    unknown = set(mapping) - allowed_fields
+    if unknown:
+        raise ValueError(
+            "Unknown rank_bucket_cem config keys: "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+
+    payload: dict[str, Any] = {}
+    if "iterations" in mapping:
+        payload["iterations"] = _as_int(mapping["iterations"], f"{context}.iterations")
+    if "population_size" in mapping:
+        payload["population_size"] = _as_int(
+            mapping["population_size"],
+            f"{context}.population_size",
+        )
+    if "elite_ratio" in mapping:
+        payload["elite_ratio"] = _as_float(
+            mapping["elite_ratio"],
+            f"{context}.elite_ratio",
+        )
+    if "initial_std" in mapping:
+        payload["initial_std"] = _as_float(
+            mapping["initial_std"],
+            f"{context}.initial_std",
+        )
+    if "min_std" in mapping:
+        payload["min_std"] = _as_float(
+            mapping["min_std"],
+            f"{context}.min_std",
+        )
+    if "smoothing" in mapping:
+        payload["smoothing"] = _as_float(
+            mapping["smoothing"],
+            f"{context}.smoothing",
+        )
+    if "reward_metric" in mapping:
+        raw_reward_metric = mapping["reward_metric"]
+        payload["reward_metric"] = (
+            None
+            if raw_reward_metric is None
+            else _as_str(raw_reward_metric, f"{context}.reward_metric")
+        )
+    if "save_candidate_selected_positions" in mapping:
+        payload["save_candidate_selected_positions"] = _as_bool(
+            mapping["save_candidate_selected_positions"],
+            f"{context}.save_candidate_selected_positions",
+        )
+    if "save_final_selected_positions" in mapping:
+        payload["save_final_selected_positions"] = _as_bool(
+            mapping["save_final_selected_positions"],
+            f"{context}.save_final_selected_positions",
+        )
+    if "save_optimized_poisoned_sessions" in mapping:
+        payload["save_optimized_poisoned_sessions"] = _as_bool(
+            mapping["save_optimized_poisoned_sessions"],
+            f"{context}.save_optimized_poisoned_sessions",
+        )
+    if "save_replay_metadata" in mapping:
+        payload["save_replay_metadata"] = _as_bool(
+            mapping["save_replay_metadata"],
+            f"{context}.save_replay_metadata",
+        )
+
+    return _primitive_from_obj(RankBucketCEMConfig(**payload))
 
 
 def _normalize_poison_model_params(
@@ -1202,6 +1375,18 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
                 if attack.get("position_opt") is not None
                 else None
             ),
+            rank_bucket_cem=(
+                RankBucketCEMConfig(
+                    **dict(
+                        _as_mapping(
+                            attack["rank_bucket_cem"],
+                            "attack.rank_bucket_cem",
+                        )
+                    )
+                )
+                if attack.get("rank_bucket_cem") is not None
+                else None
+            ),
         ),
         targets=TargetsConfig(
             mode=_as_str(_require(targets, "mode", "targets"), "targets.mode"),
@@ -1262,6 +1447,7 @@ __all__ = [
     "CanonicalSplitConfig",
     "Config",
     "PositionOptConfig",
+    "RankBucketCEMConfig",
     "load_config",
     "normalize_config_mapping",
     "parse_config",

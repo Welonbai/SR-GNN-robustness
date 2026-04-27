@@ -10,9 +10,11 @@ from .config import Config
 
 POSITION_OPT_RUN_TYPE = "position_opt_mvp"
 POSITION_OPT_SHARED_POLICY_RUN_TYPE = "position_opt_shared_policy"
+POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE = "rank_bucket_cem"
 _POSITION_OPT_RUNTIME_RUN_TYPES = {
     POSITION_OPT_RUN_TYPE,
     POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+    POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
 }
 TARGET_COHORT_SELECTION_POLICY_VERSION = "appendable_target_cohort_v1"
 
@@ -675,6 +677,7 @@ def run_artifact_paths(
 
 __all__ = [
     "POSITION_OPT_RUN_TYPE",
+    "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
     "attack_key",
     "attack_key_payload",
