@@ -1,0 +1,92 @@
+experiment:
+  name: attack_rank_bucket_cem_mean_ft100_srgnn_target5334
+
+data:
+  dataset_name: diginetica
+  split_protocol: unified
+  poison_train_only: true
+  canonical_split:
+    min_item_count: 5
+    min_session_len: 2
+    valid_ratio: 0.1
+    test_days: 7
+
+seeds:
+  fake_session_seed: 20260405
+  target_selection_seed: 20260405
+  position_opt_seed: 20260405
+  surrogate_train_seed: 20260405
+  victim_train_seed: 20260405
+
+attack:
+  size: 0.01
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 1.0
+  position_opt:
+    clean_surrogate_checkpoint: outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt
+    nonzero_action_when_possible: true
+    fine_tune_steps: 100
+    validation_subset_size: null
+    reward_mode: poisoned_target_utility
+    enable_gt_penalty: false
+    gt_penalty_weight: 0.0
+    gt_tolerance: 0.0
+  rank_bucket_cem:
+    iterations: 3
+    population_size: 8
+    elite_ratio: 0.25
+    initial_std: 1.0
+    min_std: 0.2
+    smoothing: 0.3
+    reward_metric: null
+    save_candidate_selected_positions: false
+    save_final_selected_positions: false
+    save_optimized_poisoned_sessions: true
+    save_replay_metadata: true
+  poison_model:
+    name: srgnn
+    params:
+      train:
+        epochs: 8
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-5
+        step: 1
+        patience: 10
+        nonhybrid: false
+
+targets:
+  mode: explicit_list
+  explicit_list: [5334]
+  bucket: popular
+  count: 1
+  reuse_saved_targets: true
+
+victims:
+  enabled: [srgnn]
+  params:
+    srgnn:
+      train:
+        epochs: 8
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-5
+        step: 1
+        patience: 10
+        nonhybrid: false
+
+evaluation:
+  topk: [5, 10, 15, 20, 25, 30, 40, 50]
+  targeted_metrics: [precision, recall, mrr, ndcg]
+  ground_truth_metrics: [precision, recall, mrr, ndcg]
+
+artifacts:
+  root: outputs
+  shared_dir: shared
+  runs_dir: runs
