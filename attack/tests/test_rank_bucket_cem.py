@@ -262,7 +262,7 @@ def test_rank_bucket_cem_config_loads_with_clean_defaults() -> None:
     assert config.attack.rank_bucket_cem.save_final_selected_positions is False
     assert config.attack.rank_bucket_cem.save_optimized_poisoned_sessions is True
     assert config.attack.rank_bucket_cem.save_replay_metadata is True
-    assert config.victims.enabled == ("srgnn",)
+    assert config.victims.enabled == ("srgnn", "miasrec", "tron")
 
 
 def test_availability_groups_and_summary_match_expected_candidate_shapes() -> None:

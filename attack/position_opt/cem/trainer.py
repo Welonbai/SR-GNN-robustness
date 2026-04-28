@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import asdict
 from pathlib import Path
@@ -51,6 +52,7 @@ from .rank_policy import (
 RANK_BUCKET_CEM_METHOD_NAME = "rank_bucket_cem"
 RANK_BUCKET_CEM_IMPLEMENTATION_TAG = "rank_bucket_cem_v1"
 _SUPPORTED_REWARD_MODES = frozenset(("poisoned_target_utility", "delta_target_utility"))
+_LOG_PREFIX = "[rank-bucket-cem]"
 
 
 class RankBucketCEMTrainer:
@@ -111,6 +113,7 @@ class RankBucketCEMTrainer:
 
         clean_sessions, clean_labels = _resolve_clean_pairs(shared_artifacts)
         validation_sessions, validation_labels = _resolve_validation_pairs(shared_artifacts)
+        validation_total_size = len(validation_sessions)
         validation_subset_seed = (
             None
             if self.position_opt_config.validation_subset_size is None
@@ -148,6 +151,22 @@ class RankBucketCEMTrainer:
             bool(self.position_opt_config.nonzero_action_when_possible),
         )
         self._availability_summary = build_availability_summary(self._rank_candidate_states)
+        _print_cem_start(
+            target_item=target_id,
+            config=self.rank_bucket_cem_config,
+            position_opt_config=self.position_opt_config,
+            validation_subset_effective_size=self._validation_subset_effective_size,
+            validation_subset_total_size=validation_total_size,
+            reward_metric_name=self._selected_reward_metric_name(),
+        )
+        _print_availability_summary(
+            target_item=target_id,
+            summary=self._availability_summary,
+            nonzero_action_when_possible=bool(
+                self.position_opt_config.nonzero_action_when_possible
+            ),
+            replacement_topk_ratio=float(config.attack.replacement_topk_ratio),
+        )
         self._cem_trace_rows = []
         self._cem_state_history = []
         self._best_candidate_result = None
@@ -343,6 +362,7 @@ class RankBucketCEMTrainer:
             if paths is not None:
                 write_cem_trace_jsonl(paths.cem_trace, self._cem_trace_rows)
 
+            best_iter_reward = max(float(result.reward) for result in candidate_results)
             elite_count = _elite_count(
                 len(candidate_results),
                 float(self.rank_bucket_cem_config.elite_ratio),
@@ -368,6 +388,20 @@ class RankBucketCEMTrainer:
             )
             if paths is not None:
                 save_cem_state_history(paths.cem_state_history, self._cem_state_history_payload())
+            _print_iteration_summary(
+                target_item=target_id,
+                iteration=iteration,
+                total_iterations=int(self.rank_bucket_cem_config.iterations),
+                best_iter_reward=best_iter_reward,
+                best_so_far=(
+                    None
+                    if self._best_candidate_result is None
+                    else float(self._best_candidate_result.reward)
+                ),
+                elite_count=elite_count,
+                population_size=len(candidate_results),
+                state=state,
+            )
 
         if self._best_candidate_result is None:
             raise RuntimeError("RankBucket-CEM did not evaluate any candidates.")
@@ -838,6 +872,94 @@ def _remove_if_exists(path: Path | None) -> None:
     if path is None or not path.exists():
         return
     path.unlink()
+
+
+def _print_cem_start(
+    *,
+    target_item: int,
+    config: RankBucketCEMConfig,
+    position_opt_config: PositionOptConfig,
+    validation_subset_effective_size: int | None,
+    validation_subset_total_size: int,
+    reward_metric_name: str,
+) -> None:
+    validation_label = (
+        "full"
+        if validation_subset_effective_size is None
+        or int(validation_subset_effective_size) >= int(validation_subset_total_size)
+        else f"{int(validation_subset_effective_size)}/{int(validation_subset_total_size)}"
+    )
+    print(
+        f"{_LOG_PREFIX} target={int(target_item)} start CEM: "
+        f"iterations={int(config.iterations)} "
+        f"population_size={int(config.population_size)} "
+        f"elite_ratio={float(config.elite_ratio):g} "
+        f"fine_tune_steps={int(position_opt_config.fine_tune_steps)} "
+        f"validation_subset={validation_label} "
+        f"reward={reward_metric_name} "
+        f"mode={position_opt_config.reward_mode}"
+    )
+
+
+def _print_availability_summary(
+    *,
+    target_item: int,
+    summary: Mapping[str, Any],
+    nonzero_action_when_possible: bool,
+    replacement_topk_ratio: float,
+) -> None:
+    print(
+        f"{_LOG_PREFIX} target={int(target_item)} candidates: "
+        f"fake_sessions={int(summary.get('total_fake_sessions', 0))} "
+        f"G1={_count_pct(summary, 'G1')} "
+        f"G2={_count_pct(summary, 'G2')} "
+        f"G3={_count_pct(summary, 'G3')} "
+        f"nonzero_action={bool(nonzero_action_when_possible)} "
+        f"replacement_topk_ratio={float(replacement_topk_ratio):g}"
+    )
+
+
+def _print_iteration_summary(
+    *,
+    target_item: int,
+    iteration: int,
+    total_iterations: int,
+    best_iter_reward: float,
+    best_so_far: float | None,
+    elite_count: int,
+    population_size: int,
+    state: CEMState,
+) -> None:
+    pi_g2 = _softmax_values(state.mean_g2)
+    pi_g3 = _softmax_values(state.mean_g3)
+    print(
+        f"{_LOG_PREFIX} target={int(target_item)} "
+        f"iter={int(iteration) + 1}/{int(total_iterations)} "
+        f"best_iter_reward={float(best_iter_reward):.6g} "
+        f"best_so_far={_format_optional_reward(best_so_far)} "
+        f"elite={int(elite_count)}/{int(population_size)} "
+        f"pi_g2=(rank1={pi_g2[0]:.2f}, rank2={pi_g2[1]:.2f}) "
+        f"pi_g3=(rank1={pi_g3[0]:.2f}, rank2={pi_g3[1]:.2f}, tail={pi_g3[2]:.2f})"
+    )
+
+
+def _count_pct(summary: Mapping[str, Any], prefix: str) -> str:
+    count = int(summary.get(f"{prefix}_count", 0))
+    pct = float(summary.get(f"{prefix}_pct", 0.0))
+    return f"{count}({pct:.2f}%)"
+
+
+def _format_optional_reward(value: float | None) -> str:
+    return "none" if value is None else f"{float(value):.6g}"
+
+
+def _softmax_values(values: Sequence[float]) -> list[float]:
+    if not values:
+        raise ValueError("values must not be empty.")
+    max_value = max(float(value) for value in values)
+    exp_values = [math.exp(float(value) - max_value) for value in values]
+    total = sum(exp_values)
+    return [float(value / total) for value in exp_values]
 
 
 __all__ = [

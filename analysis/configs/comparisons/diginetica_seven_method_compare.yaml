@@ -1,0 +1,10 @@
+comparison_id: diginetica_seven_method_compare
+
+runs:
+  - diginetica_clean_seven_method_compare
+  - diginetica_mvp_seven_method_compare
+  - diginetica_prefix_r02_seven_method_compare
+  - diginetica_prefix_r1_seven_method_compare
+  - diginetica_sp_seven_method_compare
+  - diginetica_sp_nz_seven_method_compare
+  - diginetica_cem_seven_method_compare

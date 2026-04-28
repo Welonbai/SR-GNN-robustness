@@ -121,7 +121,7 @@ def forward(model, i, data):
     return targets, model.compute_scores(seq_hidden, mask)
 
 
-def train_test(model, train_data, test_data):
+def train_test(model, train_data, test_data, log_batches=True):
     print('start training: ', datetime.datetime.now())
     model.train()
     total_loss = 0.0
@@ -134,7 +134,7 @@ def train_test(model, train_data, test_data):
         loss.backward()
         model.optimizer.step()
         total_loss += loss
-        if j % int(len(slices) / 5 + 1) == 0:
+        if log_batches and j % int(len(slices) / 5 + 1) == 0:
             print('[%d/%d] Loss: %.4f' % (j, len(slices), loss.item()))
     print('\tLoss:\t%.3f' % total_loss)
     avg_loss = float(total_loss.item()) / max(1, len(slices))

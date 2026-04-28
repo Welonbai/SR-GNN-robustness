@@ -1,0 +1,36 @@
+defaults:
+  slice_policy: largest_complete_prefix
+  requested_victims:
+    - srgnn
+    - miasrec
+    - tron
+  requested_target_count: 3
+
+jobs:
+  - summary: outputs/runs/diginetica/clean_run_no_attack/run_group_e0caef2757/summary_current.json
+    output_name: diginetica_clean_seven_method_compare
+    attack_method_override: clean
+
+  - summary: outputs/runs/diginetica/attack_position_optimization_reward_mvp_ratio1/run_group_3becc51c46/summary_current.json
+    output_name: diginetica_mvp_seven_method_compare
+    attack_method_override: mvp
+
+  - summary: outputs/runs/diginetica/attack_prefix_nonzero_when_possible/run_group_14818d6dd6/summary_current.json
+    output_name: diginetica_prefix_r02_seven_method_compare
+    attack_method_override: prefix_r02
+
+  - summary: outputs/runs/diginetica/attack_prefix_nonzero_when_possible_ratio1/run_group_122a28bd27/summary_current.json
+    output_name: diginetica_prefix_r1_seven_method_compare
+    attack_method_override: prefix_r1
+
+  - summary: outputs/runs/diginetica/attack_position_opt_shared_policy_ratio1/run_group_c1835ab73f/summary_current.json
+    output_name: diginetica_sp_seven_method_compare
+    attack_method_override: sp
+
+  - summary: outputs/runs/diginetica/attack_position_opt_shared_policy_nonzero/run_group_0bce31ef52/summary_current.json
+    output_name: diginetica_sp_nz_seven_method_compare
+    attack_method_override: sp_nz
+
+  - summary: outputs/runs/diginetica/attack_rank_bucket_cem/run_group_cadb73910d/summary_current.json
+    output_name: diginetica_cem_seven_method_compare
+    attack_method_override: cem

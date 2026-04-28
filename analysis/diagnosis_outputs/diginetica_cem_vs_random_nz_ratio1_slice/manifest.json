@@ -1,0 +1,17 @@
+{
+  "random_nz_run_root": "outputs\\runs\\diginetica\\attack_random_nonzero_when_possible_ratio1\\run_group_8679b974a1",
+  "cem_run_root": "outputs\\runs\\diginetica\\attack_rank_bucket_cem\\run_group_cadb73910d",
+  "overlap_targets": [
+    5334,
+    11103
+  ],
+  "overlap_victims": [
+    "miasrec",
+    "srgnn",
+    "tron"
+  ],
+  "csv": "analysis\\diagnosis_outputs\\diginetica_cem_vs_random_nz_ratio1_slice\\cem_vs_random_nz_ratio1_slice_metrics.csv",
+  "markdown": "analysis\\diagnosis_outputs\\diginetica_cem_vs_random_nz_ratio1_slice\\cem_vs_random_nz_ratio1_slice_metrics.md",
+  "row_count": 384,
+  "compact_markdown_row_count": 36
+}

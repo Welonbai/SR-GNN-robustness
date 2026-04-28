@@ -1,0 +1,17 @@
+{
+  "cem_run_root": "outputs/runs/diginetica/attack_rank_bucket_cem/run_group_cadb73910d",
+  "clean_surrogate_checkpoint": "outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt",
+  "config": "attack/configs/diginetica_attack_rank_bucket_cem.yaml",
+  "final_metric_overlap": "analysis/diagnosis_outputs/diginetica_cem_vs_random_nz_surrogate_reward/final_metric_overlap.csv",
+  "final_metric_rows": 384,
+  "pairwise_rows": 2,
+  "random_nz_run_root": "outputs/runs/diginetica/attack_random_nonzero_when_possible_ratio1/run_group_8679b974a1",
+  "report": "analysis/diagnosis_outputs/diginetica_cem_vs_random_nz_surrogate_reward/report.md",
+  "surrogate_reward_comparison": "analysis/diagnosis_outputs/diginetica_cem_vs_random_nz_surrogate_reward/surrogate_reward_comparison.csv",
+  "surrogate_reward_pairwise": "analysis/diagnosis_outputs/diginetica_cem_vs_random_nz_surrogate_reward/surrogate_reward_pairwise.csv",
+  "surrogate_reward_rows": 6,
+  "target_items": [
+    5334,
+    11103
+  ]
+}

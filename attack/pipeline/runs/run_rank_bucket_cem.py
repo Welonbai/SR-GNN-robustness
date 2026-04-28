@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, replace
+import pickle
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -10,6 +11,7 @@ if __package__ is None or __package__ == "":
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from attack.common.artifact_io import load_json
 from attack.common.config import Config, load_config
 from attack.common.paths import (
     POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
@@ -123,6 +125,20 @@ def run_rank_bucket_cem(
                 attack_identity_context=attack_identity_context,
             )
         )
+        cached_output = _load_cached_rank_bucket_cem_target_output(
+            artifact_paths=artifact_paths,
+            shared=shared,
+            target_item=target_item,
+            rank_bucket_cem_config=resolved_rank_bucket_cem_config,
+        )
+        if cached_output is not None:
+            print(
+                f"{_LOG_PREFIX} "
+                f"target={int(target_item)} reusing CEM artifacts from "
+                f"{artifact_paths.base_dir}"
+            )
+            return cached_output
+
         surrogate_backend = SRGNNBackend(config, base_dir=Path.cwd())
         inner_trainer = TruncatedFineTuneInnerTrainer()
         trainer = RankBucketCEMTrainer(
@@ -173,7 +189,11 @@ def run_rank_bucket_cem(
         )
         print(
             f"{_LOG_PREFIX} "
-            f"target={int(target_item)} best_reward={float(trainer_result['best_reward']):.6f} "
+            f"target={int(target_item)} done "
+            f"best_reward={float(trainer_result['best_reward']):.6g} "
+            f"best_iter={int(trainer_result['best_iteration'])} "
+            f"best_candidate={int(trainer_result['best_candidate_id'])} "
+            f"final_pos={_format_final_position_summary(trainer_result)} "
             f"artifacts={artifact_paths.base_dir}"
         )
 
@@ -259,10 +279,6 @@ def _validate_rank_bucket_cem_run_config(config: Config) -> None:
             "RankBucket-CEM currently requires "
             "attack.position_opt.nonzero_action_when_possible == true."
         )
-    if tuple(config.victims.enabled) != ("srgnn",):
-        raise ValueError(
-            "RankBucket-CEM pilot currently supports victims.enabled == [srgnn] only."
-        )
 
 
 def _validate_rank_bucket_cem_resolved_config(position_opt_config) -> None:
@@ -274,6 +290,137 @@ def _validate_rank_bucket_cem_resolved_config(position_opt_config) -> None:
             "RankBucket-CEM supports only attack.position_opt.reward_mode values "
             "'poisoned_target_utility' and 'delta_target_utility'."
         )
+
+
+def _load_cached_rank_bucket_cem_target_output(
+    *,
+    artifact_paths,
+    shared: SharedAttackArtifacts,
+    target_item: int,
+    rank_bucket_cem_config,
+) -> TargetPoisonOutput | None:
+    if not bool(rank_bucket_cem_config.save_optimized_poisoned_sessions):
+        return None
+    required_paths = (
+        artifact_paths.optimized_poisoned_sessions,
+        artifact_paths.availability_summary,
+        artifact_paths.cem_trace,
+        artifact_paths.cem_state_history,
+        artifact_paths.cem_best_policy,
+        artifact_paths.final_position_summary,
+        artifact_paths.run_metadata,
+    )
+    if any(path is None or not Path(path).exists() for path in required_paths):
+        return None
+
+    with Path(artifact_paths.optimized_poisoned_sessions).open("rb") as handle:
+        optimized_poisoned_sessions = pickle.load(handle)
+    if not isinstance(optimized_poisoned_sessions, list):
+        raise ValueError(
+            "Cached RankBucket-CEM optimized_poisoned_sessions.pkl must contain a list."
+        )
+
+    poisoned = build_poisoned_dataset(
+        shared.clean_sessions,
+        shared.clean_labels,
+        optimized_poisoned_sessions,
+    )
+    run_metadata = load_json(artifact_paths.run_metadata) or {}
+    if not isinstance(run_metadata, Mapping):
+        raise ValueError("Cached RankBucket-CEM run_metadata.json must be a JSON object.")
+    trainer_result = run_metadata.get("trainer_result", {})
+    if not isinstance(trainer_result, Mapping):
+        trainer_result = {}
+
+    metadata = _rank_bucket_cem_target_metadata_from_result(
+        artifact_paths=artifact_paths,
+        target_item=target_item,
+        trainer_result=trainer_result,
+        save_optimized_poisoned_sessions=bool(
+            rank_bucket_cem_config.save_optimized_poisoned_sessions
+        ),
+        save_final_selected_positions=bool(
+            rank_bucket_cem_config.save_final_selected_positions
+        ),
+    )
+    metadata["rank_bucket_cem_reused_artifacts"] = True
+    return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+
+
+def _rank_bucket_cem_target_metadata_from_result(
+    *,
+    artifact_paths,
+    target_item: int,
+    trainer_result: Mapping[str, Any],
+    save_optimized_poisoned_sessions: bool,
+    save_final_selected_positions: bool,
+) -> dict[str, Any]:
+    position_stats_path = artifact_paths.base_dir.parent.parent / "position_stats.json"
+    return {
+        "position_opt_method": POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+        "position_stats_path": str(position_stats_path),
+        "position_opt_clean_surrogate_checkpoint": str(
+            artifact_paths.clean_surrogate_checkpoint
+        ),
+        "position_opt_optimized_poisoned_sessions_path": (
+            str(artifact_paths.optimized_poisoned_sessions)
+            if save_optimized_poisoned_sessions
+            else None
+        ),
+        "rank_bucket_cem_artifact_dir": str(artifact_paths.base_dir),
+        "rank_bucket_cem_availability_summary_path": str(
+            artifact_paths.availability_summary
+        ),
+        "rank_bucket_cem_trace_path": str(artifact_paths.cem_trace),
+        "rank_bucket_cem_state_history_path": str(artifact_paths.cem_state_history),
+        "rank_bucket_cem_best_policy_path": str(artifact_paths.cem_best_policy),
+        "rank_bucket_cem_final_selected_positions_path": (
+            str(artifact_paths.final_selected_positions)
+            if save_final_selected_positions
+            else None
+        ),
+        "rank_bucket_cem_final_position_summary_path": str(
+            artifact_paths.final_position_summary
+        ),
+        "rank_bucket_cem_run_metadata_path": (
+            None
+            if artifact_paths.run_metadata is None
+            else str(artifact_paths.run_metadata)
+        ),
+        "rank_bucket_cem_best_reward": trainer_result.get("best_reward"),
+        "rank_bucket_cem_reward_mode": trainer_result.get("reward_mode"),
+        "rank_bucket_cem_reward_metric": trainer_result.get("reward_metric"),
+        "rank_bucket_cem_selected_reward_metric_name": trainer_result.get(
+            "selected_reward_metric_name"
+        ),
+        "rank_bucket_cem_replay_metadata": trainer_result.get("replay_metadata"),
+        "rank_bucket_cem_availability_summary": trainer_result.get(
+            "availability_summary"
+        ),
+        "rank_bucket_cem_final_position_summary": trainer_result.get(
+            "final_position_summary"
+        ),
+        "rank_bucket_cem_clean_target_result_mean": trainer_result.get(
+            "clean_target_result_mean"
+        ),
+        "rank_bucket_cem_clean_target_metrics": trainer_result.get(
+            "clean_target_metrics"
+        ),
+    }
+
+
+def _format_final_position_summary(trainer_result: Mapping[str, Any]) -> str:
+    summary = trainer_result.get("final_position_summary")
+    if not isinstance(summary, Mapping):
+        return "(unavailable)"
+    return (
+        "("
+        f"rank1={float(summary.get('rank1_pct', 0.0)):.1f}%, "
+        f"rank2={float(summary.get('rank2_pct', 0.0)):.1f}%, "
+        f"tail={float(summary.get('tail_pct', 0.0)):.1f}%, "
+        f"pos0={float(summary.get('pos0_pct', 0.0)):.1f}%"
+        ")"
+    )
 
 
 def _save_rank_bucket_cem_run_metadata(

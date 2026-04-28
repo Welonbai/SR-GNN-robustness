@@ -69,7 +69,12 @@ class SRGNNBaseRunner:
             from attack.pipeline.core.evaluator import evaluate_targeted_metrics
         for epoch in range(epochs):
             print(f"epoch {epoch + 1}/{epochs}")
-            hit, mrr, avg_loss = train_test(self.model, train_data, test_data)
+            hit, mrr, avg_loss = train_test(
+                self.model,
+                train_data,
+                test_data,
+                log_batches=False,
+            )
             train_losses.append(float(avg_loss))
             if target_item is not None:
                 rankings = self.predict_topk(test_data, topk=topk)
