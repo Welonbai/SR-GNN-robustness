@@ -24,6 +24,7 @@ _TARGET_SCORE_METRIC_TOPK = 30
 _TARGET_SCORE_TARGETED_METRICS = ("mrr", "recall")
 _TARGET_SCORE_REQUIRED_KEYS = (
     "targeted_mrr@10",
+    "targeted_mrr@20",
     "targeted_recall@10",
     "targeted_recall@20",
     "targeted_mrr@30",

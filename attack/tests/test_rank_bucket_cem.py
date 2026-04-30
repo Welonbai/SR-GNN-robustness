@@ -47,10 +47,14 @@ from attack.position_opt.cem.rank_policy import (
     sample_positions_from_rank_policy,
 )
 from attack.position_opt.cem.trainer import (
+    NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD,
     RANK_BUCKET_CEM_IMPLEMENTATION_TAG,
     RankBucketCEMTrainer,
     _resolve_reward_value,
+    _with_global_normalized_lowk_rewards,
+    _with_iteration_normalized_lowk_rewards,
 )
+from attack.surrogate.srgnn_backend import _TARGET_SCORE_REQUIRED_KEYS
 from attack.position_opt.types import InnerTrainResult, SurrogateScoreResult
 from attack.surrogate.srgnn_backend import _fixed_ratio_batch_sizes
 
@@ -88,7 +92,11 @@ def _identity_context(config) -> dict[str, object]:
 
 
 class _DummyBackend:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        trained_target_results: list[SurrogateScoreResult] | None = None,
+    ) -> None:
         self.loaded_paths: list[str] = []
         self.fixed_ratio_calls: list[dict[str, object]] = []
         self.clean_target_result = SurrogateScoreResult.from_values(
@@ -96,6 +104,10 @@ class _DummyBackend:
             metrics={
                 "custom_metric@7": 0.1,
                 "another_metric@11": 0.05,
+                "targeted_mrr@10": 0.01,
+                "targeted_mrr@20": 0.02,
+                "targeted_recall@10": 0.03,
+                "targeted_recall@20": 0.04,
             },
         )
         self.trained_target_result = SurrogateScoreResult.from_values(
@@ -103,7 +115,16 @@ class _DummyBackend:
             metrics={
                 "custom_metric@7": 0.6,
                 "another_metric@11": 0.4,
+                "targeted_mrr@10": 0.11,
+                "targeted_mrr@20": 0.12,
+                "targeted_recall@10": 0.13,
+                "targeted_recall@20": 0.14,
             },
+        )
+        self.trained_target_results = (
+            [self.trained_target_result]
+            if trained_target_results is None
+            else list(trained_target_results)
         )
 
     def load_clean_checkpoint(self, path) -> None:
@@ -183,7 +204,10 @@ class _DummyBackend:
     def score_target(self, model, eval_sessions, target_item: int) -> SurrogateScoreResult:
         if isinstance(model, dict) and model.get("kind") == "clean":
             return self.clean_target_result
-        return self.trained_target_result
+        score_index = 0
+        if isinstance(model, dict):
+            score_index = int(model.get("score_index", 0))
+        return self.trained_target_results[score_index % len(self.trained_target_results)]
 
     def score_gt(self, model, eval_sessions, ground_truth_items) -> SurrogateScoreResult:
         return SurrogateScoreResult.from_values([0.55])
@@ -192,6 +216,7 @@ class _DummyBackend:
 class _DummyInnerTrainer:
     def __init__(self) -> None:
         self.seeds: list[int | None] = []
+        self.run_count = 0
 
     def run(
         self,
@@ -205,10 +230,13 @@ class _DummyInnerTrainer:
     ) -> InnerTrainResult:
         del surrogate_backend, clean_checkpoint_path, eval_data
         self.seeds.append(seed)
+        score_index = self.run_count
+        self.run_count += 1
         return InnerTrainResult(
             model={
                 "kind": "trained",
                 "seed": seed,
+                "score_index": score_index,
                 "poisoned_fake_count": poisoned_train_data.fake_count,
             },
             history={
@@ -256,6 +284,7 @@ def _repo_temp_dir() -> Path:
 def _run_dummy_trainer(
     tmp_path: Path,
     *,
+    backend: _DummyBackend | None = None,
     reward_mode: str = "poisoned_target_utility",
     reward_metric: str | None = None,
     surrogate_eval_poison_balance: SurrogateEvalPoisonBalanceConfig | None = None,
@@ -264,6 +293,8 @@ def _run_dummy_trainer(
     save_optimized_poisoned_sessions: bool = True,
     save_replay_metadata: bool = True,
     fake_sessions: list[list[int]] | None = None,
+    iterations: int = 1,
+    population_size: int = 3,
 ) -> tuple[dict[str, object], RankBucketCEMArtifactPaths, _DummyInnerTrainer]:
     config = _config()
     position_opt = replace(
@@ -275,8 +306,8 @@ def _run_dummy_trainer(
     )
     rank_bucket_cem = replace(
         config.attack.rank_bucket_cem,
-        iterations=1,
-        population_size=3,
+        iterations=int(iterations),
+        population_size=int(population_size),
         reward_metric=reward_metric,
         surrogate_eval_poison_balance=(
             config.attack.rank_bucket_cem.surrogate_eval_poison_balance
@@ -297,7 +328,7 @@ def _run_dummy_trainer(
         ),
     )
 
-    backend = _DummyBackend()
+    backend = _DummyBackend() if backend is None else backend
     inner_trainer = _DummyInnerTrainer()
     trainer = RankBucketCEMTrainer(
         backend,
@@ -324,6 +355,43 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+def _lowk_candidate_result(
+    *,
+    iteration: int,
+    candidate_id: int,
+    mrr10: float,
+    mrr20: float,
+    recall10: float,
+    recall20: float,
+    reward: float = 0.0,
+) -> CEMCandidateResult:
+    return CEMCandidateResult(
+        candidate=CEMCandidate(
+            iteration=iteration,
+            candidate_id=candidate_id,
+            logits_g2=(float(candidate_id), 0.0),
+            logits_g3=(float(candidate_id), 0.0, 0.0),
+            pi_g2=(0.5, 0.5),
+            pi_g3=(1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0),
+        ),
+        reward=float(reward),
+        metrics={
+            "target_metrics": {
+                "targeted_mrr@10": float(mrr10),
+                "targeted_mrr@20": float(mrr20),
+                "targeted_recall@10": float(recall10),
+                "targeted_recall@20": float(recall20),
+            },
+            "reward_components": {
+                "targeted_mrr@10": float(mrr10),
+                "targeted_mrr@20": float(mrr20),
+                "targeted_recall@10": float(recall10),
+                "targeted_recall@20": float(recall20),
+            },
+        },
+    )
 
 
 def test_rank_bucket_cem_config_loads_with_clean_defaults() -> None:
@@ -535,6 +603,106 @@ def test_missing_reward_metric_raises_clear_error_with_available_keys() -> None:
         )
 
 
+def test_normalized_lowk_reward_metric_uses_raw_family_value_for_baseline() -> None:
+    result = SurrogateScoreResult.from_values(
+        [0.8],
+        metrics={
+            "targeted_mrr@10": 0.10,
+            "targeted_mrr@20": 0.20,
+            "targeted_recall@10": 0.30,
+            "targeted_recall@20": 0.50,
+        },
+    )
+
+    assert _resolve_reward_value(
+        target_result=result,
+        reward_metric=NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD,
+    ) == pytest.approx(0.275)
+
+
+def test_normalized_lowk_reward_missing_metrics_reports_required_and_available_keys() -> None:
+    result = SurrogateScoreResult.from_values(
+        [0.8],
+        metrics={
+            "targeted_mrr@10": 0.10,
+            "targeted_recall@10": 0.30,
+        },
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        _resolve_reward_value(
+            target_result=result,
+            reward_metric=NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD,
+        )
+
+    message = str(exc_info.value)
+    assert "required_keys" in message
+    assert "available_keys" in message
+    assert "targeted_mrr@20" in message
+
+
+def test_iteration_normalized_lowk_reward_computes_per_iteration_values() -> None:
+    results = [
+        _lowk_candidate_result(
+            iteration=0,
+            candidate_id=0,
+            mrr10=1.0,
+            mrr20=2.0,
+            recall10=4.0,
+            recall20=8.0,
+        ),
+        _lowk_candidate_result(
+            iteration=0,
+            candidate_id=1,
+            mrr10=0.5,
+            mrr20=1.0,
+            recall10=2.0,
+            recall20=4.0,
+        ),
+    ]
+
+    normalized = _with_iteration_normalized_lowk_rewards(results)
+
+    assert normalized[0].reward == pytest.approx(1.0)
+    assert normalized[0].metrics["iteration_normalized_lowk_reward"] == pytest.approx(1.0)
+    assert normalized[1].reward == pytest.approx(0.5)
+    assert normalized[1].metrics["iteration_normalized_lowk_reward"] == pytest.approx(0.5)
+
+
+def test_global_normalized_lowk_reward_recomputes_across_all_candidates() -> None:
+    results = [
+        _lowk_candidate_result(
+            iteration=0,
+            candidate_id=0,
+            mrr10=1.0,
+            mrr20=1.0,
+            recall10=1.0,
+            recall20=1.0,
+            reward=1.0,
+        ),
+        _lowk_candidate_result(
+            iteration=1,
+            candidate_id=0,
+            mrr10=2.0,
+            mrr20=4.0,
+            recall10=2.0,
+            recall20=4.0,
+            reward=0.25,
+        ),
+    ]
+
+    normalized = _with_global_normalized_lowk_rewards(results)
+
+    assert normalized[0].reward == pytest.approx(1.0)
+    assert normalized[0].metrics["global_normalized_lowk_reward"] == pytest.approx(0.375)
+    assert normalized[1].reward == pytest.approx(0.25)
+    assert normalized[1].metrics["global_normalized_lowk_reward"] == pytest.approx(1.0)
+
+
+def test_srg_nn_score_target_required_metrics_include_mrr20() -> None:
+    assert "targeted_mrr@20" in _TARGET_SCORE_REQUIRED_KEYS
+
+
 def test_nonzero_candidate_setting_never_selects_position0() -> None:
     states = build_rank_candidate_states(
         [_session(3), _session(5), _session(8)],
@@ -650,6 +818,90 @@ def test_fixed_ratio_poison_balance_rejects_empty_poison_prefix_pool() -> None:
                 ),
                 fake_sessions=[_session(1)],
             )
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_normalized_lowk_cem_uses_iteration_reward_for_elites_and_global_reward_for_final() -> None:
+    tmp_path = _repo_temp_dir()
+    target_results = [
+        SurrogateScoreResult.from_values(
+            [0.10],
+            metrics={
+                "targeted_mrr@10": 1.0,
+                "targeted_mrr@20": 1.0,
+                "targeted_recall@10": 1.0,
+                "targeted_recall@20": 1.0,
+            },
+        ),
+        SurrogateScoreResult.from_values(
+            [0.05],
+            metrics={
+                "targeted_mrr@10": 0.5,
+                "targeted_mrr@20": 0.5,
+                "targeted_recall@10": 0.5,
+                "targeted_recall@20": 0.5,
+            },
+        ),
+        SurrogateScoreResult.from_values(
+            [0.20],
+            metrics={
+                "targeted_mrr@10": 2.0,
+                "targeted_mrr@20": 2.0,
+                "targeted_recall@10": 2.0,
+                "targeted_recall@20": 2.0,
+            },
+        ),
+        SurrogateScoreResult.from_values(
+            [0.01],
+            metrics={
+                "targeted_mrr@10": 0.1,
+                "targeted_mrr@20": 0.1,
+                "targeted_recall@10": 0.1,
+                "targeted_recall@20": 0.1,
+            },
+        ),
+    ]
+    try:
+        result, artifact_paths, _ = _run_dummy_trainer(
+            tmp_path,
+            backend=_DummyBackend(trained_target_results=target_results),
+            reward_metric=NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD,
+            iterations=2,
+            population_size=2,
+        )
+        trace_rows = _read_jsonl(artifact_paths.cem_trace)
+        best_policy = json.loads(artifact_paths.cem_best_policy.read_text(encoding="utf-8"))
+
+        assert result["final_selection_reward_name"] == "global_normalized_lowk_reward"
+        assert result["final_selection_reward_value"] == pytest.approx(1.0)
+        assert result["best_iteration"] == 1
+        assert result["best_candidate_id"] == 0
+        assert best_policy["final_selection_reward_name"] == "global_normalized_lowk_reward"
+        assert best_policy["final_selected_iteration"] == 1
+        assert best_policy["final_selected_candidate_id"] == 0
+        assert len(trace_rows) == 4
+        assert [row["reward"] for row in trace_rows] == pytest.approx(
+            [1.0, 0.5, 1.0, 0.05]
+        )
+        assert [
+            (row["iteration"], row["candidate_id"])
+            for row in trace_rows
+            if row["selected_as_iteration_elite"]
+        ] == [(0, 0), (1, 0)]
+        assert [
+            (row["iteration"], row["candidate_id"])
+            for row in trace_rows
+            if row.get("selected_as_global_best")
+        ] == [(1, 0)]
+        assert all("absolute_raw_family_lowk_reward" in row for row in trace_rows)
+        assert all("target_mean_reward" in row for row in trace_rows)
+        assert all("reward_components" in row for row in trace_rows)
+        assert all("targeted_mrr@10" in row for row in trace_rows)
+        assert all("targeted_mrr@20" in row for row in trace_rows)
+        assert all("targeted_recall@10" in row for row in trace_rows)
+        assert all("targeted_recall@20" in row for row in trace_rows)
+        assert all("global_normalized_lowk_reward" in row for row in trace_rows)
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -783,6 +1035,32 @@ def test_rank_bucket_cem_identity_changes_without_touching_shared_fake_session_c
         run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     ) == shared_attack_artifact_key(
         balanced,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+    )
+
+    lowk_cem = replace(
+        config.attack.rank_bucket_cem,
+        reward_metric=NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD,
+    )
+    lowk = replace(config, attack=replace(config.attack, rank_bucket_cem=lowk_cem))
+    lowk_context = _identity_context(lowk)
+    assert lowk_context["position_opt"]["rank_bucket_cem"]["reward_metric"] == (
+        NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD
+    )
+    assert attack_key(
+        config,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+        attack_identity_context=baseline_context,
+    ) != attack_key(
+        lowk,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+        attack_identity_context=lowk_context,
+    )
+    assert shared_attack_artifact_key(
+        config,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+    ) == shared_attack_artifact_key(
+        lowk,
         run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     )
 

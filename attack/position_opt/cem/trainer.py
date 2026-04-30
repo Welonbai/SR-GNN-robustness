@@ -56,6 +56,14 @@ from .rank_policy import (
 
 RANK_BUCKET_CEM_METHOD_NAME = "rank_bucket_cem"
 RANK_BUCKET_CEM_IMPLEMENTATION_TAG = "rank_bucket_cem_v1"
+NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD = "normalized_lowk_mrr_recall_10_20"
+_LOWK_REWARD_COMPONENT_KEYS = (
+    "targeted_mrr@10",
+    "targeted_mrr@20",
+    "targeted_recall@10",
+    "targeted_recall@20",
+)
+_LOWK_REWARD_EPS = 1.0e-12
 _SUPPORTED_REWARD_MODES = frozenset(("poisoned_target_utility", "delta_target_utility"))
 _LOG_PREFIX = "[rank-bucket-cem]"
 _TRACE_OPTIONAL_METRIC_KEYS = (
@@ -83,6 +91,21 @@ _TRACE_OPTIONAL_METRIC_KEYS = (
     "fine_tune_seconds",
     "score_target_seconds",
     "candidate_total_seconds",
+    "targeted_mrr@10",
+    "targeted_mrr@20",
+    "targeted_recall@10",
+    "targeted_recall@20",
+    "target_mean_reward",
+    "absolute_raw_family_lowk_reward",
+    "reward_components",
+    "iteration_normalized_lowk_reward",
+    "iteration_lowk_metric_maxima",
+    "global_normalized_lowk_reward",
+    "global_lowk_metric_maxima",
+    "selected_as_iteration_elite",
+    "selected_as_global_best",
+    "final_selection_reward_name",
+    "final_selection_reward_value",
 )
 
 
@@ -250,6 +273,28 @@ class RankBucketCEMTrainer:
         if paths is not None:
             save_cem_state_history(paths.cem_state_history, self._cem_state_history_payload())
 
+        normalized_lowk_reward_enabled = _is_normalized_lowk_reward_metric(
+            self.rank_bucket_cem_config.reward_metric
+        )
+        if (
+            normalized_lowk_reward_enabled
+            and self.position_opt_config.enable_gt_penalty
+        ):
+            raise ValueError(
+                "rank_bucket_cem.reward_metric "
+                f"{NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD!r} does not currently "
+                "support position_opt.enable_gt_penalty."
+            )
+        if (
+            normalized_lowk_reward_enabled
+            and self.position_opt_config.reward_mode != "poisoned_target_utility"
+        ):
+            raise ValueError(
+                "rank_bucket_cem.reward_metric "
+                f"{NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD!r} currently supports "
+                "only position_opt.reward_mode='poisoned_target_utility'."
+            )
+
         candidate_rng = random.Random(
             derive_seed(
                 config.seeds.position_opt_seed,
@@ -257,9 +302,11 @@ class RankBucketCEMTrainer:
                 target_id,
             )
         )
+        all_candidate_entries: list[dict[str, Any]] = []
 
         for iteration in range(int(self.rank_bucket_cem_config.iterations)):
             candidate_results: list[CEMCandidateResult] = []
+            iteration_entries: list[dict[str, Any]] = []
             candidates = sample_cem_candidates(
                 state,
                 iteration=iteration,
@@ -333,15 +380,25 @@ class RankBucketCEMTrainer:
                 )
                 score_target_seconds = time.perf_counter() - score_target_start_time
                 target_metrics = _coerce_target_metrics(target_result.metrics)
-                reward_value = _resolve_reward_value(
-                    target_result=target_result,
-                    reward_metric=self.rank_bucket_cem_config.reward_metric,
-                )
-                reward_target_utility = _resolve_reward_target_utility(
-                    reward_mode=self.position_opt_config.reward_mode,
-                    reward_value=reward_value,
-                    clean_reward_baseline=self._clean_reward_baseline,
-                )
+                lowk_metric_payload: dict[str, Any] = {}
+                if normalized_lowk_reward_enabled:
+                    lowk_metric_payload = _lowk_reward_metric_payload(target_metrics)
+                    reward_value = float(
+                        lowk_metric_payload["absolute_raw_family_lowk_reward"]
+                    )
+                    reward_target_utility = reward_value
+                else:
+                    if _has_lowk_reward_components(target_metrics):
+                        lowk_metric_payload = _lowk_reward_metric_payload(target_metrics)
+                    reward_value = _resolve_reward_value(
+                        target_result=target_result,
+                        reward_metric=self.rank_bucket_cem_config.reward_metric,
+                    )
+                    reward_target_utility = _resolve_reward_target_utility(
+                        reward_mode=self.position_opt_config.reward_mode,
+                        reward_value=reward_value,
+                        clean_reward_baseline=self._clean_reward_baseline,
+                    )
 
                 poisoned_gt_utility = None
                 if self.position_opt_config.enable_gt_penalty:
@@ -361,16 +418,22 @@ class RankBucketCEMTrainer:
                     gt_penalty_weight=float(self.position_opt_config.gt_penalty_weight),
                     gt_tolerance=float(self.position_opt_config.gt_tolerance),
                 )
-                reward = float(objective.reward.detach().item())
+                reward = (
+                    0.0
+                    if normalized_lowk_reward_enabled
+                    else float(objective.reward.detach().item())
+                )
                 position_summary = build_rank_position_summary(selection_records)
                 candidate_metrics = {
                     "reward_mode": str(self.position_opt_config.reward_mode),
                     "reward_metric": self.rank_bucket_cem_config.reward_metric,
                     "target_result_mean": float(target_result.mean),
+                    "target_mean_reward": float(target_result.mean),
                     "target_metrics": dict(target_metrics),
                     "selection_seed": int(selection_seed),
                     "surrogate_train_seed": int(self._shared_surrogate_train_seed),
                 }
+                candidate_metrics.update(lowk_metric_payload)
                 candidate_metrics.update(
                     _candidate_fine_tune_metadata(
                         history=inner_result.history,
@@ -406,34 +469,52 @@ class RankBucketCEMTrainer:
                     metrics=candidate_metrics,
                 )
                 candidate_results.append(candidate_result)
-                self._cem_trace_rows.append(
-                    self._trace_row(
-                        target_item=target_id,
-                        candidate_result=candidate_result,
-                        selection_records=selection_records,
-                        position_summary=position_summary,
-                    )
+                iteration_entries.append(
+                    {
+                        "candidate_result": candidate_result,
+                        "selection_records": list(selection_records),
+                        "poisoned_fake_sessions": [
+                            list(session) for session in poisoned_fake_sessions
+                        ],
+                        "selection_seed": int(selection_seed),
+                        "position_summary": dict(position_summary),
+                    }
                 )
-                if (
-                    self._best_candidate_result is None
-                    or float(reward) > float(self._best_candidate_result.reward)
-                ):
-                    self._best_candidate_result = candidate_result
-                    self._best_selection_records = list(selection_records)
-                    self._best_poisoned_sessions = [
-                        list(session) for session in poisoned_fake_sessions
-                    ]
-                    self._best_selection_seed = int(selection_seed)
-                    self._final_position_summary = dict(position_summary)
 
-            if paths is not None:
-                write_cem_trace_jsonl(paths.cem_trace, self._cem_trace_rows)
-
-            best_iter_reward = max(float(result.reward) for result in candidate_results)
+            if normalized_lowk_reward_enabled:
+                candidate_results = _with_iteration_normalized_lowk_rewards(
+                    candidate_results
+                )
             elite_count = _elite_count(
                 len(candidate_results),
                 float(self.rank_bucket_cem_config.elite_ratio),
             )
+            elite_ids = _elite_candidate_ids(candidate_results, elite_count=elite_count)
+            for index, candidate_result in enumerate(candidate_results):
+                candidate_result.metrics["selected_as_iteration_elite"] = (
+                    _candidate_key(candidate_result) in elite_ids
+                )
+                iteration_entries[index]["candidate_result"] = candidate_result
+            all_candidate_entries.extend(iteration_entries)
+            for entry in iteration_entries:
+                self._cem_trace_rows.append(
+                    self._trace_row(
+                        target_item=target_id,
+                        candidate_result=entry["candidate_result"],
+                        selection_records=entry["selection_records"],
+                        position_summary=entry["position_summary"],
+                    )
+                )
+                if not normalized_lowk_reward_enabled:
+                    candidate_result = entry["candidate_result"]
+                    if (
+                        self._best_candidate_result is None
+                        or float(candidate_result.reward)
+                        > float(self._best_candidate_result.reward)
+                    ):
+                        self._promote_candidate_entry_to_best(entry)
+
+            best_iter_reward = max(float(result.reward) for result in candidate_results)
             state = update_cem_state(
                 state,
                 candidate_results,
@@ -469,6 +550,16 @@ class RankBucketCEMTrainer:
                 population_size=len(candidate_results),
                 state=state,
             )
+            if paths is not None:
+                write_cem_trace_jsonl(paths.cem_trace, self._cem_trace_rows)
+
+        if normalized_lowk_reward_enabled:
+            self._apply_global_normalized_lowk_final_selection(
+                target_item=target_id,
+                candidate_entries=all_candidate_entries,
+            )
+            if paths is not None:
+                write_cem_trace_jsonl(paths.cem_trace, self._cem_trace_rows)
 
         if self._best_candidate_result is None:
             raise RuntimeError("RankBucket-CEM did not evaluate any candidates.")
@@ -489,6 +580,12 @@ class RankBucketCEMTrainer:
             "best_iteration": int(self._best_candidate_result.candidate.iteration),
             "best_candidate_id": int(self._best_candidate_result.candidate.candidate_id),
             "best_selection_seed": self._best_selection_seed,
+            "final_selected_candidate_id": int(
+                self._best_candidate_result.candidate.candidate_id
+            ),
+            "final_selected_iteration": int(self._best_candidate_result.candidate.iteration),
+            "final_selection_reward_name": self._final_selection_reward_name(),
+            "final_selection_reward_value": self._final_selection_reward_value(),
             "reward_mode": str(self.position_opt_config.reward_mode),
             "reward_metric": self.rank_bucket_cem_config.reward_metric,
             "selected_reward_metric_name": self._selected_reward_metric_name(),
@@ -522,6 +619,95 @@ class RankBucketCEMTrainer:
         if self._best_poisoned_sessions is None:
             raise RuntimeError("train() must be called before exporting final sessions.")
         return [list(session) for session in self._best_poisoned_sessions]
+
+    def _promote_candidate_entry_to_best(
+        self,
+        entry: Mapping[str, Any],
+        *,
+        reward_override: float | None = None,
+    ) -> None:
+        candidate_result = entry["candidate_result"]
+        if not isinstance(candidate_result, CEMCandidateResult):
+            raise TypeError("candidate entry is missing a CEMCandidateResult.")
+        if reward_override is not None:
+            candidate_result = CEMCandidateResult(
+                candidate=candidate_result.candidate,
+                reward=float(reward_override),
+                metrics=dict(candidate_result.metrics),
+            )
+        self._best_candidate_result = candidate_result
+        self._best_selection_records = list(entry["selection_records"])
+        self._best_poisoned_sessions = [
+            list(session) for session in entry["poisoned_fake_sessions"]
+        ]
+        self._best_selection_seed = int(entry["selection_seed"])
+        self._final_position_summary = dict(entry["position_summary"])
+
+    def _apply_global_normalized_lowk_final_selection(
+        self,
+        *,
+        target_item: int,
+        candidate_entries: Sequence[Mapping[str, Any]],
+    ) -> None:
+        if not candidate_entries:
+            raise RuntimeError(
+                "normalized low-k reward final selection requires at least one candidate."
+            )
+
+        candidate_results = [
+            entry["candidate_result"] for entry in candidate_entries
+        ]
+        global_results = _with_global_normalized_lowk_rewards(candidate_results)
+        best_index = min(
+            range(len(global_results)),
+            key=lambda index: (
+                -float(
+                    global_results[index].metrics["global_normalized_lowk_reward"]
+                ),
+                int(global_results[index].candidate.iteration),
+                int(global_results[index].candidate.candidate_id),
+            ),
+        )
+
+        normalized_entries: list[Mapping[str, Any]] = []
+        for index, entry in enumerate(candidate_entries):
+            result = global_results[index]
+            metrics = dict(result.metrics)
+            selected_as_global_best = index == best_index
+            metrics["selected_as_global_best"] = selected_as_global_best
+            if selected_as_global_best:
+                metrics["final_selection_reward_name"] = (
+                    "global_normalized_lowk_reward"
+                )
+                metrics["final_selection_reward_value"] = float(
+                    metrics["global_normalized_lowk_reward"]
+                )
+            result = CEMCandidateResult(
+                candidate=result.candidate,
+                reward=float(result.reward),
+                metrics=metrics,
+            )
+            normalized_entry = dict(entry)
+            normalized_entry["candidate_result"] = result
+            normalized_entries.append(normalized_entry)
+
+        best_entry = normalized_entries[best_index]
+        best_result = best_entry["candidate_result"]
+        self._promote_candidate_entry_to_best(
+            best_entry,
+            reward_override=float(
+                best_result.metrics["global_normalized_lowk_reward"]
+            ),
+        )
+        self._cem_trace_rows = [
+            self._trace_row(
+                target_item=target_item,
+                candidate_result=entry["candidate_result"],
+                selection_records=entry["selection_records"],
+                position_summary=entry["position_summary"],
+            )
+            for entry in normalized_entries
+        ]
 
     def _run_fixed_ratio_surrogate_fine_tune(
         self,
@@ -731,6 +917,10 @@ class RankBucketCEMTrainer:
             "reward_mode": str(self.position_opt_config.reward_mode),
             "reward_metric": self.rank_bucket_cem_config.reward_metric,
             "selected_reward_metric_name": self._selected_reward_metric_name(),
+            "final_selected_candidate_id": int(candidate.candidate_id),
+            "final_selected_iteration": int(candidate.iteration),
+            "final_selection_reward_name": self._final_selection_reward_name(),
+            "final_selection_reward_value": self._final_selection_reward_value(),
             "cem_hyperparameters": _cem_hyperparameters_payload(self.rank_bucket_cem_config),
             "artifact_flags": _artifact_flag_payload(self.rank_bucket_cem_config),
         }
@@ -785,6 +975,14 @@ class RankBucketCEMTrainer:
             "reward_mode": str(self.position_opt_config.reward_mode),
             "reward_metric": self.rank_bucket_cem_config.reward_metric,
             "selected_reward_metric_name": self._selected_reward_metric_name(),
+            "final_selected_candidate_id": int(
+                self._best_candidate_result.candidate.candidate_id
+            ),
+            "final_selected_iteration": int(
+                self._best_candidate_result.candidate.iteration
+            ),
+            "final_selection_reward_name": self._final_selection_reward_name(),
+            "final_selection_reward_value": self._final_selection_reward_value(),
             "surrogate_eval_poison_balance": asdict(
                 self.rank_bucket_cem_config.surrogate_eval_poison_balance
             ),
@@ -801,6 +999,22 @@ class RankBucketCEMTrainer:
         if self.position_opt_config.reward_mode == "poisoned_target_utility":
             return base_name
         return f"delta({base_name})"
+
+    def _final_selection_reward_name(self) -> str:
+        if _is_normalized_lowk_reward_metric(self.rank_bucket_cem_config.reward_metric):
+            return "global_normalized_lowk_reward"
+        return self._selected_reward_metric_name()
+
+    def _final_selection_reward_value(self) -> float | None:
+        if self._best_candidate_result is None:
+            return None
+        if _is_normalized_lowk_reward_metric(self.rank_bucket_cem_config.reward_metric):
+            value = self._best_candidate_result.metrics.get(
+                "global_normalized_lowk_reward"
+            )
+            if value is not None:
+                return float(value)
+        return float(self._best_candidate_result.reward)
 
 
 def _normalize_fake_sessions(
@@ -920,6 +1134,142 @@ def _validate_reward_mode(reward_mode: str) -> None:
         )
 
 
+def _is_normalized_lowk_reward_metric(reward_metric: str | None) -> bool:
+    return str(reward_metric or "") == NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD
+
+
+def _require_lowk_reward_components(metrics: Mapping[str, float]) -> dict[str, float]:
+    coerced = _coerce_target_metrics(metrics)
+    missing_keys = [key for key in _LOWK_REWARD_COMPONENT_KEYS if key not in coerced]
+    if missing_keys:
+        raise ValueError(
+            "rank_bucket_cem.reward_metric "
+            f"{NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD!r} requires low-k target "
+            "metrics. "
+            f"required_keys={list(_LOWK_REWARD_COMPONENT_KEYS)} "
+            f"available_keys={sorted(coerced)} "
+            f"missing_keys={missing_keys}"
+        )
+    return {key: float(coerced[key]) for key in _LOWK_REWARD_COMPONENT_KEYS}
+
+
+def _has_lowk_reward_components(metrics: Mapping[str, float]) -> bool:
+    keys = set(_coerce_target_metrics(metrics))
+    return all(key in keys for key in _LOWK_REWARD_COMPONENT_KEYS)
+
+
+def _lowk_reward_metric_payload(metrics: Mapping[str, float]) -> dict[str, Any]:
+    components = _require_lowk_reward_components(metrics)
+    mrr_part = float(
+        (components["targeted_mrr@10"] + components["targeted_mrr@20"]) / 2.0
+    )
+    recall_part = float(
+        (components["targeted_recall@10"] + components["targeted_recall@20"]) / 2.0
+    )
+    absolute_raw_family_lowk_reward = float(0.5 * mrr_part + 0.5 * recall_part)
+    return {
+        **components,
+        "absolute_raw_family_lowk_reward": absolute_raw_family_lowk_reward,
+        "reward_components": {
+            **components,
+            "mrr_mean_10_20": mrr_part,
+            "recall_mean_10_20": recall_part,
+        },
+    }
+
+
+def _with_iteration_normalized_lowk_rewards(
+    results: Sequence[CEMCandidateResult],
+) -> list[CEMCandidateResult]:
+    rewards, maxima = _normalized_lowk_rewards(results)
+    normalized_results: list[CEMCandidateResult] = []
+    for result, reward in zip(results, rewards):
+        metrics = dict(result.metrics)
+        metrics["iteration_normalized_lowk_reward"] = float(reward)
+        metrics["iteration_lowk_metric_maxima"] = dict(maxima)
+        normalized_results.append(
+            CEMCandidateResult(
+                candidate=result.candidate,
+                reward=float(reward),
+                metrics=metrics,
+            )
+        )
+    return normalized_results
+
+
+def _with_global_normalized_lowk_rewards(
+    results: Sequence[CEMCandidateResult],
+) -> list[CEMCandidateResult]:
+    rewards, maxima = _normalized_lowk_rewards(results)
+    normalized_results: list[CEMCandidateResult] = []
+    for result, reward in zip(results, rewards):
+        metrics = dict(result.metrics)
+        metrics["global_normalized_lowk_reward"] = float(reward)
+        metrics["global_lowk_metric_maxima"] = dict(maxima)
+        normalized_results.append(
+            CEMCandidateResult(
+                candidate=result.candidate,
+                reward=float(result.reward),
+                metrics=metrics,
+            )
+        )
+    return normalized_results
+
+
+def _normalized_lowk_rewards(
+    results: Sequence[CEMCandidateResult],
+) -> tuple[list[float], dict[str, float]]:
+    if not results:
+        raise ValueError("normalized low-k reward requires at least one candidate.")
+    component_values = [
+        _require_lowk_reward_components(
+            _reward_components_for_result(result)
+        )
+        for result in results
+    ]
+    maxima = {
+        key: max(float(values[key]) for values in component_values)
+        for key in _LOWK_REWARD_COMPONENT_KEYS
+    }
+    rewards: list[float] = []
+    for values in component_values:
+        reward = 0.0
+        for key in _LOWK_REWARD_COMPONENT_KEYS:
+            denominator = max(float(maxima[key]), _LOWK_REWARD_EPS)
+            reward += 0.25 * (float(values[key]) / denominator)
+        rewards.append(float(reward))
+    return rewards, {key: float(value) for key, value in maxima.items()}
+
+
+def _reward_components_for_result(result: CEMCandidateResult) -> Mapping[str, float]:
+    components = result.metrics.get("reward_components")
+    if isinstance(components, Mapping):
+        return components
+    target_metrics = result.metrics.get("target_metrics")
+    if isinstance(target_metrics, Mapping):
+        return target_metrics
+    return result.metrics
+
+
+def _candidate_key(result: CEMCandidateResult) -> tuple[int, int]:
+    return int(result.candidate.iteration), int(result.candidate.candidate_id)
+
+
+def _elite_candidate_ids(
+    results: Sequence[CEMCandidateResult],
+    *,
+    elite_count: int,
+) -> set[tuple[int, int]]:
+    ranked_results = sorted(
+        results,
+        key=lambda result: (
+            -float(result.reward),
+            int(result.candidate.candidate_id),
+        ),
+    )
+    return {_candidate_key(result) for result in ranked_results[: int(elite_count)]}
+
+
 def _resolve_reward_value(
     *,
     target_result: SurrogateScoreResult,
@@ -928,6 +1278,10 @@ def _resolve_reward_value(
     if reward_metric is None:
         return float(target_result.mean)
     metrics = _coerce_target_metrics(target_result.metrics)
+    if _is_normalized_lowk_reward_metric(reward_metric):
+        return float(
+            _lowk_reward_metric_payload(metrics)["absolute_raw_family_lowk_reward"]
+        )
     if reward_metric not in metrics:
         available_keys = sorted(metrics)
         raise ValueError(
@@ -1176,8 +1530,11 @@ def _softmax_values(values: Sequence[float]) -> list[float]:
 
 
 __all__ = [
+    "NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD",
     "RANK_BUCKET_CEM_IMPLEMENTATION_TAG",
     "RANK_BUCKET_CEM_METHOD_NAME",
     "RankBucketCEMTrainer",
+    "_with_global_normalized_lowk_rewards",
+    "_with_iteration_normalized_lowk_rewards",
     "_resolve_reward_value",
 ]
