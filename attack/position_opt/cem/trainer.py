@@ -149,6 +149,7 @@ class RankBucketCEMTrainer:
         self._validation_subset_seed: int | None = None
         self._validation_subset_effective_size: int | None = None
         self._artifact_paths: RankBucketCEMArtifactPaths | None = None
+        self._effective_population_schedule: tuple[int, ...] = ()
 
     def train(
         self,
@@ -199,6 +200,10 @@ class RankBucketCEMTrainer:
         self._validation_subset_strategy = str(validation_subset_metadata["strategy"])
         self._validation_subset_seed = validation_subset_metadata["seed"]
         self._validation_subset_effective_size = int(validation_subset_metadata["selected_count"])
+        self._effective_population_schedule = tuple(
+            int(value)
+            for value in self.rank_bucket_cem_config.effective_population_schedule
+        )
         self._rank_candidate_states = build_rank_candidate_states(
             normalized_fake_sessions,
             config.attack.replacement_topk_ratio,
@@ -303,17 +308,20 @@ class RankBucketCEMTrainer:
             )
         )
         all_candidate_entries: list[dict[str, Any]] = []
+        next_global_candidate_id = 0
 
-        for iteration in range(int(self.rank_bucket_cem_config.iterations)):
+        for iteration, population_size in enumerate(self._effective_population_schedule):
             candidate_results: list[CEMCandidateResult] = []
             iteration_entries: list[dict[str, Any]] = []
             candidates = sample_cem_candidates(
                 state,
                 iteration=iteration,
-                population_size=int(self.rank_bucket_cem_config.population_size),
+                population_size=int(population_size),
                 rng=candidate_rng,
             )
             for candidate in candidates:
+                global_candidate_id = int(next_global_candidate_id)
+                next_global_candidate_id += 1
                 policy = RankBucketPolicy(
                     pi_g2=tuple(float(value) for value in candidate.pi_g2),
                     pi_g3=tuple(float(value) for value in candidate.pi_g3),
@@ -432,6 +440,8 @@ class RankBucketCEMTrainer:
                     "target_metrics": dict(target_metrics),
                     "selection_seed": int(selection_seed),
                     "surrogate_train_seed": int(self._shared_surrogate_train_seed),
+                    "candidate_id_in_iteration": int(candidate.candidate_id),
+                    "global_candidate_id": int(global_candidate_id),
                 }
                 candidate_metrics.update(lowk_metric_payload)
                 candidate_metrics.update(
@@ -473,6 +483,10 @@ class RankBucketCEMTrainer:
                     {
                         "candidate_result": candidate_result,
                         "selection_records": list(selection_records),
+                        # TODO: This keeps full poisoned sessions for every candidate
+                        # so final export can replay exactly. For larger sweeps, store
+                        # only selection records/seeds/policy and reconstruct sessions
+                        # for the final selected candidate.
                         "poisoned_fake_sessions": [
                             list(session) for session in poisoned_fake_sessions
                         ],
@@ -486,7 +500,7 @@ class RankBucketCEMTrainer:
                     candidate_results
                 )
             elite_count = _elite_count(
-                len(candidate_results),
+                int(population_size),
                 float(self.rank_bucket_cem_config.elite_ratio),
             )
             elite_ids = _elite_candidate_ids(candidate_results, elite_count=elite_count)
@@ -577,15 +591,27 @@ class RankBucketCEMTrainer:
             "availability_summary": dict(self._availability_summary or {}),
             "final_position_summary": dict(self._final_position_summary),
             "best_reward": float(self._best_candidate_result.reward),
+            "best_reward_name": self._best_reward_name(),
+            "best_iteration_reward": self._best_iteration_reward(),
             "best_iteration": int(self._best_candidate_result.candidate.iteration),
             "best_candidate_id": int(self._best_candidate_result.candidate.candidate_id),
             "best_selection_seed": self._best_selection_seed,
+            "candidate_id_semantics": _candidate_id_semantics_payload(),
+            "final_selected_candidate_id_semantics": "iteration_local",
             "final_selected_candidate_id": int(
                 self._best_candidate_result.candidate.candidate_id
+            ),
+            "final_selected_candidate_id_in_iteration": int(
+                self._best_candidate_result.candidate.candidate_id
+            ),
+            "final_selected_global_candidate_id": (
+                self._final_selected_global_candidate_id()
             ),
             "final_selected_iteration": int(self._best_candidate_result.candidate.iteration),
             "final_selection_reward_name": self._final_selection_reward_name(),
             "final_selection_reward_value": self._final_selection_reward_value(),
+            "effective_population_schedule": list(self._effective_population_schedule),
+            "candidate_count": int(sum(self._effective_population_schedule)),
             "reward_mode": str(self.position_opt_config.reward_mode),
             "reward_metric": self.rank_bucket_cem_config.reward_metric,
             "selected_reward_metric_name": self._selected_reward_metric_name(),
@@ -666,6 +692,7 @@ class RankBucketCEMTrainer:
                 ),
                 int(global_results[index].candidate.iteration),
                 int(global_results[index].candidate.candidate_id),
+                int(global_results[index].metrics.get("global_candidate_id", index)),
             ),
         )
 
@@ -837,6 +864,15 @@ class RankBucketCEMTrainer:
             "target_item": int(target_item),
             "iteration": int(candidate.iteration),
             "candidate_id": int(candidate.candidate_id),
+            "candidate_id_in_iteration": int(
+                candidate_result.metrics.get(
+                    "candidate_id_in_iteration",
+                    candidate.candidate_id,
+                )
+            ),
+            "global_candidate_id": int(
+                candidate_result.metrics.get("global_candidate_id", -1)
+            ),
             "logits_g2": [float(value) for value in candidate.logits_g2],
             "pi_g2": [float(value) for value in candidate.pi_g2],
             "logits_g3": [float(value) for value in candidate.logits_g3],
@@ -883,6 +919,8 @@ class RankBucketCEMTrainer:
             "method_name": RANK_BUCKET_CEM_METHOD_NAME,
             "method_version": RANK_BUCKET_CEM_IMPLEMENTATION_TAG,
             "rank_bucket_cem_config": asdict(self.rank_bucket_cem_config),
+            "effective_population_schedule": list(self._effective_population_schedule),
+            "candidate_count": int(sum(self._effective_population_schedule)),
             "resolved_seeds": (
                 None
                 if self._trained_config is None
@@ -905,6 +943,10 @@ class RankBucketCEMTrainer:
             "best_iteration": int(candidate.iteration),
             "best_candidate_id": int(candidate.candidate_id),
             "best_reward": float(self._best_candidate_result.reward),
+            "best_reward_name": self._best_reward_name(),
+            "best_iteration_reward": self._best_iteration_reward(),
+            "candidate_id_semantics": _candidate_id_semantics_payload(),
+            "final_selected_candidate_id_semantics": "iteration_local",
             "pi_g2": {
                 "rank1": float(candidate.pi_g2[0]),
                 "rank2": float(candidate.pi_g2[1]),
@@ -918,6 +960,10 @@ class RankBucketCEMTrainer:
             "reward_metric": self.rank_bucket_cem_config.reward_metric,
             "selected_reward_metric_name": self._selected_reward_metric_name(),
             "final_selected_candidate_id": int(candidate.candidate_id),
+            "final_selected_candidate_id_in_iteration": int(candidate.candidate_id),
+            "final_selected_global_candidate_id": (
+                self._final_selected_global_candidate_id()
+            ),
             "final_selected_iteration": int(candidate.iteration),
             "final_selection_reward_name": self._final_selection_reward_name(),
             "final_selection_reward_value": self._final_selection_reward_value(),
@@ -975,8 +1021,18 @@ class RankBucketCEMTrainer:
             "reward_mode": str(self.position_opt_config.reward_mode),
             "reward_metric": self.rank_bucket_cem_config.reward_metric,
             "selected_reward_metric_name": self._selected_reward_metric_name(),
+            "best_reward_name": self._best_reward_name(),
+            "best_iteration_reward": self._best_iteration_reward(),
+            "candidate_id_semantics": _candidate_id_semantics_payload(),
+            "final_selected_candidate_id_semantics": "iteration_local",
             "final_selected_candidate_id": int(
                 self._best_candidate_result.candidate.candidate_id
+            ),
+            "final_selected_candidate_id_in_iteration": int(
+                self._best_candidate_result.candidate.candidate_id
+            ),
+            "final_selected_global_candidate_id": (
+                self._final_selected_global_candidate_id()
             ),
             "final_selected_iteration": int(
                 self._best_candidate_result.candidate.iteration
@@ -1014,6 +1070,27 @@ class RankBucketCEMTrainer:
             )
             if value is not None:
                 return float(value)
+        return float(self._best_candidate_result.reward)
+
+    def _final_selected_global_candidate_id(self) -> int | None:
+        if self._best_candidate_result is None:
+            return None
+        value = self._best_candidate_result.metrics.get("global_candidate_id")
+        return None if value is None else int(value)
+
+    def _best_reward_name(self) -> str:
+        if _is_normalized_lowk_reward_metric(self.rank_bucket_cem_config.reward_metric):
+            return "global_normalized_lowk_reward"
+        return self._selected_reward_metric_name()
+
+    def _best_iteration_reward(self) -> float | None:
+        if self._best_candidate_result is None:
+            return None
+        value = self._best_candidate_result.metrics.get(
+            "iteration_normalized_lowk_reward"
+        )
+        if value is not None:
+            return float(value)
         return float(self._best_candidate_result.reward)
 
 
@@ -1134,6 +1211,14 @@ def _validate_reward_mode(reward_mode: str) -> None:
         )
 
 
+def _candidate_id_semantics_payload() -> dict[str, str]:
+    return {
+        "candidate_id": "iteration_local",
+        "candidate_id_in_iteration": "iteration_local",
+        "global_candidate_id": "monotonic_across_all_iterations",
+    }
+
+
 def _is_normalized_lowk_reward_metric(reward_metric: str | None) -> bool:
     return str(reward_metric or "") == NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD
 
@@ -1235,8 +1320,13 @@ def _normalized_lowk_rewards(
     for values in component_values:
         reward = 0.0
         for key in _LOWK_REWARD_COMPONENT_KEYS:
-            denominator = max(float(maxima[key]), _LOWK_REWARD_EPS)
-            reward += 0.25 * (float(values[key]) / denominator)
+            metric_max = float(maxima[key])
+            normalized_value = (
+                0.0
+                if metric_max <= _LOWK_REWARD_EPS
+                else float(values[key]) / metric_max
+            )
+            reward += 0.25 * normalized_value
         rewards.append(float(reward))
     return rewards, {key: float(value) for key, value in maxima.items()}
 
@@ -1406,15 +1496,23 @@ def _summarize_inner_history(history: Mapping[str, Any] | None) -> dict[str, Any
 def _elite_count(result_count: int, elite_ratio: float) -> int:
     if result_count <= 0:
         raise ValueError("result_count must be positive.")
-    return max(1, int((float(result_count) * float(elite_ratio)) + 0.999999999))
+    return max(1, int(math.ceil(float(result_count) * float(elite_ratio))))
 
 
 def _cem_hyperparameters_payload(
     config: RankBucketCEMConfig,
 ) -> dict[str, Any]:
+    schedule = list(config.effective_population_schedule)
     return {
         "iterations": int(config.iterations),
         "population_size": int(config.population_size),
+        "population_per_iteration": (
+            None
+            if config.population_per_iteration is None
+            else [int(value) for value in config.population_per_iteration]
+        ),
+        "effective_population_schedule": schedule,
+        "candidate_count": int(sum(schedule)),
         "elite_ratio": float(config.elite_ratio),
         "initial_std": float(config.initial_std),
         "min_std": float(config.min_std),
@@ -1456,10 +1554,12 @@ def _print_cem_start(
         or int(validation_subset_effective_size) >= int(validation_subset_total_size)
         else f"{int(validation_subset_effective_size)}/{int(validation_subset_total_size)}"
     )
+    population_schedule = [int(value) for value in config.effective_population_schedule]
     print(
         f"{_LOG_PREFIX} target={int(target_item)} start CEM: "
         f"iterations={int(config.iterations)} "
-        f"population_size={int(config.population_size)} "
+        f"population_schedule={population_schedule} "
+        f"candidate_count={int(sum(population_schedule))} "
         f"elite_ratio={float(config.elite_ratio):g} "
         f"fine_tune_steps={int(position_opt_config.fine_tune_steps)} "
         f"validation_subset={validation_label} "

@@ -109,7 +109,9 @@ def run_rank_bucket_cem(
         f"{_LOG_PREFIX} "
         f"clean_surrogate_checkpoint={clean_checkpoint} "
         f"iterations={int(resolved_rank_bucket_cem_config.iterations)} "
-        f"population_size={int(resolved_rank_bucket_cem_config.population_size)} "
+        f"population_schedule="
+        f"{list(resolved_rank_bucket_cem_config.effective_population_schedule)} "
+        f"candidate_count={int(resolved_rank_bucket_cem_config.candidate_count)} "
         f"elite_ratio={float(resolved_rank_bucket_cem_config.elite_ratio):g} "
         f"nonzero_action_when_possible="
         f"{bool(resolved_position_opt_config.nonzero_action_when_possible)}"
@@ -191,6 +193,9 @@ def run_rank_bucket_cem(
             f"{_LOG_PREFIX} "
             f"target={int(target_item)} done "
             f"best_reward={float(trainer_result['best_reward']):.6g} "
+            f"final_selection_reward="
+            f"{trainer_result.get('final_selection_reward_name')}:"
+            f"{trainer_result.get('final_selection_reward_value')} "
             f"best_iter={int(trainer_result['best_iteration'])} "
             f"best_candidate={int(trainer_result['best_candidate_id'])} "
             f"final_pos={_format_final_position_summary(trainer_result)} "
@@ -229,6 +234,16 @@ def run_rank_bucket_cem(
                 else str(artifact_paths.run_metadata)
             ),
             "rank_bucket_cem_best_reward": trainer_result.get("best_reward"),
+            "rank_bucket_cem_best_reward_name": trainer_result.get("best_reward_name"),
+            "rank_bucket_cem_best_iteration_reward": trainer_result.get(
+                "best_iteration_reward"
+            ),
+            "rank_bucket_cem_final_selection_reward_name": trainer_result.get(
+                "final_selection_reward_name"
+            ),
+            "rank_bucket_cem_final_selection_reward_value": trainer_result.get(
+                "final_selection_reward_value"
+            ),
             "rank_bucket_cem_reward_mode": trainer_result.get("reward_mode"),
             "rank_bucket_cem_reward_metric": trainer_result.get("reward_metric"),
             "rank_bucket_cem_selected_reward_metric_name": trainer_result.get(
@@ -388,6 +403,16 @@ def _rank_bucket_cem_target_metadata_from_result(
             else str(artifact_paths.run_metadata)
         ),
         "rank_bucket_cem_best_reward": trainer_result.get("best_reward"),
+        "rank_bucket_cem_best_reward_name": trainer_result.get("best_reward_name"),
+        "rank_bucket_cem_best_iteration_reward": trainer_result.get(
+            "best_iteration_reward"
+        ),
+        "rank_bucket_cem_final_selection_reward_name": trainer_result.get(
+            "final_selection_reward_name"
+        ),
+        "rank_bucket_cem_final_selection_reward_value": trainer_result.get(
+            "final_selection_reward_value"
+        ),
         "rank_bucket_cem_reward_mode": trainer_result.get("reward_mode"),
         "rank_bucket_cem_reward_metric": trainer_result.get("reward_metric"),
         "rank_bucket_cem_selected_reward_metric_name": trainer_result.get(
@@ -435,6 +460,17 @@ def _save_rank_bucket_cem_run_metadata(
 ) -> None:
     if artifact_paths.run_metadata is None:
         return
+    rank_bucket_cem_config_payload = asdict(trainer.rank_bucket_cem_config)
+    effective_population_schedule = [
+        int(value)
+        for value in trainer.rank_bucket_cem_config.effective_population_schedule
+    ]
+    rank_bucket_cem_config_payload["effective_population_schedule"] = (
+        effective_population_schedule
+    )
+    rank_bucket_cem_config_payload["candidate_count"] = int(
+        sum(effective_population_schedule)
+    )
     payload = {
         "target_item": int(target_item),
         "run_type": POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
@@ -452,7 +488,11 @@ def _save_rank_bucket_cem_run_metadata(
             trainer.position_opt_config.nonzero_action_when_possible
         ),
         "position_opt_config": asdict(trainer.position_opt_config),
-        "rank_bucket_cem_config": asdict(trainer.rank_bucket_cem_config),
+        "rank_bucket_cem_config": rank_bucket_cem_config_payload,
+        "best_reward_name": trainer_result.get("best_reward_name"),
+        "best_iteration_reward": trainer_result.get("best_iteration_reward"),
+        "final_selection_reward_name": trainer_result.get("final_selection_reward_name"),
+        "final_selection_reward_value": trainer_result.get("final_selection_reward_value"),
         "replay_metadata": trainer_result.get("replay_metadata"),
         "validation_subset_strategy": trainer_result.get("validation_subset_strategy"),
         "validation_subset_seed": trainer_result.get("validation_subset_seed"),

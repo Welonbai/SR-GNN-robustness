@@ -295,6 +295,7 @@ def _run_dummy_trainer(
     fake_sessions: list[list[int]] | None = None,
     iterations: int = 1,
     population_size: int = 3,
+    population_per_iteration: tuple[int, ...] | None = None,
 ) -> tuple[dict[str, object], RankBucketCEMArtifactPaths, _DummyInnerTrainer]:
     config = _config()
     position_opt = replace(
@@ -308,6 +309,7 @@ def _run_dummy_trainer(
         config.attack.rank_bucket_cem,
         iterations=int(iterations),
         population_size=int(population_size),
+        population_per_iteration=population_per_iteration,
         reward_metric=reward_metric,
         surrogate_eval_poison_balance=(
             config.attack.rank_bucket_cem.surrogate_eval_poison_balance
@@ -403,6 +405,9 @@ def test_rank_bucket_cem_config_loads_with_clean_defaults() -> None:
     assert config.attack.rank_bucket_cem is not None
     assert config.attack.rank_bucket_cem.iterations == 3
     assert config.attack.rank_bucket_cem.population_size == 8
+    assert config.attack.rank_bucket_cem.population_per_iteration is None
+    assert config.attack.rank_bucket_cem.effective_population_schedule == (8, 8, 8)
+    assert config.attack.rank_bucket_cem.candidate_count == 24
     assert config.attack.rank_bucket_cem.reward_metric is None
     assert config.attack.rank_bucket_cem.save_candidate_selected_positions is False
     assert config.attack.rank_bucket_cem.save_final_selected_positions is False
@@ -414,6 +419,28 @@ def test_rank_bucket_cem_config_loads_with_clean_defaults() -> None:
     assert poison_balance.poison_ratio_in_batch == pytest.approx(0.20)
     assert poison_balance.loss_weighting == "none"
     assert config.victims.enabled == ("srgnn", "miasrec", "tron")
+
+
+def test_rank_bucket_cem_population_schedule_validation() -> None:
+    config = RankBucketCEMConfig(
+        iterations=3,
+        population_size=8,
+        population_per_iteration=(16, 8, 8),
+    )
+
+    assert config.effective_population_schedule == (16, 8, 8)
+    assert config.candidate_count == 32
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        RankBucketCEMConfig(iterations=3, population_per_iteration=[])
+    with pytest.raises(ValueError, match="must not be empty"):
+        RankBucketCEMConfig(iterations=3, population_per_iteration=())
+    with pytest.raises(ValueError, match="length must equal"):
+        RankBucketCEMConfig(iterations=3, population_per_iteration=(16, 8))
+    with pytest.raises(ValueError, match="entries must be positive"):
+        RankBucketCEMConfig(iterations=3, population_per_iteration=(16, 0, 8))
+    with pytest.raises(ValueError, match="entries must be positive"):
+        RankBucketCEMConfig(iterations=3, population_per_iteration=(16, -1, 8))
 
 
 def test_rank_bucket_cem_poison_balance_config_validation() -> None:
@@ -699,6 +726,36 @@ def test_global_normalized_lowk_reward_recomputes_across_all_candidates() -> Non
     assert normalized[1].metrics["global_normalized_lowk_reward"] == pytest.approx(1.0)
 
 
+def test_normalized_lowk_reward_zero_metric_max_stays_zero() -> None:
+    results = [
+        _lowk_candidate_result(
+            iteration=0,
+            candidate_id=0,
+            mrr10=0.0,
+            mrr20=0.0,
+            recall10=0.0,
+            recall20=0.0,
+        ),
+        _lowk_candidate_result(
+            iteration=0,
+            candidate_id=1,
+            mrr10=0.0,
+            mrr20=0.0,
+            recall10=0.0,
+            recall20=0.0,
+        ),
+    ]
+
+    iteration_normalized = _with_iteration_normalized_lowk_rewards(results)
+    global_normalized = _with_global_normalized_lowk_rewards(results)
+
+    assert [result.reward for result in iteration_normalized] == pytest.approx([0.0, 0.0])
+    assert [
+        result.metrics["global_normalized_lowk_reward"]
+        for result in global_normalized
+    ] == pytest.approx([0.0, 0.0])
+
+
 def test_srg_nn_score_target_required_metrics_include_mrr20() -> None:
     assert "targeted_mrr@20" in _TARGET_SCORE_REQUIRED_KEYS
 
@@ -759,6 +816,49 @@ def test_cem_trace_omits_candidate_selected_positions_by_default_and_keeps_seed_
         assert best_policy["replay_metadata"]["validation_subset_strategy"] == (
             "deterministic_random_subset"
         )
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_population_per_iteration_controls_trace_rows_elites_and_global_ids() -> None:
+    tmp_path = _repo_temp_dir()
+    try:
+        result, artifact_paths, _ = _run_dummy_trainer(
+            tmp_path,
+            iterations=3,
+            population_size=8,
+            population_per_iteration=(16, 8, 8),
+        )
+        trace_rows = _read_jsonl(artifact_paths.cem_trace)
+        best_policy = json.loads(artifact_paths.cem_best_policy.read_text(encoding="utf-8"))
+
+        assert result["effective_population_schedule"] == [16, 8, 8]
+        assert result["candidate_count"] == 32
+        assert len(trace_rows) == 32
+        assert [sum(1 for row in trace_rows if row["iteration"] == i) for i in range(3)] == [
+            16,
+            8,
+            8,
+        ]
+        assert [
+            sum(
+                1
+                for row in trace_rows
+                if row["iteration"] == i and row["selected_as_iteration_elite"]
+            )
+            for i in range(3)
+        ] == [4, 2, 2]
+        assert [row["global_candidate_id"] for row in trace_rows] == list(range(32))
+        assert all(row["candidate_id"] == row["candidate_id_in_iteration"] for row in trace_rows)
+        assert result["final_selected_global_candidate_id"] == 0
+        assert best_policy["final_selected_global_candidate_id"] == 0
+        assert best_policy["replay_metadata"]["final_selected_global_candidate_id"] == 0
+        assert best_policy["cem_hyperparameters"]["effective_population_schedule"] == [
+            16,
+            8,
+            8,
+        ]
+        assert best_policy["cem_hyperparameters"]["candidate_count"] == 32
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -875,11 +975,19 @@ def test_normalized_lowk_cem_uses_iteration_reward_for_elites_and_global_reward_
 
         assert result["final_selection_reward_name"] == "global_normalized_lowk_reward"
         assert result["final_selection_reward_value"] == pytest.approx(1.0)
+        assert result["best_reward"] == pytest.approx(1.0)
+        assert result["best_reward_name"] == "global_normalized_lowk_reward"
+        assert result["best_iteration_reward"] == pytest.approx(1.0)
         assert result["best_iteration"] == 1
         assert result["best_candidate_id"] == 0
+        assert result["final_selected_global_candidate_id"] == 2
         assert best_policy["final_selection_reward_name"] == "global_normalized_lowk_reward"
+        assert best_policy["best_reward_name"] == "global_normalized_lowk_reward"
+        assert best_policy["best_iteration_reward"] == pytest.approx(1.0)
         assert best_policy["final_selected_iteration"] == 1
         assert best_policy["final_selected_candidate_id"] == 0
+        assert best_policy["final_selected_global_candidate_id"] == 2
+        assert best_policy["replay_metadata"]["final_selected_global_candidate_id"] == 2
         assert len(trace_rows) == 4
         assert [row["reward"] for row in trace_rows] == pytest.approx(
             [1.0, 0.5, 1.0, 0.05]
@@ -890,10 +998,10 @@ def test_normalized_lowk_cem_uses_iteration_reward_for_elites_and_global_reward_
             if row["selected_as_iteration_elite"]
         ] == [(0, 0), (1, 0)]
         assert [
-            (row["iteration"], row["candidate_id"])
+            (row["iteration"], row["candidate_id"], row["global_candidate_id"])
             for row in trace_rows
             if row.get("selected_as_global_best")
-        ] == [(1, 0)]
+        ] == [(1, 0, 2)]
         assert all("absolute_raw_family_lowk_reward" in row for row in trace_rows)
         assert all("target_mean_reward" in row for row in trace_rows)
         assert all("reward_components" in row for row in trace_rows)
@@ -964,6 +1072,10 @@ def test_rank_bucket_cem_identity_changes_without_touching_shared_fake_session_c
         "surrogate_eval_poison_balance"
         not in baseline_context["position_opt"]["rank_bucket_cem"]
     )
+    assert baseline_context["position_opt"]["rank_bucket_cem"][
+        "effective_population_schedule"
+    ] == [8, 8, 8]
+    assert baseline_context["position_opt"]["rank_bucket_cem"]["candidate_count"] == 24
 
     tweaked_cem = replace(config.attack.rank_bucket_cem, iterations=5)
     updated = replace(config, attack=replace(config.attack, rank_bucket_cem=tweaked_cem))
@@ -1061,6 +1173,36 @@ def test_rank_bucket_cem_identity_changes_without_touching_shared_fake_session_c
         run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     ) == shared_attack_artifact_key(
         lowk,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+    )
+
+    scheduled_cem = replace(
+        config.attack.rank_bucket_cem,
+        population_per_iteration=(16, 8, 8),
+    )
+    scheduled = replace(
+        config,
+        attack=replace(config.attack, rank_bucket_cem=scheduled_cem),
+    )
+    scheduled_context = _identity_context(scheduled)
+    assert scheduled_context["position_opt"]["rank_bucket_cem"][
+        "effective_population_schedule"
+    ] == [16, 8, 8]
+    assert scheduled_context["position_opt"]["rank_bucket_cem"]["candidate_count"] == 32
+    assert attack_key(
+        config,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+        attack_identity_context=baseline_context,
+    ) != attack_key(
+        scheduled,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+        attack_identity_context=scheduled_context,
+    )
+    assert shared_attack_artifact_key(
+        config,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+    ) == shared_attack_artifact_key(
+        scheduled,
         run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     )
 

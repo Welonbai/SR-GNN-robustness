@@ -54,6 +54,9 @@ def resolve_rank_bucket_cem_config(
 
 def rank_bucket_cem_identity_payload(config: RankBucketCEMConfig) -> dict[str, Any]:
     payload = asdict(config)
+    schedule = [int(value) for value in config.effective_population_schedule]
+    payload["effective_population_schedule"] = schedule
+    payload["candidate_count"] = int(sum(schedule))
     poison_balance = payload.get("surrogate_eval_poison_balance")
     if isinstance(poison_balance, Mapping) and not bool(poison_balance.get("enabled", False)):
         payload.pop("surrogate_eval_poison_balance", None)
@@ -108,6 +111,7 @@ def _coerce_rank_bucket_cem_layer(
         allowed_fields = {
             "iterations",
             "population_size",
+            "population_per_iteration",
             "elite_ratio",
             "initial_std",
             "min_std",

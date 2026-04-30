@@ -326,6 +326,7 @@ class SurrogateEvalPoisonBalanceConfig:
 class RankBucketCEMConfig:
     iterations: int = 3
     population_size: int = 8
+    population_per_iteration: tuple[int, ...] | None = None
     elite_ratio: float = 0.25
     initial_std: float = 1.0
     min_std: float = 0.2
@@ -352,6 +353,29 @@ class RankBucketCEMConfig:
         if population_size <= 0:
             raise ValueError("attack.rank_bucket_cem.population_size must be positive.")
         object.__setattr__(self, "population_size", population_size)
+
+        population_per_iteration = self.population_per_iteration
+        if population_per_iteration is not None:
+            schedule = _as_int_list(
+                population_per_iteration,
+                "attack.rank_bucket_cem.population_per_iteration",
+            )
+            if not schedule:
+                raise ValueError(
+                    "attack.rank_bucket_cem.population_per_iteration must not be empty."
+                )
+            if len(schedule) != iterations:
+                raise ValueError(
+                    "attack.rank_bucket_cem.population_per_iteration length must "
+                    "equal attack.rank_bucket_cem.iterations."
+                )
+            if any(int(value) <= 0 for value in schedule):
+                raise ValueError(
+                    "attack.rank_bucket_cem.population_per_iteration entries must "
+                    "be positive."
+                )
+            population_per_iteration = tuple(int(value) for value in schedule)
+        object.__setattr__(self, "population_per_iteration", population_per_iteration)
 
         elite_ratio = _as_float(self.elite_ratio, "attack.rank_bucket_cem.elite_ratio")
         if not 0.0 < elite_ratio <= 1.0:
@@ -433,6 +457,16 @@ class RankBucketCEMConfig:
             "surrogate_eval_poison_balance",
             resolved_poison_balance,
         )
+
+    @property
+    def effective_population_schedule(self) -> tuple[int, ...]:
+        if self.population_per_iteration is None:
+            return tuple([int(self.population_size)] * int(self.iterations))
+        return tuple(int(value) for value in self.population_per_iteration)
+
+    @property
+    def candidate_count(self) -> int:
+        return int(sum(self.effective_population_schedule))
 
 
 @dataclass(frozen=True)
@@ -977,6 +1011,13 @@ def _normalize_rank_bucket_cem_config(value: Any, context: str) -> dict[str, Any
         payload["population_size"] = _as_int(
             mapping["population_size"],
             f"{context}.population_size",
+        )
+    if "population_per_iteration" in mapping:
+        raw_schedule = mapping["population_per_iteration"]
+        payload["population_per_iteration"] = (
+            None
+            if raw_schedule is None
+            else _as_int_list(raw_schedule, f"{context}.population_per_iteration")
         )
     if "elite_ratio" in mapping:
         payload["elite_ratio"] = _as_float(
