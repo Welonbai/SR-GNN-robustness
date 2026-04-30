@@ -1,5 +1,5 @@
 experiment:
-  name: attack_random_nonzero_when_possible_ratio1
+  name: clean_run_no_attack_srgnn_sample5
 
 data:
   dataset_name: diginetica
@@ -21,7 +21,7 @@ seeds:
 attack:
   size: 0.01
   fake_session_generation_topk: 100
-  replacement_topk_ratio: 1
+  replacement_topk_ratio: 1.0
   poison_model:
     name: srgnn
     params:
@@ -41,11 +41,11 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 3
+  count: 5
   reuse_saved_targets: true
 
 victims:
-  enabled: [srgnn, miasrec, tron]
+  enabled: [srgnn]
   params:
     srgnn:
       train:
@@ -59,33 +59,6 @@ victims:
         step: 1
         patience: 10
         nonhybrid: false
-    miasrec:
-      train:
-        epochs: 4
-        train_batch_size: 64
-        eval_batch_size: 32
-    tron:
-      train:
-        max_epochs: 8
-  runtime:
-    miasrec:
-      python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"
-      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
-      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
-      device:
-        use_gpu: true
-        gpu_id: "0"
-      logging:
-        show_progress: false
-    tron:
-      python_executable: "C:\\Users\\User\\anaconda3\\envs\\tron-gpu\\python.exe"
-      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
-      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
-      device:
-        use_gpu: true
-        gpu_id: "0"
-      dataloader:
-        num_workers: 2
 
 evaluation:
   topk: [5, 10, 15, 20, 25, 30, 40, 50]

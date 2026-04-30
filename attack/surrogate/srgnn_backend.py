@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
+import random
 from typing import Any, Mapping, Sequence
 
+import numpy as np
 import torch
 
 from attack.common.config import Config
@@ -17,12 +20,14 @@ from pytorch_code.model import forward as srg_forward
 from pytorch_code.model import trans_to_cpu, trans_to_cuda
 from pytorch_code.utils import Data
 
-_TARGET_SCORE_METRIC_TOPK = 20
+_TARGET_SCORE_METRIC_TOPK = 30
 _TARGET_SCORE_TARGETED_METRICS = ("mrr", "recall")
 _TARGET_SCORE_REQUIRED_KEYS = (
     "targeted_mrr@10",
     "targeted_recall@10",
     "targeted_recall@20",
+    "targeted_mrr@30",
+    "targeted_recall@30",
 )
 
 
@@ -168,6 +173,142 @@ class SRGNNBackend:
             "avg_loss": avg_loss,
         }
 
+    def fine_tune_fixed_ratio(
+        self,
+        model: object,
+        *,
+        clean_sessions: Sequence[Sequence[int]],
+        clean_labels: Sequence[int],
+        poison_sessions: Sequence[Sequence[int]],
+        poison_labels: Sequence[int],
+        poison_source_session_ids: Sequence[int],
+        fine_tune_config: TruncatedFineTuneConfig | None = None,
+        poison_ratio_in_batch: float,
+        seed: int | None = None,
+    ) -> dict[str, Any]:
+        handle = self._as_model_handle(model)
+        config = fine_tune_config or TruncatedFineTuneConfig()
+        if not clean_sessions:
+            raise ValueError(
+                "RankBucket-CEM fixed-ratio surrogate fine-tune requires a non-empty "
+                "clean pool."
+            )
+        if not poison_sessions:
+            raise ValueError(
+                "RankBucket-CEM fixed-ratio surrogate fine-tune requires a non-empty "
+                "poison pool."
+            )
+        normalized_clean_sessions = _normalize_sessions(clean_sessions)
+        normalized_clean_labels = [int(label) for label in clean_labels]
+        normalized_poison_sessions = _normalize_sessions(poison_sessions)
+        normalized_poison_labels = [int(label) for label in poison_labels]
+        normalized_source_ids = [int(source_id) for source_id in poison_source_session_ids]
+        if len(normalized_clean_sessions) != len(normalized_clean_labels):
+            raise ValueError("clean_sessions and clean_labels must have the same length.")
+        if len(normalized_poison_sessions) != len(normalized_poison_labels):
+            raise ValueError("poison_sessions and poison_labels must have the same length.")
+        if len(normalized_poison_sessions) != len(normalized_source_ids):
+            raise ValueError(
+                "poison_source_session_ids must align with poison_sessions."
+            )
+        torch_model = handle.model
+        batch_size = int(torch_model.batch_size)
+        clean_batch_size, poison_batch_size = _fixed_ratio_batch_sizes(
+            batch_size,
+            float(poison_ratio_in_batch),
+        )
+        step_limit = int(config.steps)
+        if step_limit < 0:
+            raise ValueError("fine_tune_config.steps must be non-negative.")
+
+        combined_sessions = normalized_clean_sessions + normalized_poison_sessions
+        combined_labels = normalized_clean_labels + normalized_poison_labels
+        train_data = Data((combined_sessions, combined_labels), shuffle=False)
+        clean_pool_size = len(normalized_clean_sessions)
+        poison_pool_size = len(normalized_poison_sessions)
+        rng = random.Random(0 if seed is None else int(seed))
+        clean_sampler = _CyclingIndexSampler(clean_pool_size, rng=rng)
+        poison_sampler = _CyclingIndexSampler(poison_pool_size, rng=rng)
+
+        step_losses: list[float] = []
+        completed_steps = 0
+        clean_examples_seen = 0
+        poison_examples_seen = 0
+        unique_poison_prefix_examples_seen: set[int] = set()
+        unique_poison_source_sessions_seen: set[int] = set()
+
+        torch_model.train()
+        for _ in range(step_limit):
+            clean_indices = clean_sampler.draw(clean_batch_size)
+            poison_indices = poison_sampler.draw(poison_batch_size)
+            clean_examples_seen += len(clean_indices)
+            poison_examples_seen += len(poison_indices)
+            unique_poison_prefix_examples_seen.update(int(index) for index in poison_indices)
+            unique_poison_source_sessions_seen.update(
+                normalized_source_ids[int(index)] for index in poison_indices
+            )
+
+            batch_indices = list(clean_indices) + [
+                clean_pool_size + int(index) for index in poison_indices
+            ]
+            rng.shuffle(batch_indices)
+            batch_array = np.asarray(batch_indices, dtype=np.int64)
+
+            torch_model.optimizer.zero_grad()
+            targets, scores = srg_forward(torch_model, batch_array, train_data)
+            targets_tensor = trans_to_cuda(torch.as_tensor(targets, dtype=torch.long))
+            loss = torch_model.loss_function(scores, targets_tensor - 1)
+            loss.backward()
+            torch_model.optimizer.step()
+
+            step_losses.append(float(loss.item()))
+            completed_steps += 1
+
+        if completed_steps > 0:
+            torch_model.scheduler.step()
+            handle.runner.train_loss_history = [
+                float(sum(step_losses) / len(step_losses))
+            ]
+        else:
+            handle.runner.train_loss_history = []
+
+        total_seen = clean_examples_seen + poison_examples_seen
+        avg_loss = float(sum(step_losses) / len(step_losses)) if step_losses else None
+        return {
+            "steps": int(completed_steps),
+            "epochs": 1 if completed_steps > 0 else 0,
+            "step_loss": step_losses,
+            "train_loss": list(handle.runner.train_loss_history),
+            "avg_loss": avg_loss,
+            "poison_balance": {
+                "poison_balance_enabled": True,
+                "poison_balance_mode": "fixed_ratio",
+                "requested_poison_ratio_in_batch": float(poison_ratio_in_batch),
+                "configured_clean_batch_size": int(clean_batch_size),
+                "configured_poison_batch_size": int(poison_batch_size),
+                "effective_poison_ratio_seen": (
+                    None
+                    if total_seen <= 0
+                    else float(poison_examples_seen) / float(total_seen)
+                ),
+                "configured_fine_tune_steps": int(step_limit),
+                "actual_optimizer_steps": int(completed_steps),
+                "batch_size": int(batch_size),
+                "clean_pool_size": int(clean_pool_size),
+                "poison_pool_size": int(poison_pool_size),
+                "clean_examples_seen": int(clean_examples_seen),
+                "poison_examples_seen": int(poison_examples_seen),
+                "unique_poison_prefix_examples_seen": int(
+                    len(unique_poison_prefix_examples_seen)
+                ),
+                "unique_poison_source_sessions_seen": int(
+                    len(unique_poison_source_sessions_seen)
+                ),
+                "sampling_strategy": "shuffled_cycling",
+                "sampling_wrapped": bool(clean_sampler.wrapped or poison_sampler.wrapped),
+            },
+        }
+
     def score_target(
         self,
         model: object,
@@ -245,7 +386,7 @@ class SRGNNBackend:
                 rankings,
                 target_item=int(target_item),
                 metrics=_TARGET_SCORE_TARGETED_METRICS,
-                topk=[10, 20],
+                topk=[10, 20, 30],
             )
             metrics = {
                 metric_key: float(targeted_metrics[metric_key])
@@ -293,6 +434,51 @@ def _normalize_sessions(sessions: SessionBatch) -> list[list[int]]:
     if any(len(session) == 0 for session in normalized):
         raise ValueError("Sessions must be non-empty.")
     return normalized
+
+
+def _fixed_ratio_batch_sizes(batch_size: int, poison_ratio_in_batch: float) -> tuple[int, int]:
+    resolved_batch_size = int(batch_size)
+    if resolved_batch_size < 2:
+        raise ValueError("fixed-ratio fine-tune requires batch_size >= 2.")
+    ratio = float(poison_ratio_in_batch)
+    if not 0.0 < ratio < 1.0:
+        raise ValueError("poison_ratio_in_batch must be > 0 and < 1.")
+    poison_batch_size = int(math.floor((float(resolved_batch_size) * ratio) + 0.5))
+    poison_batch_size = max(1, min(resolved_batch_size - 1, poison_batch_size))
+    clean_batch_size = resolved_batch_size - poison_batch_size
+    return int(clean_batch_size), int(poison_batch_size)
+
+
+class _CyclingIndexSampler:
+    def __init__(self, size: int, *, rng: random.Random) -> None:
+        self.size = int(size)
+        if self.size <= 0:
+            raise ValueError("Cycling sampler requires a non-empty pool.")
+        self.rng = rng
+        self.order = list(range(self.size))
+        self.rng.shuffle(self.order)
+        self.cursor = 0
+        self.wrapped = False
+
+    def draw(self, count: int) -> list[int]:
+        requested = int(count)
+        if requested <= 0:
+            return []
+        result: list[int] = []
+        while len(result) < requested:
+            if self.cursor >= self.size:
+                self.cursor = 0
+                self.rng.shuffle(self.order)
+                self.wrapped = True
+            remaining = self.size - self.cursor
+            take = min(requested - len(result), remaining)
+            result.extend(self.order[self.cursor : self.cursor + take])
+            self.cursor += take
+            if self.cursor >= self.size and len(result) < requested:
+                self.cursor = 0
+                self.rng.shuffle(self.order)
+                self.wrapped = True
+        return [int(index) for index in result]
 
 
 __all__ = ["SRGNNBackend", "SRGNNModelHandle"]

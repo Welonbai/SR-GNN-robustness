@@ -16,7 +16,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from attack.common.config import RankBucketCEMConfig, load_config
+from attack.common.config import (
+    RankBucketCEMConfig,
+    SurrogateEvalPoisonBalanceConfig,
+    load_config,
+)
 from attack.common.paths import (
     POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     attack_key,
@@ -48,6 +52,7 @@ from attack.position_opt.cem.trainer import (
     _resolve_reward_value,
 )
 from attack.position_opt.types import InnerTrainResult, SurrogateScoreResult
+from attack.surrogate.srgnn_backend import _fixed_ratio_batch_sizes
 
 
 CONFIG_PATH = (
@@ -85,6 +90,7 @@ def _identity_context(config) -> dict[str, object]:
 class _DummyBackend:
     def __init__(self) -> None:
         self.loaded_paths: list[str] = []
+        self.fixed_ratio_calls: list[dict[str, object]] = []
         self.clean_target_result = SurrogateScoreResult.from_values(
             [0.2],
             metrics={
@@ -108,6 +114,71 @@ class _DummyBackend:
 
     def fine_tune(self, model, poisoned_train_data, *, fine_tune_config=None, eval_data=None):
         raise AssertionError("Dummy backend fine_tune() should not be called directly.")
+
+    def fine_tune_fixed_ratio(
+        self,
+        model,
+        *,
+        clean_sessions,
+        clean_labels,
+        poison_sessions,
+        poison_labels,
+        poison_source_session_ids,
+        fine_tune_config=None,
+        poison_ratio_in_batch: float,
+        seed=None,
+    ):
+        del clean_labels, poison_labels, seed
+        if isinstance(model, dict):
+            model["kind"] = "trained"
+        clean_batch_size, poison_batch_size = _fixed_ratio_batch_sizes(
+            100,
+            poison_ratio_in_batch,
+        )
+        steps = 0 if fine_tune_config is None else int(fine_tune_config.steps)
+        clean_seen = int(clean_batch_size * steps)
+        poison_seen = int(poison_batch_size * steps)
+        unique_prefixes = min(len(poison_sessions), poison_seen)
+        unique_sources = min(len(set(poison_source_session_ids)), unique_prefixes)
+        payload = {
+            "clean_pool_size": len(clean_sessions),
+            "poison_pool_size": len(poison_sessions),
+            "poison_source_session_ids": list(poison_source_session_ids),
+            "steps": steps,
+        }
+        self.fixed_ratio_calls.append(payload)
+        return {
+            "steps": steps,
+            "epochs": 1 if steps else 0,
+            "avg_loss": 0.0,
+            "step_loss": [0.0] * steps,
+            "train_loss": [0.0] if steps else [],
+            "poison_balance": {
+                "poison_balance_enabled": True,
+                "poison_balance_mode": "fixed_ratio",
+                "requested_poison_ratio_in_batch": float(poison_ratio_in_batch),
+                "configured_clean_batch_size": int(clean_batch_size),
+                "configured_poison_batch_size": int(poison_batch_size),
+                "effective_poison_ratio_seen": (
+                    None
+                    if clean_seen + poison_seen == 0
+                    else poison_seen / float(clean_seen + poison_seen)
+                ),
+                "configured_fine_tune_steps": int(steps),
+                "actual_optimizer_steps": int(steps),
+                "batch_size": 100,
+                "clean_pool_size": len(clean_sessions),
+                "poison_pool_size": len(poison_sessions),
+                "clean_examples_seen": int(clean_seen),
+                "poison_examples_seen": int(poison_seen),
+                "unique_poison_prefix_examples_seen": int(unique_prefixes),
+                "unique_poison_source_sessions_seen": int(unique_sources),
+                "sampling_strategy": "shuffled_cycling",
+                "sampling_wrapped": bool(
+                    clean_seen > len(clean_sessions) or poison_seen > len(poison_sessions)
+                ),
+            },
+        }
 
     def score_target(self, model, eval_sessions, target_item: int) -> SurrogateScoreResult:
         if isinstance(model, dict) and model.get("kind") == "clean":
@@ -187,10 +258,12 @@ def _run_dummy_trainer(
     *,
     reward_mode: str = "poisoned_target_utility",
     reward_metric: str | None = None,
+    surrogate_eval_poison_balance: SurrogateEvalPoisonBalanceConfig | None = None,
     save_candidate_selected_positions: bool = False,
     save_final_selected_positions: bool = False,
     save_optimized_poisoned_sessions: bool = True,
     save_replay_metadata: bool = True,
+    fake_sessions: list[list[int]] | None = None,
 ) -> tuple[dict[str, object], RankBucketCEMArtifactPaths, _DummyInnerTrainer]:
     config = _config()
     position_opt = replace(
@@ -205,6 +278,11 @@ def _run_dummy_trainer(
         iterations=1,
         population_size=3,
         reward_metric=reward_metric,
+        surrogate_eval_poison_balance=(
+            config.attack.rank_bucket_cem.surrogate_eval_poison_balance
+            if surrogate_eval_poison_balance is None
+            else surrogate_eval_poison_balance
+        ),
         save_candidate_selected_positions=save_candidate_selected_positions,
         save_final_selected_positions=save_final_selected_positions,
         save_optimized_poisoned_sessions=save_optimized_poisoned_sessions,
@@ -230,7 +308,7 @@ def _run_dummy_trainer(
     )
     artifact_paths = _artifact_paths(tmp_path)
     result = trainer.train(
-        [_session(2), _session(3), _session(5)],
+        [_session(2), _session(3), _session(5)] if fake_sessions is None else fake_sessions,
         5334,
         _shared_artifacts(),
         config,
@@ -262,7 +340,33 @@ def test_rank_bucket_cem_config_loads_with_clean_defaults() -> None:
     assert config.attack.rank_bucket_cem.save_final_selected_positions is False
     assert config.attack.rank_bucket_cem.save_optimized_poisoned_sessions is True
     assert config.attack.rank_bucket_cem.save_replay_metadata is True
+    poison_balance = config.attack.rank_bucket_cem.surrogate_eval_poison_balance
+    assert poison_balance.enabled is False
+    assert poison_balance.mode == "fixed_ratio"
+    assert poison_balance.poison_ratio_in_batch == pytest.approx(0.20)
+    assert poison_balance.loss_weighting == "none"
     assert config.victims.enabled == ("srgnn", "miasrec", "tron")
+
+
+def test_rank_bucket_cem_poison_balance_config_validation() -> None:
+    with pytest.raises(ValueError, match="poison_ratio_in_batch must be > 0 and < 1"):
+        SurrogateEvalPoisonBalanceConfig(poison_ratio_in_batch=0.0)
+    with pytest.raises(ValueError, match="poison_ratio_in_batch must be > 0 and < 1"):
+        SurrogateEvalPoisonBalanceConfig(poison_ratio_in_batch=1.0)
+    with pytest.raises(ValueError, match="supports only 'fixed_ratio'"):
+        SurrogateEvalPoisonBalanceConfig(mode="poison_only")
+    with pytest.raises(ValueError, match="supports only 'none'"):
+        SurrogateEvalPoisonBalanceConfig(loss_weighting="importance")
+
+
+def test_fixed_ratio_batch_sizes_are_deterministic_and_clamped() -> None:
+    assert _fixed_ratio_batch_sizes(100, 0.20) == (80, 20)
+    assert _fixed_ratio_batch_sizes(7, 0.20) == (6, 1)
+    assert _fixed_ratio_batch_sizes(7, 0.50) == (3, 4)
+    assert _fixed_ratio_batch_sizes(100, 0.001) == (99, 1)
+    assert _fixed_ratio_batch_sizes(100, 0.999) == (1, 99)
+    with pytest.raises(ValueError, match="batch_size >= 2"):
+        _fixed_ratio_batch_sizes(1, 0.20)
 
 
 def test_availability_groups_and_summary_match_expected_candidate_shapes() -> None:
@@ -464,6 +568,13 @@ def test_cem_trace_omits_candidate_selected_positions_by_default_and_keeps_seed_
         assert all("selected_positions" not in row for row in trace_rows)
         assert len({row["surrogate_train_seed"] for row in trace_rows}) == 1
         assert len(set(seed for seed in inner_trainer.seeds if seed is not None)) == 1
+        assert all(row["poison_balance_enabled"] is False for row in trace_rows)
+        assert all(row["clean_examples_seen"] is None for row in trace_rows)
+        assert all(row["poison_examples_seen"] is None for row in trace_rows)
+        assert all(row["actual_optimizer_steps"] == 1 for row in trace_rows)
+        assert all(row["fine_tune_seconds"] >= 0.0 for row in trace_rows)
+        assert all(row["score_target_seconds"] >= 0.0 for row in trace_rows)
+        assert all(row["candidate_total_seconds"] >= 0.0 for row in trace_rows)
         assert not artifact_paths.final_selected_positions.exists()
         assert artifact_paths.optimized_poisoned_sessions.exists()
         assert artifact_paths.final_position_summary.exists()
@@ -480,6 +591,65 @@ def test_cem_trace_omits_candidate_selected_positions_by_default_and_keeps_seed_
         assert best_policy["replay_metadata"]["validation_subset_strategy"] == (
             "deterministic_random_subset"
         )
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_fixed_ratio_poison_balance_records_trace_metadata_and_skips_inner_trainer() -> None:
+    tmp_path = _repo_temp_dir()
+    try:
+        result, artifact_paths, inner_trainer = _run_dummy_trainer(
+            tmp_path,
+            surrogate_eval_poison_balance=SurrogateEvalPoisonBalanceConfig(
+                enabled=True,
+                mode="fixed_ratio",
+                poison_ratio_in_batch=0.20,
+                loss_weighting="none",
+            ),
+        )
+        trace_rows = _read_jsonl(artifact_paths.cem_trace)
+        best_policy = json.loads(artifact_paths.cem_best_policy.read_text(encoding="utf-8"))
+
+        assert result["best_reward"] == pytest.approx(0.8)
+        assert inner_trainer.seeds == []
+        assert trace_rows
+        assert all(row["poison_balance_enabled"] is True for row in trace_rows)
+        assert all(row["poison_balance_mode"] == "fixed_ratio" for row in trace_rows)
+        assert all(row["requested_poison_ratio_in_batch"] == pytest.approx(0.20) for row in trace_rows)
+        assert all(row["configured_clean_batch_size"] == 80 for row in trace_rows)
+        assert all(row["configured_poison_batch_size"] == 20 for row in trace_rows)
+        assert all(row["actual_optimizer_steps"] == 1 for row in trace_rows)
+        assert all(row["clean_examples_seen"] == 80 for row in trace_rows)
+        assert all(row["poison_examples_seen"] == 20 for row in trace_rows)
+        assert all(row["unique_poison_prefix_examples_seen"] == 7 for row in trace_rows)
+        assert all(row["unique_poison_source_sessions_seen"] == 3 for row in trace_rows)
+        assert all(row["sampling_strategy"] == "shuffled_cycling" for row in trace_rows)
+        assert all(row["sampling_wrapped"] is True for row in trace_rows)
+        assert all(row["fine_tune_seconds"] >= 0.0 for row in trace_rows)
+        assert all(row["score_target_seconds"] >= 0.0 for row in trace_rows)
+        assert all(row["candidate_total_seconds"] >= 0.0 for row in trace_rows)
+        assert best_policy["replay_metadata"]["surrogate_eval_poison_balance"] == {
+            "enabled": True,
+            "mode": "fixed_ratio",
+            "poison_ratio_in_batch": 0.20,
+            "loss_weighting": "none",
+        }
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_fixed_ratio_poison_balance_rejects_empty_poison_prefix_pool() -> None:
+    tmp_path = _repo_temp_dir()
+    try:
+        with pytest.raises(ValueError, match="non-empty poison pool"):
+            _run_dummy_trainer(
+                tmp_path,
+                surrogate_eval_poison_balance=SurrogateEvalPoisonBalanceConfig(
+                    enabled=True,
+                    poison_ratio_in_batch=0.20,
+                ),
+                fake_sessions=[_session(1)],
+            )
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 
@@ -538,6 +708,10 @@ def test_replay_metadata_and_reward_metric_are_saved_for_metric_based_runs() -> 
 def test_rank_bucket_cem_identity_changes_without_touching_shared_fake_session_cache() -> None:
     config = _config()
     baseline_context = _identity_context(config)
+    assert (
+        "surrogate_eval_poison_balance"
+        not in baseline_context["position_opt"]["rank_bucket_cem"]
+    )
 
     tweaked_cem = replace(config.attack.rank_bucket_cem, iterations=5)
     updated = replace(config, attack=replace(config.attack, rank_bucket_cem=tweaked_cem))
@@ -577,6 +751,38 @@ def test_rank_bucket_cem_identity_changes_without_touching_shared_fake_session_c
         run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     ) == shared_attack_artifact_key(
         updated,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+    )
+
+    balanced_cem = replace(
+        config.attack.rank_bucket_cem,
+        surrogate_eval_poison_balance=SurrogateEvalPoisonBalanceConfig(
+            enabled=True,
+            poison_ratio_in_batch=0.20,
+        ),
+    )
+    balanced = replace(config, attack=replace(config.attack, rank_bucket_cem=balanced_cem))
+    balanced_context = _identity_context(balanced)
+    assert (
+        balanced_context["position_opt"]["rank_bucket_cem"][
+            "surrogate_eval_poison_balance"
+        ]["enabled"]
+        is True
+    )
+    assert attack_key(
+        config,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+        attack_identity_context=baseline_context,
+    ) != attack_key(
+        balanced,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+        attack_identity_context=balanced_context,
+    )
+    assert shared_attack_artifact_key(
+        config,
+        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+    ) == shared_attack_artifact_key(
+        balanced,
         run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     )
 

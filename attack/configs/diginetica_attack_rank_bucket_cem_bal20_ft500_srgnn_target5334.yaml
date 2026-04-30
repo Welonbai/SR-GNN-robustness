@@ -1,5 +1,5 @@
 experiment:
-  name: attack_rank_bucket_cem
+  name: attack_rank_bucket_cem_bal20_ft500_srgnn_target5334
 
 data:
   dataset_name: diginetica
@@ -25,7 +25,7 @@ attack:
   position_opt:
     clean_surrogate_checkpoint: outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt
     nonzero_action_when_possible: true
-    fine_tune_steps: 20
+    fine_tune_steps: 500
     validation_subset_size: null
     reward_mode: poisoned_target_utility
     enable_gt_penalty: false
@@ -44,7 +44,7 @@ attack:
     save_optimized_poisoned_sessions: true
     save_replay_metadata: true
     surrogate_eval_poison_balance:
-      enabled: false
+      enabled: true
       mode: fixed_ratio
       poison_ratio_in_batch: 0.20
       loss_weighting: none
@@ -64,14 +64,14 @@ attack:
         nonhybrid: false
 
 targets:
-  mode: sampled
-  explicit_list: []
+  mode: explicit_list
+  explicit_list: [5334]
   bucket: popular
-  count: 3
+  count: 1
   reuse_saved_targets: true
 
 victims:
-  enabled: [srgnn, miasrec, tron]
+  enabled: [srgnn]
   params:
     srgnn:
       train:
@@ -85,33 +85,6 @@ victims:
         step: 1
         patience: 10
         nonhybrid: false
-    miasrec:
-      train:
-        epochs: 4
-        train_batch_size: 64
-        eval_batch_size: 32
-    tron:
-      train:
-        max_epochs: 8
-  runtime:
-    miasrec:
-      python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"
-      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
-      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
-      device:
-        use_gpu: true
-        gpu_id: "0"
-      logging:
-        show_progress: false
-    tron:
-      python_executable: "C:\\Users\\User\\anaconda3\\envs\\tron-gpu\\python.exe"
-      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
-      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
-      device:
-        use_gpu: true
-        gpu_id: "0"
-      dataloader:
-        num_workers: 2
 
 evaluation:
   topk: [5, 10, 15, 20, 25, 30, 40, 50]

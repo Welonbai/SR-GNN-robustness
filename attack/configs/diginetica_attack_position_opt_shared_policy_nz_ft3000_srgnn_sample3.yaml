@@ -1,5 +1,5 @@
 experiment:
-  name: attack_rank_bucket_cem
+  name: attack_position_opt_shared_policy_nz_ft3000_srgnn_sample3
 
 data:
   dataset_name: diginetica
@@ -24,30 +24,22 @@ attack:
   replacement_topk_ratio: 1.0
   position_opt:
     clean_surrogate_checkpoint: outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt
+    outer_steps: 30
+    policy_lr: 0.01
+    policy_feature_set: local_context
     nonzero_action_when_possible: true
-    fine_tune_steps: 20
+    fine_tune_steps: 3000
     validation_subset_size: null
+    reward_baseline_momentum: 0.9
     reward_mode: poisoned_target_utility
+    entropy_coef: 0.0
     enable_gt_penalty: false
     gt_penalty_weight: 0.0
     gt_tolerance: 0.0
-  rank_bucket_cem:
-    iterations: 3
-    population_size: 8
-    elite_ratio: 0.25
-    initial_std: 1.0
-    min_std: 0.2
-    smoothing: 0.3
-    reward_metric: null
-    save_candidate_selected_positions: false
-    save_final_selected_positions: false
-    save_optimized_poisoned_sessions: true
-    save_replay_metadata: true
-    surrogate_eval_poison_balance:
-      enabled: false
-      mode: fixed_ratio
-      poison_ratio_in_batch: 0.20
-      loss_weighting: none
+    final_selection: argmax
+    deterministic_eval_every: 0
+    deterministic_eval_include_final: true
+    final_policy_selection: last
   poison_model:
     name: srgnn
     params:
@@ -71,7 +63,7 @@ targets:
   reuse_saved_targets: true
 
 victims:
-  enabled: [srgnn, miasrec, tron]
+  enabled: [srgnn]
   params:
     srgnn:
       train:
@@ -85,33 +77,6 @@ victims:
         step: 1
         patience: 10
         nonhybrid: false
-    miasrec:
-      train:
-        epochs: 4
-        train_batch_size: 64
-        eval_batch_size: 32
-    tron:
-      train:
-        max_epochs: 8
-  runtime:
-    miasrec:
-      python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"
-      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
-      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
-      device:
-        use_gpu: true
-        gpu_id: "0"
-      logging:
-        show_progress: false
-    tron:
-      python_executable: "C:\\Users\\User\\anaconda3\\envs\\tron-gpu\\python.exe"
-      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
-      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
-      device:
-        use_gpu: true
-        gpu_id: "0"
-      dataloader:
-        num_workers: 2
 
 evaluation:
   topk: [5, 10, 15, 20, 25, 30, 40, 50]

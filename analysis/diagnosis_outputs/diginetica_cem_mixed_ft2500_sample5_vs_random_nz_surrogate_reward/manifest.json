@@ -1,0 +1,26 @@
+{
+  "cem_run_root": "outputs\\runs\\diginetica\\attack_rank_bucket_cem_mixed_ft2500_srgnn_sample5\\run_group_e4d7034404",
+  "clean_surrogate_checkpoint": "outputs\\surrogates\\diginetica\\clean_srgnn_surrogate_from_attack_a7fd31f6af.pt",
+  "complete": true,
+  "completed_target_items": [
+    5334,
+    5418,
+    11103,
+    14514,
+    39588
+  ],
+  "config": "attack\\configs\\diginetica_attack_rank_bucket_cem_mixed_ft2500_srgnn_sample5.yaml",
+  "elapsed_seconds": 708.422,
+  "final_metric_overlap": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft2500_sample5_vs_random_nz_surrogate_reward\\final_metric_overlap.csv",
+  "random_nz_run_root": "outputs\\runs\\diginetica\\attack_random_nonzero_when_possible_ratio1_srgnn_sample5\\run_group_720516397a",
+  "report": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft2500_sample5_vs_random_nz_surrogate_reward\\alignment_report.md",
+  "surrogate_final_alignment": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft2500_sample5_vs_random_nz_surrogate_reward\\surrogate_final_alignment.csv",
+  "surrogate_reward_comparison": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft2500_sample5_vs_random_nz_surrogate_reward\\surrogate_reward_comparison.csv",
+  "target_items": [
+    5334,
+    5418,
+    11103,
+    14514,
+    39588
+  ]
+}

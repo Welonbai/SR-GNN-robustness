@@ -192,6 +192,18 @@ def run_position_opt_shared_policy(
                 if artifact_paths.training_history is None
                 else str(artifact_paths.training_history)
             ),
+            "position_opt_shared_policy_trace_path": str(
+                artifact_paths.base_dir / "shared_policy_trace.jsonl"
+            ),
+            "position_opt_shared_policy_best_policy_path": str(
+                artifact_paths.base_dir / "shared_policy_best_policy.json"
+            ),
+            "position_opt_final_position_summary_path": str(
+                artifact_paths.base_dir / "final_position_summary.json"
+            ),
+            "position_opt_shared_policy_run_metadata_path": str(
+                artifact_paths.base_dir / "shared_policy_run_metadata.json"
+            ),
             "position_opt_learned_logits_path": (
                 None
                 if artifact_paths.learned_logits is None
@@ -379,6 +391,18 @@ def _save_position_opt_run_metadata(
                 None
                 if artifact_paths.training_history is None
                 else str(artifact_paths.training_history)
+            ),
+            "shared_policy_trace": str(
+                artifact_paths.base_dir / "shared_policy_trace.jsonl"
+            ),
+            "shared_policy_best_policy": str(
+                artifact_paths.base_dir / "shared_policy_best_policy.json"
+            ),
+            "final_position_summary": str(
+                artifact_paths.base_dir / "final_position_summary.json"
+            ),
+            "shared_policy_run_metadata": str(
+                artifact_paths.base_dir / "shared_policy_run_metadata.json"
             ),
             "learned_logits": (
                 None

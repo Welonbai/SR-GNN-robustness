@@ -1,0 +1,83 @@
+{
+  "cem_best_stored": {
+    "candidate_id": 5,
+    "iteration": 2,
+    "poison_balance": {
+      "actual_optimizer_steps": 500,
+      "clean_examples_seen": 40000,
+      "configured_clean_batch_size": 80,
+      "configured_fine_tune_steps": 500,
+      "configured_poison_batch_size": 20,
+      "effective_poison_ratio_seen": 0.2,
+      "poison_balance_enabled": true,
+      "poison_balance_mode": "fixed_ratio",
+      "poison_examples_seen": 10000,
+      "requested_poison_ratio_in_batch": 0.2,
+      "unique_poison_prefix_examples_seen": 10000,
+      "unique_poison_source_sessions_seen": 4571
+    },
+    "reward": 0.03302546963095665,
+    "selection_seed": 510608597,
+    "target_metrics": {
+      "targeted_mrr@10": 0.22207095172813152,
+      "targeted_recall@10": 0.3996807500934741,
+      "targeted_recall@20": 0.5025022289970951
+    },
+    "target_result_mean": 0.033025468181545364
+  },
+  "cem_run_root": "outputs\\runs\\diginetica\\attack_rank_bucket_cem_bal20_ft500_srgnn_target5334\\run_group_3787674b40",
+  "config": "attack\\configs\\diginetica_attack_rank_bucket_cem_bal20_ft500_srgnn_target5334.yaml",
+  "pairwise": {
+    "cem_minus_random_reward": 0.010098990860348982,
+    "cem_minus_random_targeted_mrr@10": 0.02364249169234886,
+    "cem_minus_random_targeted_recall@10": 0.018680433719692857,
+    "cem_minus_random_targeted_recall@20": 0.008053150795248598
+  },
+  "random_nz_fixed_ratio_rescore": {
+    "candidate_total_seconds": 35.535927599994466,
+    "fine_tune_history_summary": {
+      "avg_loss": 5.400333185195922,
+      "epochs": 1,
+      "poison_balance": {
+        "actual_optimizer_steps": 500,
+        "batch_size": 100,
+        "clean_examples_seen": 40000,
+        "clean_pool_size": 649932,
+        "configured_clean_batch_size": 80,
+        "configured_fine_tune_steps": 500,
+        "configured_poison_batch_size": 20,
+        "effective_poison_ratio_seen": 0.2,
+        "poison_balance_enabled": true,
+        "poison_balance_mode": "fixed_ratio",
+        "poison_examples_seen": 10000,
+        "poison_pool_size": 25248,
+        "requested_poison_ratio_in_batch": 0.2,
+        "sampling_strategy": "shuffled_cycling",
+        "sampling_wrapped": false,
+        "unique_poison_prefix_examples_seen": 10000,
+        "unique_poison_source_sessions_seen": 4571
+      },
+      "steps": 500,
+      "train_loss": [
+        5.400333185195922
+      ]
+    },
+    "fine_tune_seconds": 25.176108599989675,
+    "reward": 0.022926478770607668,
+    "score_target_seconds": 10.35981900000479,
+    "target_metrics": {
+      "targeted_mrr@10": 0.19842846003578266,
+      "targeted_recall@10": 0.38100031637378123,
+      "targeted_recall@20": 0.49444907820184647
+    },
+    "target_result_mean": 0.022926478770607668
+  },
+  "reward_metric": "target_result.mean",
+  "surrogate_train_seed": 148798948,
+  "target_item": 5334,
+  "validation_subset": {
+    "seed": null,
+    "selected_count": 69538,
+    "strategy": "full_validation_set"
+  }
+}

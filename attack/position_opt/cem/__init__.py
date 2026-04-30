@@ -54,6 +54,9 @@ def resolve_rank_bucket_cem_config(
 
 def rank_bucket_cem_identity_payload(config: RankBucketCEMConfig) -> dict[str, Any]:
     payload = asdict(config)
+    poison_balance = payload.get("surrogate_eval_poison_balance")
+    if isinstance(poison_balance, Mapping) and not bool(poison_balance.get("enabled", False)):
+        payload.pop("surrogate_eval_poison_balance", None)
     for key in (
         "save_candidate_selected_positions",
         "save_final_selected_positions",
@@ -114,6 +117,7 @@ def _coerce_rank_bucket_cem_layer(
             "save_final_selected_positions",
             "save_optimized_poisoned_sessions",
             "save_replay_metadata",
+            "surrogate_eval_poison_balance",
         }
         unknown = set(payload) - allowed_fields
         if unknown:

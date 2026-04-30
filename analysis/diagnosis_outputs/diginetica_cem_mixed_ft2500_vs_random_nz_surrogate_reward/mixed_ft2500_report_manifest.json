@@ -1,0 +1,34 @@
+{
+  "bal20_run_root": "outputs\\runs\\diginetica\\attack_rank_bucket_cem_bal20_ft500_srgnn_target5334\\run_group_3787674b40",
+  "final_metric_three_way_compact_csv": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft2500_vs_random_nz_surrogate_reward\\final_metric_three_way_compact.csv",
+  "final_metric_three_way_csv": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft2500_vs_random_nz_surrogate_reward\\final_metric_three_way.csv",
+  "mixed_run_root": "outputs\\runs\\diginetica\\attack_rank_bucket_cem_mixed_ft2500_srgnn_target5334\\run_group_73b4185f37",
+  "mixed_vs_bal20_gt_wins": {
+    "bal20": 0,
+    "mixed": 32,
+    "ties": 0,
+    "total": 32
+  },
+  "mixed_vs_bal20_targeted_wins": {
+    "bal20": 20,
+    "mixed": 12,
+    "ties": 0,
+    "total": 32
+  },
+  "mixed_vs_random_gt_wins": {
+    "mixed": 30,
+    "random": 2,
+    "ties": 0,
+    "total": 32
+  },
+  "mixed_vs_random_targeted_wins": {
+    "mixed": 30,
+    "random": 2,
+    "ties": 0,
+    "total": 32
+  },
+  "random_run_root": "outputs\\runs\\diginetica\\attack_random_nonzero_when_possible_ratio1\\run_group_8679b974a1",
+  "report": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft2500_vs_random_nz_surrogate_reward\\mixed_ft2500_vs_random_bal20_report.md",
+  "surrogate_reward_comparison_csv": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft2500_vs_random_nz_surrogate_reward\\surrogate_reward_comparison.csv",
+  "surrogate_reward_pairwise_csv": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft2500_vs_random_nz_surrogate_reward\\surrogate_reward_pairwise.csv"
+}

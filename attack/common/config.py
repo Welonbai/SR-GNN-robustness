@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -275,6 +275,54 @@ class PositionOptConfig:
 
 
 @dataclass(frozen=True)
+class SurrogateEvalPoisonBalanceConfig:
+    enabled: bool = False
+    mode: str = "fixed_ratio"
+    poison_ratio_in_batch: float = 0.20
+    loss_weighting: str = "none"
+
+    def __post_init__(self) -> None:
+        enabled = _as_bool(
+            self.enabled,
+            "attack.rank_bucket_cem.surrogate_eval_poison_balance.enabled",
+        )
+        object.__setattr__(self, "enabled", enabled)
+
+        mode = _as_str(
+            self.mode,
+            "attack.rank_bucket_cem.surrogate_eval_poison_balance.mode",
+        ).strip().lower()
+        if mode != "fixed_ratio":
+            raise ValueError(
+                "attack.rank_bucket_cem.surrogate_eval_poison_balance.mode "
+                "currently supports only 'fixed_ratio'."
+            )
+        object.__setattr__(self, "mode", mode)
+
+        poison_ratio = _as_float(
+            self.poison_ratio_in_batch,
+            "attack.rank_bucket_cem.surrogate_eval_poison_balance.poison_ratio_in_batch",
+        )
+        if not 0.0 < poison_ratio < 1.0:
+            raise ValueError(
+                "attack.rank_bucket_cem.surrogate_eval_poison_balance."
+                "poison_ratio_in_batch must be > 0 and < 1."
+            )
+        object.__setattr__(self, "poison_ratio_in_batch", poison_ratio)
+
+        loss_weighting = _as_str(
+            self.loss_weighting,
+            "attack.rank_bucket_cem.surrogate_eval_poison_balance.loss_weighting",
+        ).strip().lower()
+        if loss_weighting != "none":
+            raise ValueError(
+                "attack.rank_bucket_cem.surrogate_eval_poison_balance.loss_weighting "
+                "currently supports only 'none'."
+            )
+        object.__setattr__(self, "loss_weighting", loss_weighting)
+
+
+@dataclass(frozen=True)
 class RankBucketCEMConfig:
     iterations: int = 3
     population_size: int = 8
@@ -287,6 +335,9 @@ class RankBucketCEMConfig:
     save_final_selected_positions: bool = False
     save_optimized_poisoned_sessions: bool = True
     save_replay_metadata: bool = True
+    surrogate_eval_poison_balance: SurrogateEvalPoisonBalanceConfig = field(
+        default_factory=SurrogateEvalPoisonBalanceConfig
+    )
 
     def __post_init__(self) -> None:
         iterations = _as_int(self.iterations, "attack.rank_bucket_cem.iterations")
@@ -366,6 +417,21 @@ class RankBucketCEMConfig:
                 self.save_replay_metadata,
                 "attack.rank_bucket_cem.save_replay_metadata",
             ),
+        )
+        poison_balance = self.surrogate_eval_poison_balance
+        if isinstance(poison_balance, SurrogateEvalPoisonBalanceConfig):
+            resolved_poison_balance = poison_balance
+        elif isinstance(poison_balance, Mapping):
+            resolved_poison_balance = SurrogateEvalPoisonBalanceConfig(**dict(poison_balance))
+        else:
+            raise TypeError(
+                "attack.rank_bucket_cem.surrogate_eval_poison_balance must be a mapping "
+                "or SurrogateEvalPoisonBalanceConfig."
+            )
+        object.__setattr__(
+            self,
+            "surrogate_eval_poison_balance",
+            resolved_poison_balance,
         )
 
 
@@ -959,8 +1025,51 @@ def _normalize_rank_bucket_cem_config(value: Any, context: str) -> dict[str, Any
             mapping["save_replay_metadata"],
             f"{context}.save_replay_metadata",
         )
+    if "surrogate_eval_poison_balance" in mapping:
+        payload["surrogate_eval_poison_balance"] = (
+            _normalize_surrogate_eval_poison_balance_config(
+                mapping["surrogate_eval_poison_balance"],
+                f"{context}.surrogate_eval_poison_balance",
+            )
+        )
 
     return _primitive_from_obj(RankBucketCEMConfig(**payload))
+
+
+def _normalize_surrogate_eval_poison_balance_config(
+    value: Any,
+    context: str,
+) -> dict[str, Any]:
+    mapping = _as_mapping(value, context)
+    allowed_fields = {
+        "enabled",
+        "mode",
+        "poison_ratio_in_batch",
+        "loss_weighting",
+    }
+    unknown = set(mapping) - allowed_fields
+    if unknown:
+        raise ValueError(
+            "Unknown surrogate_eval_poison_balance config keys: "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+
+    payload: dict[str, Any] = {}
+    if "enabled" in mapping:
+        payload["enabled"] = _as_bool(mapping["enabled"], f"{context}.enabled")
+    if "mode" in mapping:
+        payload["mode"] = _as_str(mapping["mode"], f"{context}.mode")
+    if "poison_ratio_in_batch" in mapping:
+        payload["poison_ratio_in_batch"] = _as_float(
+            mapping["poison_ratio_in_batch"],
+            f"{context}.poison_ratio_in_batch",
+        )
+    if "loss_weighting" in mapping:
+        payload["loss_weighting"] = _as_str(
+            mapping["loss_weighting"],
+            f"{context}.loss_weighting",
+        )
+    return _primitive_from_obj(SurrogateEvalPoisonBalanceConfig(**payload))
 
 
 def _normalize_poison_model_params(
@@ -1448,6 +1557,7 @@ __all__ = [
     "Config",
     "PositionOptConfig",
     "RankBucketCEMConfig",
+    "SurrogateEvalPoisonBalanceConfig",
     "load_config",
     "normalize_config_mapping",
     "parse_config",

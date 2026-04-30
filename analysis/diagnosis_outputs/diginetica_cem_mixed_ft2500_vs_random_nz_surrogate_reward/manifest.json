@@ -1,0 +1,16 @@
+{
+  "cem_run_root": "outputs/runs/diginetica/attack_rank_bucket_cem_mixed_ft2500_srgnn_target5334/run_group_73b4185f37",
+  "clean_surrogate_checkpoint": "outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt",
+  "config": "attack/configs/diginetica_attack_rank_bucket_cem_mixed_ft2500_srgnn_target5334.yaml",
+  "final_metric_overlap": "analysis/diagnosis_outputs/diginetica_cem_mixed_ft2500_vs_random_nz_surrogate_reward/final_metric_overlap.csv",
+  "final_metric_rows": 64,
+  "pairwise_rows": 1,
+  "random_nz_run_root": "outputs/runs/diginetica/attack_random_nonzero_when_possible_ratio1/run_group_8679b974a1",
+  "report": "analysis/diagnosis_outputs/diginetica_cem_mixed_ft2500_vs_random_nz_surrogate_reward/report.md",
+  "surrogate_reward_comparison": "analysis/diagnosis_outputs/diginetica_cem_mixed_ft2500_vs_random_nz_surrogate_reward/surrogate_reward_comparison.csv",
+  "surrogate_reward_pairwise": "analysis/diagnosis_outputs/diginetica_cem_mixed_ft2500_vs_random_nz_surrogate_reward/surrogate_reward_pairwise.csv",
+  "surrogate_reward_rows": 3,
+  "target_items": [
+    5334
+  ]
+}

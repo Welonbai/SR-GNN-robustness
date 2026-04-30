@@ -1,0 +1,19 @@
+{
+  "cem_run_root": "outputs\\runs\\diginetica\\attack_rank_bucket_cem_mixed_ft2500_srgnn_sample5\\run_group_e4d7034404",
+  "clean_surrogate_checkpoint": "outputs\\surrogates\\diginetica\\clean_srgnn_surrogate_from_attack_a7fd31f6af.pt",
+  "complete": true,
+  "completed_methods": [
+    "cem_best_rescored_ft6500",
+    "random_nz_ratio1_rescored_ft6500"
+  ],
+  "config": "attack\\configs\\diginetica_attack_rank_bucket_cem_mixed_ft2500_srgnn_sample5.yaml",
+  "elapsed_seconds": 411.877,
+  "final_metric_overlap": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft6500_paired_relative_mrr_recall_10_20_target14514_vs_random_nz_surrogate_reward\\final_metric_overlap.csv",
+  "fine_tune_steps": 6500,
+  "random_nz_run_root": "outputs\\runs\\diginetica\\attack_random_nonzero_when_possible_ratio1_srgnn_sample5\\run_group_720516397a",
+  "report": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft6500_paired_relative_mrr_recall_10_20_target14514_vs_random_nz_surrogate_reward\\alignment_report.md",
+  "reward_mode": "paired_relative_mrr_recall_10_20",
+  "surrogate_final_alignment": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft6500_paired_relative_mrr_recall_10_20_target14514_vs_random_nz_surrogate_reward\\surrogate_final_alignment_ft6500_paired_relative_mrr_recall_10_20.csv",
+  "surrogate_reward_comparison": "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft6500_paired_relative_mrr_recall_10_20_target14514_vs_random_nz_surrogate_reward\\surrogate_reward_comparison.csv",
+  "target_item": 14514
+}

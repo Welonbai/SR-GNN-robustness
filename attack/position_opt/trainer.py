@@ -3,9 +3,11 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from statistics import median
 from typing import Any, Mapping, Sequence
 import json
 import pickle
+import time
 
 import torch
 
@@ -334,12 +336,19 @@ class PositionOptMVPTrainer:
                     f"best={is_best_deterministic_checkpoint}"
                 )
             best_deterministic_checkpoint = self._best_deterministic_checkpoint
+            sampled_position_summary = _build_position_distribution_summary(
+                step_state["selected_positions"]
+            )
             self.training_history.append(
                 {
                     "outer_step": int(outer_step),
                     "policy_update": "reinforce",
                     "outer_eval_source": "real_validation_sessions",
                     "validation_eval_count": int(len(validation_sessions)),
+                    "fine_tune_steps_configured": int(
+                        step_state["fine_tune_steps_configured"]
+                    ),
+                    "actual_optimizer_steps": int(step_state["actual_optimizer_steps"]),
                     "reward_mode": str(step_state["reward_mode"]),
                     "policy_loss": float(step_state["policy_loss_tensor"].item()),
                     "reinforce_loss": float(step_state["reinforce_loss_tensor"].item()),
@@ -351,9 +360,11 @@ class PositionOptMVPTrainer:
                     ),
                     "advantage": float(step_state["advantage"]),
                     "joint_log_prob": float(step_state["joint_log_prob"]),
+                    "mean_log_prob": float(step_state["mean_log_prob"]),
                     "mean_entropy": float(step_state["mean_entropy"]),
                     "joint_entropy": float(step_state["joint_entropy"]),
                     "target_utility": float(step_state["target_utility_tensor"].item()),
+                    "target_result_mean": float(step_state["target_result_mean"]),
                     "poisoned_target_utility": float(step_state["poisoned_target_utility"]),
                     "clean_target_utility": (
                         None
@@ -385,6 +396,11 @@ class PositionOptMVPTrainer:
                         step_state["poisoned_target_metrics"],
                         prefix="poisoned",
                     ),
+                    **_target_metric_trace_fields(step_state["target_result_metrics"]),
+                    **_prefixed_position_summary_fields(
+                        sampled_position_summary,
+                        prefix="sampled",
+                    ),
                     "selected_positions": [int(pos) for pos in step_state["selected_positions"]],
                     "selected_candidate_indices": [
                         int(idx) for idx in step_state["selected_candidate_indices"]
@@ -392,6 +408,11 @@ class PositionOptMVPTrainer:
                     "position_opt_step_seed": int(step_state["position_opt_step_seed"]),
                     "surrogate_train_step_seed": int(step_state["surrogate_train_step_seed"]),
                     "inner_train": step_state["inner_train_summary"],
+                    "fine_tune_seconds": float(step_state["fine_tune_seconds"]),
+                    "score_target_seconds": float(step_state["score_target_seconds"]),
+                    "outer_step_total_seconds": float(
+                        step_state["outer_step_total_seconds"]
+                    ),
                     "deterministic_eval_ran": bool(deterministic_checkpoint is not None),
                     "deterministic_reward": (
                         None
@@ -572,6 +593,8 @@ class PositionOptMVPTrainer:
         final_positions = self.export_final_selected_positions()
         final_sessions = self.export_final_poisoned_sessions()
         exported_policy_source = self._resolve_final_policy_source()
+        final_position_summary = _build_position_distribution_summary(final_positions)
+        final_position_summary["target_item"] = self._target_item
         best_deterministic_checkpoint = self._best_deterministic_checkpoint
         last_deterministic_reward = self._last_deterministic_reward()
         best_minus_last_deterministic_reward = self._best_minus_last_deterministic_reward()
@@ -656,6 +679,36 @@ class PositionOptMVPTrainer:
         if paths.learned_logits is not None:
             torch.save(self._build_learned_logits_payload(), paths.learned_logits)
 
+        _write_jsonl(
+            paths.base_dir / "shared_policy_trace.jsonl",
+            _build_shared_policy_trace_rows(
+                self.training_history,
+                target_item=self._target_item,
+            ),
+        )
+        _write_json(
+            paths.base_dir / "shared_policy_best_policy.json",
+            _build_shared_policy_best_policy_payload(
+                self.training_history,
+                target_item=self._target_item,
+                final_position_summary=final_position_summary,
+                exported_policy_source=exported_policy_source,
+                position_opt_config=self.position_opt_config,
+            ),
+        )
+        _write_json(paths.base_dir / "final_position_summary.json", final_position_summary)
+        _write_json(
+            paths.base_dir / "shared_policy_run_metadata.json",
+            _build_shared_policy_run_metadata_payload(
+                target_item=self._target_item,
+                config=self._trained_config,
+                position_opt_config=self.position_opt_config,
+                exported_policy_source=exported_policy_source,
+                final_position_summary=final_position_summary,
+                candidate_space_diagnostics=self._candidate_space_diagnostics_payload(),
+            ),
+        )
+
     def _precompute_clean_target_result(
         self,
         *,
@@ -705,6 +758,7 @@ class PositionOptMVPTrainer:
             raise RuntimeError("Policy is not initialized.")
         if self._trained_config is None:
             raise RuntimeError("train() must be called with a Config before running steps.")
+        outer_step_start_time = time.perf_counter()
 
         selected_candidate_indices: list[int] = []
         selected_positions: list[int] = []
@@ -746,6 +800,7 @@ class PositionOptMVPTrainer:
             int(target_item),
             int(outer_step),
         )
+        fine_tune_start_time = time.perf_counter()
         inner_result = self.inner_trainer.run(
             self.surrogate_backend,
             self.clean_surrogate_checkpoint_path,
@@ -753,13 +808,16 @@ class PositionOptMVPTrainer:
             config=fine_tune_config,
             seed=surrogate_train_step_seed,
         )
+        fine_tune_seconds = time.perf_counter() - fine_tune_start_time
         surrogate_model = inner_result.model
 
+        score_target_start_time = time.perf_counter()
         target_result = self.surrogate_backend.score_target(
             surrogate_model,
             validation_sessions,
             target_item,
         )
+        score_target_seconds = time.perf_counter() - score_target_start_time
         poisoned_target_metrics = _extract_lowk_target_metrics(
             target_result,
             required=(self.position_opt_config.reward_mode == "delta_lowk_rank_utility"),
@@ -809,6 +867,8 @@ class PositionOptMVPTrainer:
             joint_entropy=joint_entropy,
             entropy_coef=float(self.position_opt_config.entropy_coef),
         )
+        outer_step_total_seconds = time.perf_counter() - outer_step_start_time
+        inner_train_summary = _summarize_inner_history(inner_result.history)
 
         return {
             "policy_loss_tensor": policy_loss_tensor,
@@ -818,10 +878,13 @@ class PositionOptMVPTrainer:
             "baseline": baseline,
             "advantage": float(advantage),
             "joint_log_prob": float(joint_log_prob.detach().item()),
+            "mean_log_prob": float(joint_log_prob.detach().item())
+            / float(max(1, len(selected_positions))),
             "mean_entropy": float(mean_entropy.detach().item()),
             "joint_entropy": float(joint_entropy.detach().item()),
             "reward_mode": str(self.position_opt_config.reward_mode),
             "target_utility_tensor": target_utility_tensor,
+            "target_result_mean": float(target_result.mean),
             "poisoned_target_utility": poisoned_target_utility,
             "delta_target_utility": delta_target_utility,
             "gt_penalty_tensor": objective.gt_penalty,
@@ -831,11 +894,17 @@ class PositionOptMVPTrainer:
             "clean_gt_utility": clean_gt_utility,
             "poisoned_gt_utility": poisoned_gt_utility,
             "poisoned_target_metrics": poisoned_target_metrics,
+            "target_result_metrics": dict(target_result.metrics or {}),
             "selected_positions": selected_positions,
             "selected_candidate_indices": selected_candidate_indices,
             "position_opt_step_seed": int(position_opt_step_seed),
             "surrogate_train_step_seed": int(surrogate_train_step_seed),
-            "inner_train_summary": _summarize_inner_history(inner_result.history),
+            "fine_tune_steps_configured": int(fine_tune_config.steps),
+            "actual_optimizer_steps": int(inner_train_summary.get("steps", 0)),
+            "fine_tune_seconds": float(fine_tune_seconds),
+            "score_target_seconds": float(score_target_seconds),
+            "outer_step_total_seconds": float(outer_step_total_seconds),
+            "inner_train_summary": inner_train_summary,
         }
 
     def _run_deterministic_checkpoint_eval(
@@ -1539,6 +1608,108 @@ def _build_final_position_diagnostics(
     }
 
 
+def _build_position_distribution_summary(
+    selected_positions: Sequence[SelectedPositionResult] | Sequence[int],
+) -> dict[str, Any]:
+    normalized_positions: list[int] = []
+    for value in selected_positions:
+        if isinstance(value, SelectedPositionResult):
+            normalized_positions.append(int(value.position))
+        else:
+            normalized_positions.append(int(value))
+
+    total_count = int(len(normalized_positions))
+    if total_count == 0:
+        return {
+            "total_fake_sessions": 0,
+            "pos0_pct": 0.0,
+            "pos1_pct": 0.0,
+            "pos2_pct": 0.0,
+            "pos3_pct": 0.0,
+            "pos4_5_pct": 0.0,
+            "pos4_pos5_pct": 0.0,
+            "pos6_plus_pct": 0.0,
+            "pos6plus_pct": 0.0,
+            "rank1_pct": 0.0,
+            "rank2_pct": 0.0,
+            "tail_pct": 0.0,
+            "mean_absolute_position": 0.0,
+            "median_absolute_position": 0.0,
+            "unique_selected_positions": 0,
+            "unique_selected_position_count": 0,
+            "unique_selected_position_values": [],
+        }
+
+    counts = Counter(normalized_positions)
+
+    def pct(match_count: int) -> float:
+        return float(match_count) / float(total_count) * 100.0
+
+    pos4_5_pct = pct(sum(count for position, count in counts.items() if 4 <= position <= 5))
+    pos6_plus_pct = pct(sum(count for position, count in counts.items() if position >= 6))
+    unique_positions = sorted(set(int(position) for position in normalized_positions))
+    return {
+        "total_fake_sessions": int(total_count),
+        "pos0_pct": pct(int(counts.get(0, 0))),
+        "pos1_pct": pct(int(counts.get(1, 0))),
+        "pos2_pct": pct(int(counts.get(2, 0))),
+        "pos3_pct": pct(int(counts.get(3, 0))),
+        "pos4_5_pct": float(pos4_5_pct),
+        "pos4_pos5_pct": float(pos4_5_pct),
+        "pos6_plus_pct": float(pos6_plus_pct),
+        "pos6plus_pct": float(pos6_plus_pct),
+        "rank1_pct": pct(int(counts.get(1, 0))),
+        "rank2_pct": pct(int(counts.get(2, 0))),
+        "tail_pct": pct(sum(count for position, count in counts.items() if position >= 3)),
+        "mean_absolute_position": float(sum(normalized_positions) / total_count),
+        "median_absolute_position": float(median(normalized_positions)),
+        "unique_selected_positions": int(len(unique_positions)),
+        "unique_selected_position_count": int(len(unique_positions)),
+        "unique_selected_position_values": unique_positions,
+    }
+
+
+def _prefixed_position_summary_fields(
+    summary: Mapping[str, Any],
+    *,
+    prefix: str,
+) -> dict[str, Any]:
+    fields = {
+        "rank1_pct",
+        "rank2_pct",
+        "tail_pct",
+        "pos0_pct",
+        "pos1_pct",
+        "pos2_pct",
+        "pos3_pct",
+        "pos4_5_pct",
+        "pos4_pos5_pct",
+        "pos6_plus_pct",
+        "pos6plus_pct",
+        "unique_selected_positions",
+        "unique_selected_position_count",
+        "unique_selected_position_values",
+        "mean_absolute_position",
+        "median_absolute_position",
+    }
+    return {f"{prefix}_{key}": summary.get(key) for key in sorted(fields)}
+
+
+def _target_metric_trace_fields(metrics: Mapping[str, float] | None) -> dict[str, float | None]:
+    source = {} if metrics is None else dict(metrics)
+    keys = (
+        "targeted_mrr@10",
+        "targeted_recall@10",
+        "targeted_recall@20",
+        "targeted_mrr@30",
+        "targeted_recall@30",
+    )
+    return {
+        key: (None if source.get(key) is None else float(source[key]))
+        for key in keys
+    }
+
+
 def _build_policy_loss(
     *,
     joint_log_prob: torch.Tensor,
@@ -1650,6 +1821,217 @@ def _summarize_inner_history(history: Mapping[str, Any] | None) -> dict[str, Any
             None if history.get("avg_loss") is None else float(history.get("avg_loss"))
         ),
     }
+
+
+def _build_shared_policy_trace_rows(
+    training_history: Sequence[Mapping[str, Any]],
+    *,
+    target_item: int | None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in training_history:
+        trace_row = {
+            "target_item": None if target_item is None else int(target_item),
+            "outer_step": int(row.get("outer_step", 0)),
+            "fine_tune_steps_configured": _optional_int(
+                row.get("fine_tune_steps_configured")
+            ),
+            "actual_optimizer_steps": _optional_int(row.get("actual_optimizer_steps")),
+            "reward": _optional_float(row.get("reward")),
+            "reward_mode": row.get("reward_mode"),
+            "target_result_mean": _optional_float(row.get("target_result_mean")),
+            "targeted_mrr@10": _optional_float(row.get("targeted_mrr@10")),
+            "targeted_recall@10": _optional_float(row.get("targeted_recall@10")),
+            "targeted_recall@20": _optional_float(row.get("targeted_recall@20")),
+            "targeted_mrr@30": _optional_float(row.get("targeted_mrr@30")),
+            "targeted_recall@30": _optional_float(row.get("targeted_recall@30")),
+            "reward_baseline": _optional_float(row.get("baseline")),
+            "advantage": _optional_float(row.get("advantage")),
+            "policy_loss": _optional_float(row.get("policy_loss")),
+            "mean_log_prob": _optional_float(row.get("mean_log_prob")),
+            "mean_entropy": _optional_float(row.get("mean_entropy")),
+            "sampled_rank1_pct": _optional_float(row.get("sampled_rank1_pct")),
+            "sampled_rank2_pct": _optional_float(row.get("sampled_rank2_pct")),
+            "sampled_tail_pct": _optional_float(row.get("sampled_tail_pct")),
+            "sampled_pos0_pct": _optional_float(row.get("sampled_pos0_pct")),
+            "sampled_pos1_pct": _optional_float(row.get("sampled_pos1_pct")),
+            "sampled_pos2_pct": _optional_float(row.get("sampled_pos2_pct")),
+            "sampled_pos3_pct": _optional_float(row.get("sampled_pos3_pct")),
+            "sampled_pos4_5_pct": _optional_float(row.get("sampled_pos4_5_pct")),
+            "sampled_pos6_plus_pct": _optional_float(
+                row.get("sampled_pos6_plus_pct")
+            ),
+            "unique_selected_positions": _optional_int(
+                row.get("sampled_unique_selected_positions")
+            ),
+            "mean_absolute_position": _optional_float(
+                row.get("sampled_mean_absolute_position")
+            ),
+            "median_absolute_position": _optional_float(
+                row.get("sampled_median_absolute_position")
+            ),
+            "fine_tune_seconds": _optional_float(row.get("fine_tune_seconds")),
+            "score_target_seconds": _optional_float(row.get("score_target_seconds")),
+            "outer_step_total_seconds": _optional_float(
+                row.get("outer_step_total_seconds")
+            ),
+        }
+        rows.append(trace_row)
+    return rows
+
+
+def _build_shared_policy_best_policy_payload(
+    training_history: Sequence[Mapping[str, Any]],
+    *,
+    target_item: int | None,
+    final_position_summary: Mapping[str, Any],
+    exported_policy_source: str,
+    position_opt_config: PositionOptConfig,
+) -> dict[str, Any]:
+    best_row = _best_training_history_row(training_history)
+    best_position_summary: dict[str, Any] | None = None
+    if best_row is not None:
+        best_position_summary = _strip_position_summary_prefix(
+            best_row,
+            prefix="sampled",
+        )
+    return {
+        "target_item": None if target_item is None else int(target_item),
+        "best_outer_step": (
+            None if best_row is None else _optional_int(best_row.get("outer_step"))
+        ),
+        "best_reward": (
+            None if best_row is None else _optional_float(best_row.get("reward"))
+        ),
+        "best_reward_metric_snapshot": (
+            None if best_row is None else _best_reward_metric_snapshot(best_row)
+        ),
+        "best_position_summary": best_position_summary,
+        "final_export_mode": str(exported_policy_source),
+        "final_selection": str(position_opt_config.final_selection),
+        "final_policy_selection": str(position_opt_config.final_policy_selection),
+        "fine_tune_steps": int(position_opt_config.fine_tune_steps),
+        "outer_steps_completed": int(len(training_history)),
+        "final_position_summary": dict(final_position_summary),
+        "note": (
+            "best_outer_step is the best sampled reward row in shared_policy_trace; "
+            "final export still follows final_policy_selection/final_selection."
+        ),
+    }
+
+
+def _build_shared_policy_run_metadata_payload(
+    *,
+    target_item: int | None,
+    config: Config | None,
+    position_opt_config: PositionOptConfig,
+    exported_policy_source: str,
+    final_position_summary: Mapping[str, Any],
+    candidate_space_diagnostics: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    seeds = None if config is None else asdict(config.seeds)
+    return {
+        "method": (
+            "shared_policy_nz"
+            if bool(position_opt_config.nonzero_action_when_possible)
+            else "shared_policy"
+        ),
+        "target_item": None if target_item is None else int(target_item),
+        "victims": [] if config is None else list(config.victims.enabled),
+        "replacement_topk_ratio": (
+            None if config is None else float(config.attack.replacement_topk_ratio)
+        ),
+        "nonzero_action_when_possible": bool(
+            position_opt_config.nonzero_action_when_possible
+        ),
+        "fine_tune_steps": int(position_opt_config.fine_tune_steps),
+        "outer_steps": int(position_opt_config.outer_steps),
+        "early_stopping_enabled": False,
+        "surrogate_eval_poison_balance_enabled": False,
+        "reward_mode": str(position_opt_config.reward_mode),
+        "policy_lr": float(position_opt_config.policy_lr),
+        "policy_embedding_dim": int(position_opt_config.policy_embedding_dim),
+        "policy_hidden_dim": int(position_opt_config.policy_hidden_dim),
+        "policy_feature_set": str(position_opt_config.policy_feature_set),
+        "reward_baseline_momentum": float(
+            position_opt_config.reward_baseline_momentum
+        ),
+        "entropy_coef": float(position_opt_config.entropy_coef),
+        "final_selection": str(position_opt_config.final_selection),
+        "final_policy_selection": str(position_opt_config.final_policy_selection),
+        "exported_policy_source": str(exported_policy_source),
+        "deterministic_eval_every": int(position_opt_config.deterministic_eval_every),
+        "deterministic_eval_include_final": bool(
+            position_opt_config.deterministic_eval_include_final
+        ),
+        "position_opt_seed": None if seeds is None else int(seeds["position_opt_seed"]),
+        "surrogate_train_seed": None if seeds is None else int(seeds["surrogate_train_seed"]),
+        "victim_train_seed": None if seeds is None else int(seeds["victim_train_seed"]),
+        "fake_session_seed": None if seeds is None else int(seeds["fake_session_seed"]),
+        "final_position_summary": dict(final_position_summary),
+        "candidate_space_diagnostics": (
+            None if candidate_space_diagnostics is None else dict(candidate_space_diagnostics)
+        ),
+    }
+
+
+def _best_training_history_row(
+    training_history: Sequence[Mapping[str, Any]],
+) -> Mapping[str, Any] | None:
+    if not training_history:
+        return None
+    return max(training_history, key=lambda row: float(row.get("reward", float("-inf"))))
+
+
+def _best_reward_metric_snapshot(row: Mapping[str, Any]) -> dict[str, float | None]:
+    return {
+        "target_result_mean": _optional_float(row.get("target_result_mean")),
+        "targeted_mrr@10": _optional_float(row.get("targeted_mrr@10")),
+        "targeted_recall@10": _optional_float(row.get("targeted_recall@10")),
+        "targeted_recall@20": _optional_float(row.get("targeted_recall@20")),
+        "targeted_mrr@30": _optional_float(row.get("targeted_mrr@30")),
+        "targeted_recall@30": _optional_float(row.get("targeted_recall@30")),
+    }
+
+
+def _strip_position_summary_prefix(
+    row: Mapping[str, Any],
+    *,
+    prefix: str,
+) -> dict[str, Any]:
+    prefix_text = f"{prefix}_"
+    output: dict[str, Any] = {}
+    for key, value in row.items():
+        if key.startswith(prefix_text):
+            output[key[len(prefix_text) :]] = value
+    return output
+
+
+def _optional_float(value: Any) -> float | None:
+    return None if value is None else float(value)
+
+
+def _optional_int(value: Any) -> int | None:
+    return None if value is None else int(value)
+
+
+def _write_json(path: str | Path, payload: Mapping[str, Any]) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+    return output_path
+
+
+def _write_jsonl(path: str | Path, rows: Sequence[Mapping[str, Any]]) -> Path:
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(dict(row), sort_keys=True))
+            handle.write("\n")
+    return output_path
 
 
 __all__ = ["PositionOptMVPTrainer"]

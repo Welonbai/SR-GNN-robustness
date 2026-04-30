@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from attack.common.config import Config, PositionOptConfig, RankBucketCEMConfig
-from attack.common.seed import derive_seed
+from attack.common.seed import derive_seed, set_seed
 from attack.data.poisoned_dataset_builder import (
     build_poisoned_dataset,
     expand_session_to_samples,
@@ -15,7 +16,11 @@ from attack.data.poisoned_dataset_builder import (
 from attack.inner_train.base import InnerTrainer
 from attack.position_opt.objective import compute_position_opt_objective
 from attack.position_opt.poison_builder import replace_item_at_position
-from attack.position_opt.types import SurrogateScoreResult, TruncatedFineTuneConfig
+from attack.position_opt.types import (
+    InnerTrainResult,
+    SurrogateScoreResult,
+    TruncatedFineTuneConfig,
+)
 from attack.surrogate.base import SurrogateBackend
 
 from .artifacts import (
@@ -53,6 +58,32 @@ RANK_BUCKET_CEM_METHOD_NAME = "rank_bucket_cem"
 RANK_BUCKET_CEM_IMPLEMENTATION_TAG = "rank_bucket_cem_v1"
 _SUPPORTED_REWARD_MODES = frozenset(("poisoned_target_utility", "delta_target_utility"))
 _LOG_PREFIX = "[rank-bucket-cem]"
+_TRACE_OPTIONAL_METRIC_KEYS = (
+    "clean_gt_utility",
+    "poisoned_gt_utility",
+    "gt_penalty",
+    "gt_drop",
+    "poison_balance_enabled",
+    "poison_balance_mode",
+    "requested_poison_ratio_in_batch",
+    "configured_clean_batch_size",
+    "configured_poison_batch_size",
+    "effective_poison_ratio_seen",
+    "configured_fine_tune_steps",
+    "actual_optimizer_steps",
+    "batch_size",
+    "clean_pool_size",
+    "poison_pool_size",
+    "clean_examples_seen",
+    "poison_examples_seen",
+    "unique_poison_prefix_examples_seen",
+    "unique_poison_source_sessions_seen",
+    "sampling_strategy",
+    "sampling_wrapped",
+    "fine_tune_seconds",
+    "score_target_seconds",
+    "candidate_total_seconds",
+)
 
 
 class RankBucketCEMTrainer:
@@ -260,24 +291,47 @@ class RankBucketCEMTrainer:
                         selected_positions,
                     )
                 ]
-                poisoned_train_data = build_poisoned_dataset(
-                    clean_sessions,
-                    clean_labels,
-                    poisoned_fake_sessions,
+                candidate_start_time = time.perf_counter()
+                poison_balance_enabled = bool(
+                    self.rank_bucket_cem_config.surrogate_eval_poison_balance.enabled
                 )
-                inner_result = self.inner_trainer.run(
-                    self.surrogate_backend,
-                    self.clean_surrogate_checkpoint_path,
-                    poisoned_train_data,
-                    config=fine_tune_config,
-                    seed=self._shared_surrogate_train_seed,
+                poisoned_train_data = (
+                    None
+                    if poison_balance_enabled
+                    else build_poisoned_dataset(
+                        clean_sessions,
+                        clean_labels,
+                        poisoned_fake_sessions,
+                    )
                 )
+                fine_tune_start_time = time.perf_counter()
+                if poison_balance_enabled:
+                    inner_result = self._run_fixed_ratio_surrogate_fine_tune(
+                        clean_sessions=clean_sessions,
+                        clean_labels=clean_labels,
+                        poisoned_fake_sessions=poisoned_fake_sessions,
+                        fine_tune_config=fine_tune_config,
+                        seed=int(self._shared_surrogate_train_seed),
+                    )
+                else:
+                    if poisoned_train_data is None:
+                        raise RuntimeError("Normal CEM fine-tune missing poisoned_train_data.")
+                    inner_result = self.inner_trainer.run(
+                        self.surrogate_backend,
+                        self.clean_surrogate_checkpoint_path,
+                        poisoned_train_data,
+                        config=fine_tune_config,
+                        seed=self._shared_surrogate_train_seed,
+                    )
+                fine_tune_seconds = time.perf_counter() - fine_tune_start_time
                 surrogate_model = inner_result.model
+                score_target_start_time = time.perf_counter()
                 target_result = self.surrogate_backend.score_target(
                     surrogate_model,
                     validation_sessions,
                     target_id,
                 )
+                score_target_seconds = time.perf_counter() - score_target_start_time
                 target_metrics = _coerce_target_metrics(target_result.metrics)
                 reward_value = _resolve_reward_value(
                     target_result=target_result,
@@ -297,6 +351,7 @@ class RankBucketCEMTrainer:
                         validation_labels,
                     )
                     poisoned_gt_utility = float(poisoned_gt_result.mean)
+                candidate_total_seconds = time.perf_counter() - candidate_start_time
 
                 objective = compute_position_opt_objective(
                     float(reward_target_utility),
@@ -316,6 +371,18 @@ class RankBucketCEMTrainer:
                     "selection_seed": int(selection_seed),
                     "surrogate_train_seed": int(self._shared_surrogate_train_seed),
                 }
+                candidate_metrics.update(
+                    _candidate_fine_tune_metadata(
+                        history=inner_result.history,
+                        poison_balance_enabled=poison_balance_enabled,
+                        configured_fine_tune_steps=int(
+                            self.position_opt_config.fine_tune_steps
+                        ),
+                        fine_tune_seconds=fine_tune_seconds,
+                        score_target_seconds=score_target_seconds,
+                        candidate_total_seconds=candidate_total_seconds,
+                    )
+                )
                 if clean_gt_utility is not None or poisoned_gt_utility is not None:
                     candidate_metrics.update(
                         {
@@ -456,6 +523,58 @@ class RankBucketCEMTrainer:
             raise RuntimeError("train() must be called before exporting final sessions.")
         return [list(session) for session in self._best_poisoned_sessions]
 
+    def _run_fixed_ratio_surrogate_fine_tune(
+        self,
+        *,
+        clean_sessions: Sequence[Sequence[int]],
+        clean_labels: Sequence[int],
+        poisoned_fake_sessions: Sequence[Sequence[int]],
+        fine_tune_config: TruncatedFineTuneConfig,
+        seed: int,
+    ) -> InnerTrainResult:
+        fine_tune_fixed_ratio = getattr(
+            self.surrogate_backend,
+            "fine_tune_fixed_ratio",
+            None,
+        )
+        if fine_tune_fixed_ratio is None:
+            raise TypeError(
+                "RankBucket-CEM fixed-ratio poison balance currently requires a "
+                "surrogate backend with fine_tune_fixed_ratio()."
+            )
+        (
+            poison_sessions,
+            poison_labels,
+            poison_source_session_ids,
+        ) = _expand_poisoned_fake_sessions_with_source(poisoned_fake_sessions)
+        if not clean_sessions:
+            raise ValueError(
+                "RankBucket-CEM fixed-ratio surrogate fine-tune requires a non-empty "
+                "clean pool."
+            )
+        if not poison_sessions:
+            raise ValueError(
+                "RankBucket-CEM fixed-ratio surrogate fine-tune requires a non-empty "
+                "poison pool."
+            )
+        set_seed(int(seed))
+        self.surrogate_backend.load_clean_checkpoint(self.clean_surrogate_checkpoint_path)
+        model = self.surrogate_backend.clone_clean_model()
+        history = fine_tune_fixed_ratio(
+            model,
+            clean_sessions=clean_sessions,
+            clean_labels=clean_labels,
+            poison_sessions=poison_sessions,
+            poison_labels=poison_labels,
+            poison_source_session_ids=poison_source_session_ids,
+            fine_tune_config=fine_tune_config,
+            poison_ratio_in_batch=float(
+                self.rank_bucket_cem_config.surrogate_eval_poison_balance.poison_ratio_in_batch
+            ),
+            seed=int(seed),
+        )
+        return InnerTrainResult(model=model, history=history)
+
     def save_artifacts(
         self,
         artifact_paths: RankBucketCEMArtifactPaths | None = None,
@@ -543,7 +662,7 @@ class RankBucketCEMTrainer:
             "selection_seed": int(candidate_result.metrics["selection_seed"]),
             "surrogate_train_seed": int(candidate_result.metrics["surrogate_train_seed"]),
         }
-        for optional_key in ("clean_gt_utility", "poisoned_gt_utility", "gt_penalty", "gt_drop"):
+        for optional_key in _TRACE_OPTIONAL_METRIC_KEYS:
             if optional_key in candidate_result.metrics:
                 row[optional_key] = candidate_result.metrics[optional_key]
         if self.rank_bucket_cem_config.save_candidate_selected_positions:
@@ -666,6 +785,9 @@ class RankBucketCEMTrainer:
             "reward_mode": str(self.position_opt_config.reward_mode),
             "reward_metric": self.rank_bucket_cem_config.reward_metric,
             "selected_reward_metric_name": self._selected_reward_metric_name(),
+            "surrogate_eval_poison_balance": asdict(
+                self.rank_bucket_cem_config.surrogate_eval_poison_balance
+            ),
             "validation_subset_strategy": self._validation_subset_strategy,
             "validation_subset_seed": self._validation_subset_seed,
         }
@@ -690,6 +812,20 @@ def _normalize_fake_sessions(
     if any(len(session) == 0 for session in normalized):
         raise ValueError("fake_sessions must not contain empty sessions.")
     return normalized
+
+
+def _expand_poisoned_fake_sessions_with_source(
+    poisoned_fake_sessions: Sequence[Sequence[int]],
+) -> tuple[list[list[int]], list[int], list[int]]:
+    poison_sessions: list[list[int]] = []
+    poison_labels: list[int] = []
+    poison_source_session_ids: list[int] = []
+    for source_session_id, session in enumerate(poisoned_fake_sessions):
+        prefixes, labels = expand_session_to_samples(session)
+        poison_sessions.extend(prefixes)
+        poison_labels.extend(int(label) for label in labels)
+        poison_source_session_ids.extend([int(source_session_id)] * len(prefixes))
+    return poison_sessions, poison_labels, poison_source_session_ids
 
 
 def _resolve_clean_pairs(shared_artifacts: object) -> tuple[list[list[int]], list[int]]:
@@ -802,6 +938,82 @@ def _resolve_reward_value(
     return float(metrics[reward_metric])
 
 
+def _candidate_fine_tune_metadata(
+    *,
+    history: Mapping[str, Any] | None,
+    poison_balance_enabled: bool,
+    configured_fine_tune_steps: int,
+    fine_tune_seconds: float,
+    score_target_seconds: float,
+    candidate_total_seconds: float,
+) -> dict[str, Any]:
+    history_map = dict(history or {})
+    actual_steps = history_map.get("steps")
+    if poison_balance_enabled:
+        poison_balance = history_map.get("poison_balance")
+        if not isinstance(poison_balance, Mapping):
+            poison_balance = {}
+        payload = {
+            key: poison_balance.get(key)
+            for key in (
+                "poison_balance_enabled",
+                "poison_balance_mode",
+                "requested_poison_ratio_in_batch",
+                "configured_clean_batch_size",
+                "configured_poison_batch_size",
+                "effective_poison_ratio_seen",
+                "configured_fine_tune_steps",
+                "actual_optimizer_steps",
+                "batch_size",
+                "clean_pool_size",
+                "poison_pool_size",
+                "clean_examples_seen",
+                "poison_examples_seen",
+                "unique_poison_prefix_examples_seen",
+                "unique_poison_source_sessions_seen",
+                "sampling_strategy",
+                "sampling_wrapped",
+            )
+        }
+        payload["poison_balance_enabled"] = bool(
+            payload.get("poison_balance_enabled", True)
+        )
+        if payload.get("configured_fine_tune_steps") is None:
+            payload["configured_fine_tune_steps"] = int(configured_fine_tune_steps)
+        if payload.get("actual_optimizer_steps") is None and actual_steps is not None:
+            payload["actual_optimizer_steps"] = int(actual_steps)
+    else:
+        payload = {
+            "poison_balance_enabled": False,
+            "poison_balance_mode": None,
+            "requested_poison_ratio_in_batch": None,
+            "configured_clean_batch_size": None,
+            "configured_poison_batch_size": None,
+            "effective_poison_ratio_seen": None,
+            "configured_fine_tune_steps": int(configured_fine_tune_steps),
+            "actual_optimizer_steps": (
+                None if actual_steps is None else int(actual_steps)
+            ),
+            "batch_size": None,
+            "clean_pool_size": None,
+            "poison_pool_size": None,
+            "clean_examples_seen": None,
+            "poison_examples_seen": None,
+            "unique_poison_prefix_examples_seen": None,
+            "unique_poison_source_sessions_seen": None,
+            "sampling_strategy": None,
+            "sampling_wrapped": None,
+        }
+    payload.update(
+        {
+            "fine_tune_seconds": float(fine_tune_seconds),
+            "score_target_seconds": float(score_target_seconds),
+            "candidate_total_seconds": float(candidate_total_seconds),
+        }
+    )
+    return payload
+
+
 def _resolve_reward_target_utility(
     *,
     reward_mode: str,
@@ -854,6 +1066,7 @@ def _cem_hyperparameters_payload(
         "min_std": float(config.min_std),
         "smoothing": float(config.smoothing),
         "reward_metric": config.reward_metric,
+        "surrogate_eval_poison_balance": asdict(config.surrogate_eval_poison_balance),
     }
 
 

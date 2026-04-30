@@ -1,0 +1,23 @@
+{
+  "created_for": "GPT handoff / compact diagnosis",
+  "targets": [
+    11103,
+    5418,
+    14514
+  ],
+  "reward_mode": "paired_relative_mrr_recall_10_20",
+  "fine_tune_steps": 6500,
+  "source_dirs": [
+    "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft6500_paired_relative_mrr_recall_10_20_target11103_vs_random_nz_surrogate_reward",
+    "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft6500_paired_relative_mrr_recall_10_20_target5418_vs_random_nz_surrogate_reward",
+    "analysis\\diagnosis_outputs\\diginetica_cem_mixed_ft6500_paired_relative_mrr_recall_10_20_target14514_vs_random_nz_surrogate_reward"
+  ],
+  "files": [
+    "report.md",
+    "summary_table.csv",
+    "candidate_scores.csv",
+    "alignment_cases.csv",
+    "final_metric_overlap.csv",
+    "manifest.json"
+  ]
+}
