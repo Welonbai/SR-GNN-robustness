@@ -15,6 +15,7 @@ from attack.common.paths import (
     run_metadata_paths,
     shared_artifact_paths,
     shared_attack_artifact_key,
+    shared_attack_artifact_key_payload,
     target_dir,
     target_cohort_key,
     target_cohort_key_payload,
@@ -120,6 +121,41 @@ def test_shared_attack_artifact_key_stays_stable_across_phase1_identity_changes(
     )
 
 
+def test_shared_attack_artifact_key_records_srgnn_validation_best_protocol() -> None:
+    config = _base_config()
+    poison_params = dict(config.attack.poison_model.params)
+    poison_train = dict(poison_params["train"])
+    poison_train.update(
+        {
+            "epochs": 30,
+            "checkpoint_protocol": "validation_best",
+            "best_metric": "valid_ground_truth_mrr@20",
+            "patience_metric": "recall20_or_mrr20",
+        }
+    )
+    poison_params["train"] = poison_train
+    validation_config = replace(
+        config,
+        attack=replace(
+            config.attack,
+            poison_model=replace(config.attack.poison_model, params=poison_params),
+        ),
+    )
+
+    payload = shared_attack_artifact_key_payload(validation_config, run_type="attack")
+    poison_identity = payload["attack_generation"]["poison_model"]
+
+    assert poison_identity["poison_model_training_protocol"] == "validation_best"
+    assert poison_identity["poison_model_best_metric"] == "valid_ground_truth_mrr@20"
+    assert poison_identity["poison_model_patience_metric"] == "recall20_or_mrr20"
+    assert poison_identity["poison_model_max_epochs"] == 30
+    assert poison_identity["poison_model_patience"] == 10
+    assert shared_attack_artifact_key(config, run_type="attack") != shared_attack_artifact_key(
+        validation_config,
+        run_type="attack",
+    )
+
+
 def test_victim_prediction_key_ignores_batch_size_fields() -> None:
     config = _base_config()
     changed_victim_params = {
@@ -151,6 +187,43 @@ def test_victim_prediction_key_ignores_batch_size_fields() -> None:
     assert victim_prediction_key(config, "miasrec", run_type="attack") == victim_prediction_key(
         changed_config,
         "miasrec",
+        run_type="attack",
+    )
+
+
+def test_victim_prediction_key_records_srgnn_validation_best_protocol() -> None:
+    config = _base_config()
+    changed_victim_params = {
+        name: dict(params)
+        for name, params in config.victims.params.items()
+    }
+    srgnn_params = dict(changed_victim_params["srgnn"])
+    srgnn_train = dict(srgnn_params["train"])
+    srgnn_train.update(
+        {
+            "epochs": 30,
+            "checkpoint_protocol": "validation_best",
+            "best_metric": "valid_ground_truth_mrr@20",
+            "patience_metric": "recall20_or_mrr20",
+        }
+    )
+    srgnn_params["train"] = srgnn_train
+    changed_victim_params["srgnn"] = srgnn_params
+    validation_config = replace(
+        config,
+        victims=replace(config.victims, params=changed_victim_params),
+    )
+
+    payload = victim_prediction_key_payload(validation_config, "srgnn", run_type="attack")
+
+    assert payload["victim_srgnn_training_protocol"] == "validation_best"
+    assert payload["victim_srgnn_best_metric"] == "valid_ground_truth_mrr@20"
+    assert payload["victim_srgnn_patience_metric"] == "recall20_or_mrr20"
+    assert payload["victim_srgnn_max_epochs"] == 30
+    assert payload["victim_srgnn_patience"] == 10
+    assert victim_prediction_key(config, "srgnn", run_type="attack") != victim_prediction_key(
+        validation_config,
+        "srgnn",
         run_type="attack",
     )
 

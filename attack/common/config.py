@@ -7,6 +7,15 @@ from typing import Any, Mapping, Sequence
 from attack.common.position_opt_policy_feature_sets import (
     ALLOWED_POSITION_OPT_POLICY_FEATURE_SETS,
 )
+from attack.common.srgnn_training_protocol import (
+    ALLOWED_SRGNN_BEST_METRICS,
+    ALLOWED_SRGNN_CHECKPOINT_PROTOCOLS,
+    ALLOWED_SRGNN_PATIENCE_METRICS,
+    SRGNN_FIXED_LAST_PROTOCOL,
+    SRGNN_VALIDATION_BEST_METRIC,
+    SRGNN_VALIDATION_BEST_PROTOCOL,
+    SRGNN_VALIDATION_PATIENCE_METRIC,
+)
 
 
 _ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron"}
@@ -1307,6 +1316,37 @@ def _normalize_srgnn_train(train: Mapping[str, Any], context: str) -> dict[str, 
     normalized["step"] = _as_int(normalized["step"], f"{context}.step")
     normalized["patience"] = _as_int(normalized["patience"], f"{context}.patience")
     normalized["nonhybrid"] = _as_bool(normalized["nonhybrid"], f"{context}.nonhybrid")
+    protocol = SRGNN_FIXED_LAST_PROTOCOL
+    if "checkpoint_protocol" in normalized:
+        protocol = _as_str(
+            normalized["checkpoint_protocol"],
+            f"{context}.checkpoint_protocol",
+        ).strip().lower()
+        if protocol not in ALLOWED_SRGNN_CHECKPOINT_PROTOCOLS:
+            allowed = ", ".join(sorted(ALLOWED_SRGNN_CHECKPOINT_PROTOCOLS))
+            raise ValueError(f"{context}.checkpoint_protocol must be one of: {allowed}.")
+        normalized["checkpoint_protocol"] = protocol
+
+    if protocol == SRGNN_VALIDATION_BEST_PROTOCOL and "best_metric" not in normalized:
+        normalized["best_metric"] = SRGNN_VALIDATION_BEST_METRIC
+    if "best_metric" in normalized:
+        best_metric = _as_str(normalized["best_metric"], f"{context}.best_metric").strip().lower()
+        if best_metric not in ALLOWED_SRGNN_BEST_METRICS:
+            allowed = ", ".join(sorted(ALLOWED_SRGNN_BEST_METRICS))
+            raise ValueError(f"{context}.best_metric must be one of: {allowed}.")
+        normalized["best_metric"] = best_metric
+
+    if protocol == SRGNN_VALIDATION_BEST_PROTOCOL and "patience_metric" not in normalized:
+        normalized["patience_metric"] = SRGNN_VALIDATION_PATIENCE_METRIC
+    if "patience_metric" in normalized:
+        patience_metric = _as_str(
+            normalized["patience_metric"],
+            f"{context}.patience_metric",
+        ).strip().lower()
+        if patience_metric not in ALLOWED_SRGNN_PATIENCE_METRICS:
+            allowed = ", ".join(sorted(ALLOWED_SRGNN_PATIENCE_METRICS))
+            raise ValueError(f"{context}.patience_metric must be one of: {allowed}.")
+        normalized["patience_metric"] = patience_metric
 
     if normalized["epochs"] <= 0:
         raise ValueError(f"{context}.epochs must be positive.")

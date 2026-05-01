@@ -1,5 +1,5 @@
 experiment:
-  name: attack_rank_bucket_cem_lowk_ft6500_srgnn_targets11103_14514_5418
+  name: valbest_clean_run_no_attack_srgnn_sample3
 
 data:
   dataset_name: diginetica
@@ -22,33 +22,6 @@ attack:
   size: 0.01
   fake_session_generation_topk: 100
   replacement_topk_ratio: 1.0
-  position_opt:
-    clean_surrogate_checkpoint: outputs/surrogates/diginetica/clean_srgnn_surrogate_from_attack_a7fd31f6af.pt
-    nonzero_action_when_possible: true
-    fine_tune_steps: 6500
-    validation_subset_size: null
-    reward_mode: poisoned_target_utility
-    enable_gt_penalty: false
-    gt_penalty_weight: 0.0
-    gt_tolerance: 0.0
-  rank_bucket_cem:
-    iterations: 3
-    population_size: 8
-    population_per_iteration: [16, 8, 8]
-    elite_ratio: 0.25
-    initial_std: 1.0
-    min_std: 0.2
-    smoothing: 0.3
-    reward_metric: normalized_lowk_mrr_recall_10_20
-    save_candidate_selected_positions: false
-    save_final_selected_positions: false
-    save_optimized_poisoned_sessions: true
-    save_replay_metadata: true
-    surrogate_eval_poison_balance:
-      enabled: false
-      mode: fixed_ratio
-      poison_ratio_in_batch: 0.20
-      loss_weighting: none
   poison_model:
     name: srgnn
     params:
@@ -68,11 +41,11 @@ attack:
         patience_metric: recall20_or_mrr20
 
 targets:
-  mode: explicit_list
-  explicit_list: [11103, 14514, 5418]
+  mode: sampled
+  explicit_list: []
   bucket: popular
   count: 3
-  reuse_saved_targets: false
+  reuse_saved_targets: true
 
 victims:
   enabled: [srgnn]

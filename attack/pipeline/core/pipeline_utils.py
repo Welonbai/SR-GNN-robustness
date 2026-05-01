@@ -51,7 +51,12 @@ from attack.data.target_selector import (
 from attack.generation.fake_session_generator import FakeSessionGenerator
 from attack.generation.fake_session_parameter_sampler import FakeSessionParameterSampler
 from attack.models.poison.srgnn_poison_runner import SRGNNPoisonRunner
+from attack.models.srgnn_validation_training import (
+    srgnn_validation_train_history_extra,
+    train_srgnn_validation_best,
+)
 from attack.pipeline.core.train_history import save_train_history
+from attack.common.srgnn_training_protocol import srgnn_validation_best_enabled
 
 from attack.common.config import Config
 
@@ -970,25 +975,50 @@ def _load_or_train_poison_runner(
         train_path=export_paths["train"],
         test_path=export_paths["valid"],
     )
-    if configured_poison_epochs > 0:
+    if srgnn_validation_best_enabled(poison_train_config):
+        result = train_srgnn_validation_best(
+            runner,
+            train_data,
+            test_data,
+            train_config=poison_train_config,
+            max_epochs=configured_poison_epochs,
+            patience=int(poison_train_config["patience"]),
+            best_checkpoint_path=shared_paths["poison_model"],
+            log_prefix="[poison:srgnn-validation-best]",
+        )
+        print(f"Saved poison model checkpoint to {shared_paths['poison_model']}")
+        save_train_history(
+            shared_paths["poison_train_history"],
+            role="poison",
+            model="srgnn",
+            epochs=len(result.rows),
+            train_loss=[float(row["train_loss"]) for row in result.rows],
+            valid_loss=[None] * len(result.rows),
+            notes=(
+                "SRGNN poison training selected the checkpoint with highest "
+                "validation ground-truth MRR@20. Test metrics were not used."
+            ),
+            extra=srgnn_validation_train_history_extra(result),
+        )
+    elif configured_poison_epochs > 0:
         runner.train(
             train_data,
             test_data,
             configured_poison_epochs,
             topk=max(config.evaluation.topk),
         )
-    save_poison_model(runner, shared_paths["poison_model"])
-    print(f"Saved poison model checkpoint to {shared_paths['poison_model']}")
-    if runner.train_loss_history:
-        save_train_history(
-            shared_paths["poison_train_history"],
-            role="poison",
-            model="srgnn",
-            epochs=len(runner.train_loss_history),
-            train_loss=runner.train_loss_history,
-            valid_loss=[None] * len(runner.train_loss_history),
-            notes="valid_loss not available for SRGNN poison training.",
-        )
+        save_poison_model(runner, shared_paths["poison_model"])
+        print(f"Saved poison model checkpoint to {shared_paths['poison_model']}")
+        if runner.train_loss_history:
+            save_train_history(
+                shared_paths["poison_train_history"],
+                role="poison",
+                model="srgnn",
+                epochs=len(runner.train_loss_history),
+                train_loss=runner.train_loss_history,
+                valid_loss=[None] * len(runner.train_loss_history),
+                notes="valid_loss not available for SRGNN poison training.",
+            )
     return runner
 
 

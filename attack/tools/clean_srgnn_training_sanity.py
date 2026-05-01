@@ -31,7 +31,28 @@ VALID_RECALL20_KEY = "valid_ground_truth_recall@20"
 EPOCH8 = 8
 CLOSE_RELATIVE_THRESHOLD = 0.01
 TEST_METRICS_NOTE = (
-    "test metrics are diagnostic only and are not used for model selection"
+    "test metrics are disabled by default; if explicitly enabled, they are "
+    "diagnostic only and are not used for model selection"
+)
+VALIDATION_PROTOCOL = (
+    "official-style Recall@20-or-MRR@20 patience reset with MRR@20-selected checkpoint"
+)
+PATIENCE_IMPROVEMENT_RULE = (
+    "patience_improved = "
+    "(current_valid_recall20 > best_valid_recall20_so_far) or "
+    "(current_valid_mrr20 > best_valid_mrr20_so_far)"
+)
+CHECKPOINT_IMPROVEMENT_RULE = (
+    "checkpoint_improved = current_valid_mrr20 > best_valid_mrr20_so_far"
+)
+OFFICIAL_EARLY_STOPPING_NOTE = (
+    "Patience follows the official SR-GNN style: validation Recall/Hit@20 or "
+    "MRR@20 improving resets the bad-counter. The saved best_validation.pt "
+    "checkpoint is still selected by validation MRR@20."
+)
+IS_BEST_MRR20_NOTE = (
+    "is_best_mrr20 means this epoch improved over the previous best validation "
+    "MRR@20, not necessarily that it is the final global best epoch."
 )
 _GT_METRICS = ("recall", "mrr")
 _GT_TOPK = (10, 20)
@@ -188,6 +209,19 @@ def improved_over_best(current_valid_mrr20: float, best_valid_mrr20: float) -> b
     return float(current_valid_mrr20) > float(best_valid_mrr20)
 
 
+def official_patience_improved(
+    *,
+    current_valid_recall20: float,
+    best_valid_recall20: float,
+    current_valid_mrr20: float,
+    best_valid_mrr20: float,
+) -> bool:
+    return bool(
+        float(current_valid_recall20) > float(best_valid_recall20)
+        or float(current_valid_mrr20) > float(best_valid_mrr20)
+    )
+
+
 def epoch8_status(epoch8_epoch: int | None, best_epoch: int) -> str | None:
     if epoch8_epoch is None:
         return None
@@ -246,7 +280,7 @@ def build_summary(
     train_config_source: str,
     seed: int,
     data_sources: Mapping[str, Any],
-    checkpoint_paths: Mapping[str, str],
+    checkpoint_paths: Mapping[str, Any],
     stopped_early: bool,
     stopped_epoch: int | None,
 ) -> dict[str, Any]:
@@ -272,10 +306,20 @@ def build_summary(
         "output_dir": str(output_dir),
         "max_epochs": int(max_epochs),
         "patience": int(patience),
+        "validation_protocol": VALIDATION_PROTOCOL,
         "best_checkpoint_metric": VALID_BEST_METRIC_KEY,
-        "improvement_rule": "improved = current_valid_mrr20 > best_valid_mrr20",
+        "improvement_rule": PATIENCE_IMPROVEMENT_RULE,
+        "patience_improvement_rule": PATIENCE_IMPROVEMENT_RULE,
+        "checkpoint_improvement_rule": CHECKPOINT_IMPROVEMENT_RULE,
+        "official_early_stopping_note": OFFICIAL_EARLY_STOPPING_NOTE,
+        "is_best_mrr20_note": IS_BEST_MRR20_NOTE,
         "train_config_source": str(train_config_source),
         "seed": int(seed),
+        "include_test_diagnostics": any(
+            str(key).startswith("test_ground_truth_")
+            for row in rows
+            for key in row.keys()
+        ),
         "epochs_completed": int(len(rows)),
         "stopped_early": bool(stopped_early),
         "stopped_epoch": None if stopped_epoch is None else int(stopped_epoch),
@@ -352,7 +396,11 @@ def render_markdown_report(
         f"- seed: `{summary['seed']}`",
         f"- max_epochs: `{summary['max_epochs']}`",
         f"- patience: `{summary['patience']}`",
-        f"- improvement_rule: `{summary['improvement_rule']}`",
+        f"- validation_protocol: `{summary['validation_protocol']}`",
+        f"- patience_improvement_rule: `{summary['patience_improvement_rule']}`",
+        f"- checkpoint_improvement_rule: `{summary['checkpoint_improvement_rule']}`",
+        f"- official_early_stopping_note: {summary['official_early_stopping_note']}",
+        f"- is_best_mrr20_note: {summary['is_best_mrr20_note']}",
         f"- metric_scale: `{summary['metric_scale']}`",
         "",
         "## Data Sources",
@@ -367,22 +415,35 @@ def render_markdown_report(
             "## Epoch History",
             (
                 "| epoch | train_loss | valid MRR@20 | valid Recall@20 | "
-                "test MRR@20 | test Recall@20 | best | bad_counter | lr |"
+                "test MRR@20 | test Recall@20 | improved MRR@20 | "
+                "improved Recall@20 | patience reset | bad_counter | lr |"
             ),
-            "|---:|---:|---:|---:|---:|---:|---|---:|---:|",
+            "|---:|---:|---:|---:|---:|---:|---|---|---|---:|---:|",
         ]
     )
     for row in rows:
         lines.append(
             "| {epoch} | {train_loss} | {valid_mrr20} | {valid_recall20} | "
-            "{test_mrr20} | {test_recall20} | {best} | {bad_counter} | {lr} |".format(
+            "{test_mrr20} | {test_recall20} | {mrr_best} | "
+            "{recall_best} | {patience_reset} | {bad_counter} | {lr} |".format(
                 epoch=int(row["epoch"]),
                 train_loss=_format_float(row.get("train_loss")),
                 valid_mrr20=_format_float(row.get("valid_ground_truth_mrr@20")),
                 valid_recall20=_format_float(row.get("valid_ground_truth_recall@20")),
                 test_mrr20=_format_float(row.get("test_ground_truth_mrr@20")),
                 test_recall20=_format_float(row.get("test_ground_truth_recall@20")),
-                best="yes" if row.get("is_best_mrr20") else "",
+                mrr_best=(
+                    "yes"
+                    if row.get(
+                        "improved_valid_mrr20_this_epoch",
+                        row.get("is_best_mrr20"),
+                    )
+                    else ""
+                ),
+                recall_best="yes" if row.get("improved_valid_recall20_this_epoch") else "",
+                patience_reset=(
+                    "yes" if row.get("improved_valid_recall_or_mrr20_this_epoch") else ""
+                ),
                 bad_counter=int(row.get("bad_counter", 0)),
                 lr=_format_float(row.get("lr")),
             )
@@ -429,6 +490,10 @@ def _data_sources_payload(
         "valid_artifact": str(paths["valid"]),
         "test_artifact": str(paths["test"]),
         "srgnn_train_pair_source": "in_memory_pairs_from_train_sub_not_train_plus_valid",
+        "id_space_note": (
+            "SRGNNBaseRunner.predict_topk converts score indices back to 1-based "
+            "item ids, matching canonical labels produced from train_sub/valid/test."
+        ),
         "train_session_count": int(train_session_count),
         "valid_session_count": int(valid_session_count),
         "test_session_count": int(test_session_count),
@@ -447,7 +512,7 @@ def run_diagnostic(
     best_metric: str = BEST_METRIC,
     train_config_source: str = "poison_model",
     seed: int | None = None,
-    include_test_diagnostics: bool = True,
+    include_test_diagnostics: bool = False,
 ) -> dict[str, Any]:
     if str(best_metric).strip() != BEST_METRIC:
         raise ValueError(f"Only {BEST_METRIC!r} is supported for best checkpoint selection.")
@@ -465,10 +530,10 @@ def run_diagnostic(
     )
     checkpoint_dir = resolved_output_dir / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_paths = {
-        "best_validation": str(checkpoint_dir / "best_validation.pt"),
-        "epoch_008": str(checkpoint_dir / "epoch_008.pt"),
-        "final": str(checkpoint_dir / "final.pt"),
+    checkpoint_files = {
+        "best_validation": checkpoint_dir / "best_validation.pt",
+        "epoch_008": checkpoint_dir / "epoch_008.pt",
+        "final": checkpoint_dir / "final.pt",
     }
 
     resolved_seed = int(seed) if seed is not None else _default_seed(config, train_config_source)
@@ -507,6 +572,7 @@ def run_diagnostic(
 
     rows: list[dict[str, Any]] = []
     best_valid_mrr20 = float("-inf")
+    best_valid_recall20 = float("-inf")
     bad_counter = 0
     stopped_early = False
     stopped_epoch: int | None = None
@@ -526,22 +592,36 @@ def run_diagnostic(
         )
 
         current_valid_mrr20 = float(valid_metrics["ground_truth_mrr@20"])
-        is_best = improved_over_best(current_valid_mrr20, best_valid_mrr20)
-        if is_best:
+        current_valid_recall20 = float(valid_metrics["ground_truth_recall@20"])
+        improved_mrr20 = improved_over_best(current_valid_mrr20, best_valid_mrr20)
+        improved_recall20 = improved_over_best(current_valid_recall20, best_valid_recall20)
+        improved_for_patience = official_patience_improved(
+            current_valid_recall20=current_valid_recall20,
+            best_valid_recall20=best_valid_recall20,
+            current_valid_mrr20=current_valid_mrr20,
+            best_valid_mrr20=best_valid_mrr20,
+        )
+        if improved_mrr20:
             best_valid_mrr20 = current_valid_mrr20
+            runner.save_model(checkpoint_files["best_validation"])
+        if improved_recall20:
+            best_valid_recall20 = current_valid_recall20
+        if improved_for_patience:
             bad_counter = 0
-            runner.save_model(checkpoint_paths["best_validation"])
         else:
             bad_counter += 1
         if epoch == EPOCH8:
-            runner.save_model(checkpoint_paths["epoch_008"])
+            runner.save_model(checkpoint_files["epoch_008"])
 
         row: dict[str, Any] = {
             "epoch": int(epoch),
             "train_loss": float(train_loss),
             **_prefixed_metrics("valid", valid_metrics),
             **_prefixed_metrics("test", test_metrics),
-            "is_best_mrr20": bool(is_best),
+            "improved_valid_mrr20_this_epoch": bool(improved_mrr20),
+            "improved_valid_recall20_this_epoch": bool(improved_recall20),
+            "improved_valid_recall_or_mrr20_this_epoch": bool(improved_for_patience),
+            "is_best_mrr20": bool(improved_mrr20),
             "bad_counter": int(bad_counter),
             "lr": _current_lr(runner),
             "elapsed_seconds": float(time.perf_counter() - start),
@@ -552,7 +632,9 @@ def run_diagnostic(
             f"epoch={epoch} train_loss={train_loss:.6g} "
             f"valid_mrr20={row['valid_ground_truth_mrr@20']:.9f} "
             f"valid_recall20={row['valid_ground_truth_recall@20']:.9f} "
-            f"best={is_best} bad_counter={bad_counter}",
+            f"improved_mrr20={improved_mrr20} "
+            f"improved_recall20={improved_recall20} "
+            f"bad_counter={bad_counter}",
             flush=True,
         )
 
@@ -565,7 +647,11 @@ def run_diagnostic(
             )
             break
 
-    runner.save_model(checkpoint_paths["final"])
+    runner.save_model(checkpoint_files["final"])
+    checkpoint_paths = {
+        key: (str(path) if path.exists() else None)
+        for key, path in checkpoint_files.items()
+    }
 
     data_sources = _data_sources_payload(
         config,
@@ -593,10 +679,16 @@ def run_diagnostic(
         "config_path": str(config_path),
         "max_epochs": int(max_epochs),
         "patience": int(patience),
+        "validation_protocol": VALIDATION_PROTOCOL,
         "best_checkpoint_metric": VALID_BEST_METRIC_KEY,
-        "improvement_rule": "improved = current_valid_mrr20 > best_valid_mrr20",
+        "improvement_rule": PATIENCE_IMPROVEMENT_RULE,
+        "patience_improvement_rule": PATIENCE_IMPROVEMENT_RULE,
+        "checkpoint_improvement_rule": CHECKPOINT_IMPROVEMENT_RULE,
+        "official_early_stopping_note": OFFICIAL_EARLY_STOPPING_NOTE,
+        "is_best_mrr20_note": IS_BEST_MRR20_NOTE,
         "train_config_source": str(train_config_source),
         "seed": int(resolved_seed),
+        "include_test_diagnostics": bool(include_test_diagnostics),
         "test_metrics_note": TEST_METRICS_NOTE,
         "data_sources": data_sources,
         "rows": rows,
@@ -647,9 +739,17 @@ def main() -> None:
     )
     parser.add_argument("--seed", type=int, default=None, help="Optional explicit training seed.")
     parser.add_argument(
+        "--include-test-diagnostics",
+        action="store_true",
+        help=(
+            "Also compute per-epoch test metrics. Disabled by default; when enabled, "
+            "test metrics are diagnostic-only and are not used for selection."
+        ),
+    )
+    parser.add_argument(
         "--skip-test-diagnostics",
         action="store_true",
-        help="Skip per-epoch test metrics. Test metrics are diagnostic-only when enabled.",
+        help="Deprecated compatibility flag. Test diagnostics are skipped by default.",
     )
     args = parser.parse_args()
     result = run_diagnostic(
@@ -660,7 +760,8 @@ def main() -> None:
         best_metric=args.best_metric,
         train_config_source=args.train_config_source,
         seed=args.seed,
-        include_test_diagnostics=not bool(args.skip_test_diagnostics),
+        include_test_diagnostics=bool(args.include_test_diagnostics)
+        and not bool(args.skip_test_diagnostics),
     )
     print(json.dumps(result["output_paths"], indent=2, sort_keys=True))
 
@@ -671,12 +772,18 @@ if __name__ == "__main__":
 
 __all__ = [
     "BEST_METRIC",
+    "CHECKPOINT_IMPROVEMENT_RULE",
     "CLOSE_RELATIVE_THRESHOLD",
     "EPOCH8",
+    "IS_BEST_MRR20_NOTE",
+    "OFFICIAL_EARLY_STOPPING_NOTE",
+    "PATIENCE_IMPROVEMENT_RULE",
     "TEST_METRICS_NOTE",
+    "VALIDATION_PROTOCOL",
     "build_summary",
     "epoch8_status",
     "improved_over_best",
+    "official_patience_improved",
     "render_markdown_report",
     "run_diagnostic",
 ]

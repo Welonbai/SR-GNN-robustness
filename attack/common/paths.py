@@ -6,6 +6,11 @@ import hashlib
 import json
 
 from .config import Config
+from .srgnn_training_protocol import (
+    SRGNN_VALIDATION_BEST_PROTOCOL,
+    srgnn_checkpoint_protocol,
+    srgnn_validation_protocol_identity,
+)
 
 
 POSITION_OPT_RUN_TYPE = "position_opt_mvp"
@@ -258,16 +263,27 @@ def shared_attack_artifact_key_payload(config: Config, *, run_type: str) -> dict
     # Shared generation cache is generation-only: fake-session templates and the
     # poison model used to generate them. It must not depend on target choice,
     # replacement policy, victim settings, or position-opt runtime overrides.
+    poison_model_payload: dict[str, Any] = {
+        "name": config.attack.poison_model.name,
+        "params": config.attack.poison_model.params,
+    }
+    if config.attack.poison_model.name == "srgnn":
+        train_config = config.attack.poison_model.params.get("train", {})
+        if (
+            isinstance(train_config, Mapping)
+            and srgnn_checkpoint_protocol(train_config) == SRGNN_VALIDATION_BEST_PROTOCOL
+        ):
+            poison_model_payload.update(
+                srgnn_validation_protocol_identity(train_config, prefix="poison_model")
+            )
+
     return {
         "split_key": split_key(config),
         "fake_session_seed": int(config.seeds.fake_session_seed),
         "attack_generation": {
             "size": float(config.attack.size),
             "fake_session_generation_topk": int(config.attack.fake_session_generation_topk),
-            "poison_model": {
-                "name": config.attack.poison_model.name,
-                "params": config.attack.poison_model.params,
-            },
+            "poison_model": poison_model_payload,
         },
     }
 
@@ -325,12 +341,22 @@ def victim_prediction_key_payload(
     # tuning knobs so append/retry can keep reusing victim state across
     # resource-only batch-size adjustments.
     victim_params = _victim_identity_params(config.victims.params[victim_name])
-    return {
+    payload = {
         **base_context,
         "victim_name": victim_name,
         "victim_train_seed": int(config.seeds.victim_train_seed),
         "victim_params": victim_params,
     }
+    if victim_name == "srgnn":
+        train_config = config.victims.params[victim_name].get("train", {})
+        if (
+            isinstance(train_config, Mapping)
+            and srgnn_checkpoint_protocol(train_config) == SRGNN_VALIDATION_BEST_PROTOCOL
+        ):
+            payload.update(
+                srgnn_validation_protocol_identity(train_config, prefix="victim_srgnn")
+            )
+    return payload
 
 
 def victim_prediction_key(

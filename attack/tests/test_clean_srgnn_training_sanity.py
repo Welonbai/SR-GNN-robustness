@@ -10,10 +10,16 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from attack.tools.clean_srgnn_training_sanity import (
+    CHECKPOINT_IMPROVEMENT_RULE,
+    IS_BEST_MRR20_NOTE,
+    OFFICIAL_EARLY_STOPPING_NOTE,
+    PATIENCE_IMPROVEMENT_RULE,
     TEST_METRICS_NOTE,
+    VALIDATION_PROTOCOL,
     build_summary,
     epoch8_status,
     improved_over_best,
+    official_patience_improved,
     render_markdown_report,
 )
 
@@ -30,6 +36,9 @@ def _row(epoch: int, *, mrr20: float, recall20: float) -> dict[str, object]:
         "test_ground_truth_recall@20": recall20 / 1.5,
         "test_ground_truth_mrr@10": mrr20 / 3.0,
         "test_ground_truth_mrr@20": mrr20 / 1.5,
+        "improved_valid_mrr20_this_epoch": False,
+        "improved_valid_recall20_this_epoch": False,
+        "improved_valid_recall_or_mrr20_this_epoch": False,
         "is_best_mrr20": False,
         "bad_counter": 0,
         "lr": 0.001,
@@ -63,6 +72,27 @@ def test_improvement_rule_is_strict_greater_than() -> None:
     assert improved_over_best(0.101, 0.1) is True
     assert improved_over_best(0.1, 0.1) is False
     assert improved_over_best(0.099, 0.1) is False
+
+
+def test_official_patience_resets_on_recall_or_mrr20_improvement() -> None:
+    assert official_patience_improved(
+        current_valid_recall20=0.30,
+        best_valid_recall20=0.29,
+        current_valid_mrr20=0.10,
+        best_valid_mrr20=0.11,
+    ) is True
+    assert official_patience_improved(
+        current_valid_recall20=0.29,
+        best_valid_recall20=0.30,
+        current_valid_mrr20=0.11,
+        best_valid_mrr20=0.10,
+    ) is True
+    assert official_patience_improved(
+        current_valid_recall20=0.30,
+        best_valid_recall20=0.30,
+        current_valid_mrr20=0.10,
+        best_valid_mrr20=0.10,
+    ) is False
 
 
 @pytest.mark.parametrize(
@@ -99,6 +129,11 @@ def test_build_summary_reports_epoch8_before_best_and_metric_deltas() -> None:
     assert summary["epoch8_to_best_recall20_rel_delta"] == pytest.approx(0.030 / 0.230)
     assert summary["epoch8_close_to_best_mrr20"] is False
     assert summary["epoch8_recall20_close_to_best"] is False
+    assert summary["validation_protocol"] == VALIDATION_PROTOCOL
+    assert summary["patience_improvement_rule"] == PATIENCE_IMPROVEMENT_RULE
+    assert summary["checkpoint_improvement_rule"] == CHECKPOINT_IMPROVEMENT_RULE
+    assert summary["official_early_stopping_note"] == OFFICIAL_EARLY_STOPPING_NOTE
+    assert summary["is_best_mrr20_note"] == IS_BEST_MRR20_NOTE
     assert summary["test_metrics_note"] == TEST_METRICS_NOTE
 
 
@@ -123,10 +158,17 @@ def test_report_mentions_epoch8_status_and_test_diagnostic_note() -> None:
         for epoch in range(1, 9)
     ]
     rows[7]["is_best_mrr20"] = True
+    rows[7]["improved_valid_mrr20_this_epoch"] = True
+    rows[7]["improved_valid_recall_or_mrr20_this_epoch"] = True
     summary = _summary(rows)
 
     report = render_markdown_report(summary, rows)
 
     assert "epoch8_status" in report
+    assert VALIDATION_PROTOCOL in report
+    assert OFFICIAL_EARLY_STOPPING_NOTE in report
+    assert IS_BEST_MRR20_NOTE in report
+    assert "improved MRR@20" in report
+    assert "patience reset" in report
     assert TEST_METRICS_NOTE in report
     assert "canonical_dataset.train_sub" in report

@@ -11,6 +11,11 @@ from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.exporters.tron_exporter import TRONExporter
+from attack.common.srgnn_training_protocol import srgnn_validation_best_enabled
+from attack.models.srgnn_validation_training import (
+    srgnn_validation_train_history_extra,
+    train_srgnn_validation_best,
+)
 from attack.models.victim.registry import get_victim_runner
 from attack.pipeline.core.evaluator import save_predictions
 from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
@@ -79,7 +84,31 @@ def execute_single_victim(
             train_path=poisoned_train_path,
             test_path=srg_nn_export_paths["valid"],
         )
-        if victim_epochs > 0:
+        if srgnn_validation_best_enabled(victim_train_config):
+            result = train_srgnn_validation_best(
+                attacked_runner,
+                attacked_train_data,
+                attacked_valid_data,
+                train_config=victim_train_config,
+                max_epochs=victim_epochs,
+                patience=int(victim_train_config["patience"]),
+                best_checkpoint_path=run_dir / "best_validation.pt",
+                log_prefix="[victim:srgnn-validation-best]",
+            )
+            save_train_history(
+                run_dir / "train_history.json",
+                role="victim",
+                model="srgnn",
+                epochs=len(result.rows),
+                train_loss=[float(row["train_loss"]) for row in result.rows],
+                valid_loss=[None] * len(result.rows),
+                notes=(
+                    "SRGNN victim training selected the checkpoint with highest "
+                    "validation ground-truth MRR@20. Test metrics were not used."
+                ),
+                extra=srgnn_validation_train_history_extra(result),
+            )
+        elif victim_epochs > 0:
             attacked_runner.train(
                 attacked_train_data,
                 attacked_valid_data,
