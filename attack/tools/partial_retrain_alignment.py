@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import pickle
 import random
 import time
 from collections import Counter
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -15,18 +17,10 @@ if __package__ is None or __package__ == "":
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import torch
-
 from attack.common.config import Config, load_config
-from attack.common.seed import derive_seed, set_seed
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.insertion.random_nonzero_when_possible import RandomNonzeroWhenPossiblePolicy
-from attack.models.victim.srgnn_runner import SRGNNVictimRunner
 from attack.pipeline.core.evaluator import evaluate_targeted_metrics
-from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
-from pytorch_code.model import forward as srg_forward
-from pytorch_code.model import trans_to_cuda
-from pytorch_code.utils import Data
 
 
 TARGET_ITEM = 14514
@@ -49,6 +43,7 @@ CSV_FIELDS = (
     "targeted_recall@20",
     "raw_lowk",
     "train_time_seconds",
+    "wall_time_seconds",
     "actual_train_epochs",
     "seed",
     "notes",
@@ -69,6 +64,83 @@ DEFAULT_RANDOM_NZ_DIR = Path(
     "attack_random_nonzero_when_possible_ratio1_srgnn_sample5/"
     "run_group_720516397a/targets/14514"
 )
+_TRAINING_DEPS: dict[str, Any] | None = None
+
+
+def _derive_seed(base_seed: int, *components: object) -> int:
+    normalized_base = int(base_seed)
+    if not components:
+        return normalized_base
+    payload = json.dumps(
+        [normalized_base, *components],
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=False,
+        default=str,
+    )
+    digest = hashlib.sha1(payload.encode("utf-8")).digest()
+    derived = int.from_bytes(digest[:8], byteorder="big", signed=False)
+    return int(derived % (2**31 - 1))
+
+
+def _load_training_deps() -> dict[str, Any]:
+    global _TRAINING_DEPS
+    if _TRAINING_DEPS is not None:
+        return _TRAINING_DEPS
+    try:
+        import numpy as np
+        import torch
+
+        from attack.models.victim.srgnn_runner import SRGNNVictimRunner
+        from pytorch_code.model import forward as srg_forward
+        from pytorch_code.model import trans_to_cuda
+        from pytorch_code.utils import Data
+    except Exception as exc:  # pragma: no cover - environment-specific import failure
+        raise RuntimeError(
+            "Unable to import the SR-GNN training dependencies (NumPy/PyTorch). "
+            "Your traceback shows system Python loading packages from the local "
+            "`robustness` environment. Run with the venv interpreter explicitly, for example: "
+            "`.\\robustness\\Scripts\\python.exe -m attack.tools.partial_retrain_alignment`. "
+            "Also check `where python` and "
+            "`python -c \"import sys; print(sys.executable); import numpy; print(numpy.__file__)\"`."
+        ) from exc
+    _TRAINING_DEPS = {
+        "Data": Data,
+        "SRGNNVictimRunner": SRGNNVictimRunner,
+        "np": np,
+        "srg_forward": srg_forward,
+        "torch": torch,
+        "trans_to_cuda": trans_to_cuda,
+    }
+    return _TRAINING_DEPS
+
+
+def _set_seed(seed: int) -> None:
+    deps = _load_training_deps()
+    np = deps["np"]
+    torch = deps["torch"]
+    random.seed(int(seed))
+    np.random.seed(int(seed))
+    torch.manual_seed(int(seed))
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(int(seed))
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
+def _build_srgnn_opt_from_train_config(train_config: Mapping[str, Any]) -> SimpleNamespace:
+    return SimpleNamespace(
+        batchSize=int(train_config["batch_size"]),
+        hiddenSize=int(train_config["hidden_size"]),
+        epoch=int(train_config["epochs"]),
+        lr=float(train_config["lr"]),
+        lr_dc=float(train_config["lr_dc"]),
+        lr_dc_step=int(train_config["lr_dc_step"]),
+        l2=float(train_config["l2"]),
+        step=int(train_config["step"]),
+        patience=int(train_config["patience"]),
+        nonhybrid=bool(train_config["nonhybrid"]),
+    )
 
 
 def raw_lowk(metrics: Mapping[str, float | int | None]) -> float:
@@ -184,6 +256,7 @@ def load_clean_train_pairs(shared_attack_dir: Path) -> tuple[list[list[int]], li
 
 
 def load_validation_data(shared_attack_dir: Path) -> Data:
+    Data = _load_training_deps()["Data"]
     valid_sessions, valid_labels = load_pickle(shared_attack_dir / "export" / "valid.txt")
     return Data((valid_sessions, valid_labels), shuffle=False)
 
@@ -274,23 +347,49 @@ def train_candidate_partial_retrain(
     seed: int,
     max_epochs: int = MAX_EPOCHS,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    set_seed(int(seed))
+    deps = _load_training_deps()
+    Data = deps["Data"]
+    SRGNNVictimRunner = deps["SRGNNVictimRunner"]
+    print(
+        f"[partial-retrain] candidate={candidate_type} "
+        f"target={int(target_item)} preparing fresh SR-GNN seed={int(seed)}",
+        flush=True,
+    )
+    _set_seed(int(seed))
     train_config = dict(config.victims.params["srgnn"]["train"])
     runner = SRGNNVictimRunner(config)
-    runner.build_model(build_srgnn_opt_from_train_config(train_config))
+    runner.build_model(_build_srgnn_opt_from_train_config(train_config))
     poisoned = build_poisoned_dataset(clean_sessions, clean_labels, fake_sessions)
     train_data = Data((poisoned.sessions, poisoned.labels), shuffle=True)
+    print(
+        f"[partial-retrain] candidate={candidate_type} clean_prefixes={poisoned.clean_count} "
+        f"fake_sessions={poisoned.fake_count} poisoned_prefixes={len(poisoned.sessions)}",
+        flush=True,
+    )
 
     rows: list[dict[str, Any]] = []
-    train_start = time.perf_counter()
+    candidate_start = time.perf_counter()
+    cumulative_train_seconds = 0.0
     for epoch in range(1, int(max_epochs) + 1):
+        print(
+            f"[partial-retrain] candidate={candidate_type} epoch={epoch}/{int(max_epochs)} "
+            "training...",
+            flush=True,
+        )
+        epoch_train_start = time.perf_counter()
         train_loss = _train_one_epoch(runner, train_data)
-        train_time_seconds = time.perf_counter() - train_start
+        cumulative_train_seconds += time.perf_counter() - epoch_train_start
+        print(
+            f"[partial-retrain] candidate={candidate_type} epoch={epoch}/{int(max_epochs)} "
+            "evaluating full validation...",
+            flush=True,
+        )
         metrics = evaluate_candidate_epoch(
             runner,
             validation_data,
             target_item=target_item,
         )
+        wall_time_seconds = time.perf_counter() - candidate_start
         rows.append(
             {
                 "target_item": int(target_item),
@@ -298,11 +397,22 @@ def train_candidate_partial_retrain(
                 "epoch": int(epoch),
                 **metrics,
                 "raw_lowk": raw_lowk(metrics),
-                "train_time_seconds": float(train_time_seconds),
+                "train_time_seconds": float(cumulative_train_seconds),
+                "wall_time_seconds": float(wall_time_seconds),
                 "actual_train_epochs": int(epoch),
                 "seed": int(seed),
                 "notes": f"partial_from_scratch_full_validation train_loss={train_loss:.6g}",
             }
+        )
+        print(
+            f"[partial-retrain] candidate={candidate_type} epoch={epoch}/{int(max_epochs)} "
+            f"done raw_lowk={rows[-1]['raw_lowk']:.9f} "
+            f"mrr@10={rows[-1]['targeted_mrr@10']:.9f} "
+            f"mrr@20={rows[-1]['targeted_mrr@20']:.9f} "
+            f"recall@10={rows[-1]['targeted_recall@10']:.9f} "
+            f"recall@20={rows[-1]['targeted_recall@20']:.9f} "
+            f"train_s={cumulative_train_seconds:.1f} wall_s={wall_time_seconds:.1f}",
+            flush=True,
         )
 
     metadata = {
@@ -317,6 +427,10 @@ def train_candidate_partial_retrain(
 
 
 def _train_one_epoch(runner: SRGNNVictimRunner, train_data: Data) -> float:
+    deps = _load_training_deps()
+    srg_forward = deps["srg_forward"]
+    torch = deps["torch"]
+    trans_to_cuda = deps["trans_to_cuda"]
     if runner.model is None:
         raise RuntimeError("SR-GNN model is not initialized.")
     model = runner.model
@@ -418,7 +532,10 @@ def render_markdown_report(
         "",
         "## Context",
         "- Warm-start ft6500 surrogate previously judged CEM_best > Random-NZ.",
-        "- Final SR-GNN victim for target 14514 judged Random-NZ > CEM_best.",
+        (
+            f"- Final SR-GNN victim for target {int(target_item)} judged "
+            f"`{final_context['winner_by_raw_lowk']}` by raw_lowk."
+        ),
         "- This diagnostic tests whether partial from-scratch retrain closes that gap.",
         "",
         "## Final SR-GNN Victim Test-Set Low-K Context",
@@ -530,11 +647,16 @@ def run_diagnostic(
     target_item: int = TARGET_ITEM,
     max_epochs: int = MAX_EPOCHS,
 ) -> dict[str, Any]:
+    print(
+        f"[partial-retrain] starting target={int(target_item)} max_epochs={int(max_epochs)}",
+        flush=True,
+    )
     config = load_config(config_path)
     shared_dir = Path(shared_attack_dir)
     cem_dir = Path(cem_target_dir)
     random_dir = Path(random_nz_target_dir)
 
+    print("[partial-retrain] loading CEM_best artifacts...", flush=True)
     run_metadata = load_json(cem_dir / "position_opt" / "cem" / "run_metadata.json")
     cem_selection = validate_cem_metadata(run_metadata, target_item=target_item)
     cem_fake_sessions = load_pickle(
@@ -542,6 +664,7 @@ def run_diagnostic(
     )
     cem_fake_sessions = [list(session) for session in cem_fake_sessions]
 
+    print("[partial-retrain] replaying Random-NZ and checking histogram...", flush=True)
     template_sessions = load_pickle(shared_dir / "fake_sessions.pkl")
     random_fake_sessions, random_counts = replay_random_nz_candidate(
         template_sessions,
@@ -553,10 +676,15 @@ def run_diagnostic(
         random_counts,
         random_dir / "random_nonzero_position_metadata.json",
     )
+    print(
+        "[partial-retrain] Random-NZ histogram matched existing metadata.",
+        flush=True,
+    )
 
+    print("[partial-retrain] loading clean train pairs and validation set...", flush=True)
     clean_sessions, clean_labels = load_clean_train_pairs(shared_dir)
     validation_data = load_validation_data(shared_dir)
-    seed = derive_seed(
+    seed = _derive_seed(
         int(config.seeds.surrogate_train_seed),
         "partial_retrain_diagnostic",
         int(target_item),
@@ -582,6 +710,7 @@ def run_diagnostic(
         all_rows.extend(rows)
         candidate_metadata[candidate_type] = metadata
 
+    print("[partial-retrain] building comparison tables and reports...", flush=True)
     comparison_rows = build_comparison_table(all_rows)
     final_context = final_lowk_context(
         cem_dir / "victims" / "srgnn" / "metrics.json",
@@ -608,6 +737,9 @@ def run_diagnostic(
         interpretation=interpretation,
         metadata=metadata,
     )
+    print("[partial-retrain] completed. Outputs:", flush=True)
+    for label, path in output_paths.items():
+        print(f"[partial-retrain]   {label}: {path}", flush=True)
     return {
         "output_paths": {key: str(value) for key, value in output_paths.items()},
         "interpretation": interpretation,

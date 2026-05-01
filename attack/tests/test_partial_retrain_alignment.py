@@ -45,6 +45,7 @@ def _row(candidate_type: str, epoch: int, values: tuple[float, float, float, flo
         **metrics,
         "raw_lowk": raw_lowk(metrics),
         "train_time_seconds": float(epoch),
+        "wall_time_seconds": float(epoch) + 0.5,
         "actual_train_epochs": epoch,
         "seed": 123,
         "notes": "test",
