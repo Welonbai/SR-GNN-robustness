@@ -20,6 +20,7 @@ from attack.common.artifact_io import (
     load_target_registry,
     save_execution_log,
     save_fake_sessions,
+    save_json,
     save_poison_model,
     save_run_coverage,
     save_selected_targets,
@@ -29,8 +30,12 @@ from attack.common.artifact_io import (
     save_target_registry,
 )
 from attack.common.paths import (
+    TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
     TARGET_COHORT_SELECTION_POLICY_VERSION,
+    poison_model_key,
+    poison_model_key_payload,
     run_group_key,
+    shared_attack_dir,
     shared_artifact_paths,
     split_key,
     target_cohort_key,
@@ -81,10 +86,25 @@ def build_srgnn_opt_from_train_config(train_config: Mapping[str, Any]) -> Simple
 
 
 def _fake_session_count(ratio: float, clean_count: int) -> int:
+    return fake_session_count_from_ratio(ratio, clean_count)
+
+
+def fake_session_count_from_ratio(ratio: float, clean_count: int) -> int:
     if ratio <= 0:
         return 0
     count = int(round(clean_count * ratio))
     return max(1, count)
+
+
+def _fake_session_generation_ratio(config: Config, *, run_type: str) -> float:
+    if run_type == TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE:
+        carrier_selection = config.attack.carrier_selection
+        if carrier_selection is None:
+            raise ValueError("TACS-NZ requires attack.carrier_selection to be configured.")
+        if not carrier_selection.enabled:
+            raise ValueError("TACS-NZ requires attack.carrier_selection.enabled == true.")
+        return float(carrier_selection.candidate_pool_size)
+    return float(config.attack.size)
 
 
 def build_clean_pairs(canonical_dataset: CanonicalDataset) -> tuple[list[list[int]], list[int]]:
@@ -953,6 +973,71 @@ def _export_srg_nn_dataset(
     return result.files
 
 
+def _write_poison_model_identity(
+    config: Config,
+    *,
+    shared_paths: Mapping[str, Path],
+) -> None:
+    save_json(
+        {
+            "poison_model_key": poison_model_key(config),
+            "payload": poison_model_key_payload(config),
+            "checkpoint_path": _repo_relative_path(shared_paths["poison_model"]),
+            "train_history_path": _repo_relative_path(shared_paths["poison_train_history"]),
+        },
+        shared_paths["poison_model_identity"],
+    )
+
+
+def _legacy_poison_model_candidates(
+    config: Config,
+    *,
+    shared_paths: Mapping[str, Path],
+) -> list[tuple[Path, Path]]:
+    candidates: list[tuple[Path, Path]] = []
+    legacy_current = shared_paths.get("legacy_attack_poison_model")
+    legacy_current_history = shared_paths.get("legacy_attack_poison_train_history")
+    if legacy_current is not None and legacy_current_history is not None:
+        candidates.append((Path(legacy_current), Path(legacy_current_history)))
+
+    # Compatibility bridge for pre-canonical artifacts. Random-NZ ratio1 and
+    # TACS-NZ should share the same clean poison checkpoint; only fake_sessions
+    # are separated by generation size.
+    random_nz_shared_dir = shared_attack_dir(
+        config,
+        run_type="random_nonzero_when_possible",
+    )
+    candidates.append(
+        (
+            random_nz_shared_dir / "poison_model.pt",
+            random_nz_shared_dir / "poison_train_history.json",
+        )
+    )
+
+    unique: list[tuple[Path, Path]] = []
+    seen: set[Path] = set()
+    canonical = Path(shared_paths["poison_model"]).resolve()
+    for checkpoint_path, history_path in candidates:
+        resolved = checkpoint_path.resolve()
+        if resolved == canonical or resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append((checkpoint_path, history_path))
+    return unique
+
+
+def _copy_legacy_poison_history_if_available(
+    *,
+    legacy_history_path: Path,
+    shared_paths: Mapping[str, Path],
+) -> None:
+    destination = Path(shared_paths["poison_train_history"])
+    if destination.exists() or not legacy_history_path.exists():
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(legacy_history_path, destination)
+
+
 def _load_or_train_poison_runner(
     config: Config,
     *,
@@ -965,7 +1050,28 @@ def _load_or_train_poison_runner(
     runner.build_model(build_srgnn_opt_from_train_config(poison_train_config))
     if load_poison_model(runner, shared_paths["poison_model"]):
         print(f"Loaded poison model checkpoint from {shared_paths['poison_model']}")
+        _write_poison_model_identity(config, shared_paths=shared_paths)
         return runner
+
+    for legacy_checkpoint, legacy_history in _legacy_poison_model_candidates(
+        config,
+        shared_paths=shared_paths,
+    ):
+        if not legacy_checkpoint.exists():
+            continue
+        if load_poison_model(runner, legacy_checkpoint):
+            print(
+                "Loaded legacy compatible poison model checkpoint from "
+                f"{legacy_checkpoint}; saving canonical checkpoint to "
+                f"{shared_paths['poison_model']}"
+            )
+            save_poison_model(runner, shared_paths["poison_model"])
+            _copy_legacy_poison_history_if_available(
+                legacy_history_path=legacy_history,
+                shared_paths=shared_paths,
+            )
+            _write_poison_model_identity(config, shared_paths=shared_paths)
+            return runner
 
     print(
         "No poison model checkpoint found. "
@@ -1000,6 +1106,7 @@ def _load_or_train_poison_runner(
             ),
             extra=srgnn_validation_train_history_extra(result),
         )
+        _write_poison_model_identity(config, shared_paths=shared_paths)
     elif configured_poison_epochs > 0:
         runner.train(
             train_data,
@@ -1009,6 +1116,7 @@ def _load_or_train_poison_runner(
         )
         save_poison_model(runner, shared_paths["poison_model"])
         print(f"Saved poison model checkpoint to {shared_paths['poison_model']}")
+        _write_poison_model_identity(config, shared_paths=shared_paths)
         if runner.train_loss_history:
             save_train_history(
                 shared_paths["poison_train_history"],
@@ -1081,7 +1189,10 @@ def prepare_shared_attack_artifacts(
             sampler,
             topk=config.attack.fake_session_generation_topk,
         )
-        fake_count = _fake_session_count(config.attack.size, len(clean_sessions))
+        fake_count = fake_session_count_from_ratio(
+            _fake_session_generation_ratio(config, run_type=run_type),
+            len(clean_sessions),
+        )
         set_seed(derive_seed(generation_seed, "fake_session_generation"))
         template_sessions = [s.items for s in generator.generate_many(fake_count)]
         save_fake_sessions(template_sessions, shared_paths["fake_sessions"])
@@ -1122,6 +1233,7 @@ __all__ = [
     "build_srgnn_opt_from_train_config",
     "build_clean_pairs",
     "ensure_target_registry_prefix",
+    "fake_session_count_from_ratio",
     "load_or_init_execution_log",
     "load_or_init_run_coverage",
     "load_or_init_target_registry",

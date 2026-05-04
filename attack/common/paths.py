@@ -17,6 +17,7 @@ POSITION_OPT_RUN_TYPE = "position_opt_mvp"
 POSITION_OPT_SHARED_POLICY_RUN_TYPE = "position_opt_shared_policy"
 POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE = "rank_bucket_cem"
 POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE = "rank_bucket_cem_candidate_replay"
+TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE = "target_aware_carrier_selection_nz"
 _POSITION_OPT_RUNTIME_RUN_TYPES = {
     POSITION_OPT_RUN_TYPE,
     POSITION_OPT_SHARED_POLICY_RUN_TYPE,
@@ -119,6 +120,67 @@ def build_position_opt_attack_identity_context(
             "clean_surrogate": checkpoint_identity_payload(clean_surrogate_checkpoint),
         }
     }
+
+
+def carrier_selection_identity_payload(config: Config) -> dict[str, Any]:
+    carrier_selection = config.attack.carrier_selection
+    if carrier_selection is None:
+        raise ValueError("attack.carrier_selection is required for TACS-NZ identity.")
+    return {
+        "enabled": bool(carrier_selection.enabled),
+        "candidate_pool_size": float(carrier_selection.candidate_pool_size),
+        "final_attack_size": float(carrier_selection.final_attack_size),
+        "scorer": carrier_selection.scorer,
+        "embedding_weight": float(carrier_selection.embedding_weight),
+        "cooccurrence_weight": float(carrier_selection.cooccurrence_weight),
+        "transition_weight": float(carrier_selection.transition_weight),
+        "use_length_control": bool(carrier_selection.use_length_control),
+        "length_buckets": carrier_selection.length_buckets,
+        "normalize": carrier_selection.normalize,
+    }
+
+
+def carrier_selection_shared_generation_payload(config: Config) -> dict[str, Any]:
+    carrier_selection = config.attack.carrier_selection
+    if carrier_selection is None:
+        raise ValueError("attack.carrier_selection is required for TACS-NZ generation identity.")
+    return {
+        "method": "tacs_nz",
+        "candidate_pool_size": float(carrier_selection.candidate_pool_size),
+    }
+
+
+def poison_model_key_payload(config: Config) -> dict[str, Any]:
+    return {
+        "split_key": split_key(config),
+        "fake_session_seed": int(config.seeds.fake_session_seed),
+        "poison_model": _poison_model_identity_payload(config),
+    }
+
+
+def poison_model_key(config: Config) -> str:
+    return f"poison_model_{_hash_token(_stable_json(poison_model_key_payload(config)))}"
+
+
+def poison_model_dir(config: Config) -> Path:
+    return shared_root(config) / "poison_models" / poison_model_key(config)
+
+
+def _poison_model_identity_payload(config: Config) -> dict[str, Any]:
+    poison_model_payload: dict[str, Any] = {
+        "name": config.attack.poison_model.name,
+        "params": config.attack.poison_model.params,
+    }
+    if config.attack.poison_model.name == "srgnn":
+        train_config = config.attack.poison_model.params.get("train", {})
+        if (
+            isinstance(train_config, Mapping)
+            and srgnn_checkpoint_protocol(train_config) == SRGNN_VALIDATION_BEST_PROTOCOL
+        ):
+            poison_model_payload.update(
+                srgnn_validation_protocol_identity(train_config, prefix="poison_model")
+            )
+    return poison_model_payload
 
 
 def split_key_payload(config: Config) -> dict[str, Any]:
@@ -231,6 +293,8 @@ def attack_key_payload(
             },
         },
     }
+    if run_type == TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE:
+        payload["attack"]["carrier_selection"] = carrier_selection_identity_payload(config)
     if run_type in _POSITION_OPT_RUNTIME_RUN_TYPES:
         if attack_identity_context is None:
             raise ValueError(
@@ -265,29 +329,28 @@ def shared_attack_artifact_key_payload(config: Config, *, run_type: str) -> dict
     # Shared generation cache is generation-only: fake-session templates and the
     # poison model used to generate them. It must not depend on target choice,
     # replacement policy, victim settings, or position-opt runtime overrides.
-    poison_model_payload: dict[str, Any] = {
-        "name": config.attack.poison_model.name,
-        "params": config.attack.poison_model.params,
-    }
-    if config.attack.poison_model.name == "srgnn":
-        train_config = config.attack.poison_model.params.get("train", {})
-        if (
-            isinstance(train_config, Mapping)
-            and srgnn_checkpoint_protocol(train_config) == SRGNN_VALIDATION_BEST_PROTOCOL
-        ):
-            poison_model_payload.update(
-                srgnn_validation_protocol_identity(train_config, prefix="poison_model")
-            )
+    poison_model_payload = _poison_model_identity_payload(config)
 
-    return {
+    generation_size = float(config.attack.size)
+    carrier_generation_payload: dict[str, Any] | None = None
+    if run_type == TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE:
+        carrier_generation_payload = carrier_selection_shared_generation_payload(config)
+        generation_size = float(carrier_generation_payload["candidate_pool_size"])
+
+    attack_generation: dict[str, Any] = {
         "split_key": split_key(config),
         "fake_session_seed": int(config.seeds.fake_session_seed),
         "attack_generation": {
-            "size": float(config.attack.size),
+            "size": generation_size,
             "fake_session_generation_topk": int(config.attack.fake_session_generation_topk),
             "poison_model": poison_model_payload,
         },
     }
+    if carrier_generation_payload is not None:
+        attack_generation["attack_generation"][
+            "carrier_selection_candidate_pool"
+        ] = carrier_generation_payload
+    return attack_generation
 
 
 def shared_attack_artifact_key(config: Config, *, run_type: str) -> str:
@@ -617,14 +680,19 @@ def victim_dir(
 
 def shared_artifact_paths(config: Config, *, run_type: str) -> dict[str, Path]:
     attack_dir = shared_attack_dir(config, run_type=run_type)
+    poison_dir_path = poison_model_dir(config)
     legacy_target_dir_path = target_selection_dir(config)
     cohort_dir_path = target_cohort_dir(config)
     return {
         "attack_shared_dir": attack_dir,
         "attack_config_snapshot": attack_dir / "config.yaml",
-        "poison_model": attack_dir / "poison_model.pt",
+        "poison_model_dir": poison_dir_path,
+        "poison_model": poison_dir_path / "poison_model.pt",
+        "poison_model_identity": poison_dir_path / "identity.json",
         "fake_sessions": attack_dir / "fake_sessions.pkl",
-        "poison_train_history": attack_dir / "poison_train_history.json",
+        "poison_train_history": poison_dir_path / "poison_train_history.json",
+        "legacy_attack_poison_model": attack_dir / "poison_model.pt",
+        "legacy_attack_poison_train_history": attack_dir / "poison_train_history.json",
         "target_cohort_dir": cohort_dir_path,
         "target_registry": cohort_dir_path / "target_registry.json",
         "target_shared_dir": legacy_target_dir_path,
@@ -708,8 +776,11 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE",
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
+    "TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE",
     "attack_key",
     "attack_key_payload",
+    "carrier_selection_identity_payload",
+    "carrier_selection_shared_generation_payload",
     "build_position_opt_attack_identity_context",
     "canonical_split_dir",
     "canonical_split_paths",
@@ -720,6 +791,9 @@ __all__ = [
     "evaluation_key",
     "evaluation_key_payload",
     "output_root",
+    "poison_model_dir",
+    "poison_model_key",
+    "poison_model_key_payload",
     "run_group_dir",
     "run_group_key",
     "run_group_key_payload",

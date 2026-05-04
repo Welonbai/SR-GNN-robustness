@@ -30,6 +30,18 @@ _ALLOWED_POSITION_OPT_FINAL_POLICY_SELECTIONS = {
     "last",
     "best_deterministic",
 }
+TARGET_AWARE_CARRIER_SELECTION_SCORER = "hybrid_target_session_compatibility"
+TARGET_AWARE_CARRIER_SELECTION_NORMALIZE_MINMAX = "minmax"
+TARGET_AWARE_CARRIER_SELECTION_LENGTH_BUCKETS_EXACT_UNTIL_4_PLUS = "exact_until_4_plus"
+_ALLOWED_CARRIER_SELECTION_SCORERS = {
+    TARGET_AWARE_CARRIER_SELECTION_SCORER,
+}
+_ALLOWED_CARRIER_SELECTION_NORMALIZE = {
+    TARGET_AWARE_CARRIER_SELECTION_NORMALIZE_MINMAX,
+}
+_ALLOWED_CARRIER_SELECTION_LENGTH_BUCKETS = {
+    TARGET_AWARE_CARRIER_SELECTION_LENGTH_BUCKETS_EXACT_UNTIL_4_PLUS,
+}
 RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR = "warm_start_fine_tune"
 RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR = "full_retrain_validation_best"
 _ALLOWED_RANK_BUCKET_CEM_SURROGATE_EVALUATORS = {
@@ -600,6 +612,102 @@ class RankBucketCEMConfig:
 
 
 @dataclass(frozen=True)
+class CarrierSelectionConfig:
+    enabled: bool = False
+    candidate_pool_size: float = 0.03
+    final_attack_size: float = 0.01
+    scorer: str = TARGET_AWARE_CARRIER_SELECTION_SCORER
+    embedding_weight: float = 0.4
+    cooccurrence_weight: float = 0.3
+    transition_weight: float = 0.3
+    use_length_control: bool = True
+    length_buckets: str = TARGET_AWARE_CARRIER_SELECTION_LENGTH_BUCKETS_EXACT_UNTIL_4_PLUS
+    normalize: str = TARGET_AWARE_CARRIER_SELECTION_NORMALIZE_MINMAX
+
+    def __post_init__(self) -> None:
+        enabled = _as_bool(self.enabled, "attack.carrier_selection.enabled")
+        object.__setattr__(self, "enabled", enabled)
+
+        candidate_pool_size = _as_float(
+            self.candidate_pool_size,
+            "attack.carrier_selection.candidate_pool_size",
+        )
+        if not 0.0 < candidate_pool_size <= 1.0:
+            raise ValueError(
+                "attack.carrier_selection.candidate_pool_size must be in (0, 1]."
+            )
+        object.__setattr__(self, "candidate_pool_size", candidate_pool_size)
+
+        final_attack_size = _as_float(
+            self.final_attack_size,
+            "attack.carrier_selection.final_attack_size",
+        )
+        if not 0.0 < final_attack_size <= candidate_pool_size:
+            raise ValueError(
+                "attack.carrier_selection.final_attack_size must be in "
+                "(0, candidate_pool_size]."
+            )
+        object.__setattr__(self, "final_attack_size", final_attack_size)
+
+        scorer = _as_str(self.scorer, "attack.carrier_selection.scorer").strip().lower()
+        if scorer not in _ALLOWED_CARRIER_SELECTION_SCORERS:
+            allowed = ", ".join(sorted(_ALLOWED_CARRIER_SELECTION_SCORERS))
+            raise ValueError(f"attack.carrier_selection.scorer must be one of: {allowed}.")
+        object.__setattr__(self, "scorer", scorer)
+
+        embedding_weight = _as_float(
+            self.embedding_weight,
+            "attack.carrier_selection.embedding_weight",
+        )
+        cooccurrence_weight = _as_float(
+            self.cooccurrence_weight,
+            "attack.carrier_selection.cooccurrence_weight",
+        )
+        transition_weight = _as_float(
+            self.transition_weight,
+            "attack.carrier_selection.transition_weight",
+        )
+        weights = (embedding_weight, cooccurrence_weight, transition_weight)
+        if any(weight < 0.0 for weight in weights):
+            raise ValueError("attack.carrier_selection weights must be non-negative.")
+        if sum(weights) <= 0.0:
+            raise ValueError("attack.carrier_selection weights must sum to > 0.")
+        object.__setattr__(self, "embedding_weight", embedding_weight)
+        object.__setattr__(self, "cooccurrence_weight", cooccurrence_weight)
+        object.__setattr__(self, "transition_weight", transition_weight)
+
+        use_length_control = _as_bool(
+            self.use_length_control,
+            "attack.carrier_selection.use_length_control",
+        )
+        object.__setattr__(self, "use_length_control", use_length_control)
+
+        length_buckets = _as_str(
+            self.length_buckets,
+            "attack.carrier_selection.length_buckets",
+        ).strip().lower()
+        if length_buckets not in _ALLOWED_CARRIER_SELECTION_LENGTH_BUCKETS:
+            allowed = ", ".join(sorted(_ALLOWED_CARRIER_SELECTION_LENGTH_BUCKETS))
+            raise ValueError(
+                "attack.carrier_selection.length_buckets must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "length_buckets", length_buckets)
+
+        normalize = _as_str(
+            self.normalize,
+            "attack.carrier_selection.normalize",
+        ).strip().lower()
+        if normalize not in _ALLOWED_CARRIER_SELECTION_NORMALIZE:
+            allowed = ", ".join(sorted(_ALLOWED_CARRIER_SELECTION_NORMALIZE))
+            raise ValueError(
+                "attack.carrier_selection.normalize must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "normalize", normalize)
+
+
+@dataclass(frozen=True)
 class AttackConfig:
     size: float
     fake_session_generation_topk: int
@@ -607,6 +715,7 @@ class AttackConfig:
     poison_model: PoisonModelConfig
     position_opt: PositionOptConfig | None = None
     rank_bucket_cem: RankBucketCEMConfig | None = None
+    carrier_selection: CarrierSelectionConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -1054,6 +1163,14 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
             if "rank_bucket_cem" in attack and attack["rank_bucket_cem"] is not None
             else None
         ),
+        "carrier_selection": (
+            _normalize_carrier_selection_config(
+                attack["carrier_selection"],
+                "attack.carrier_selection",
+            )
+            if "carrier_selection" in attack and attack["carrier_selection"] is not None
+            else None
+        ),
     }
 
     if not 0.0 < normalized["size"] <= 1.0:
@@ -1062,7 +1179,72 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError("attack.fake_session_generation_topk must be positive.")
     if not 0.0 < normalized["replacement_topk_ratio"] <= 1.0:
         raise ValueError("attack.replacement_topk_ratio must be in (0, 1].")
+    carrier_selection = normalized["carrier_selection"]
+    if carrier_selection is not None:
+        final_attack_size = float(carrier_selection["final_attack_size"])
+        if abs(final_attack_size - float(normalized["size"])) > 1e-12:
+            raise ValueError(
+                "attack.carrier_selection.final_attack_size must equal attack.size "
+                "for TACS-NZ v1."
+            )
     return normalized
+
+
+def _normalize_carrier_selection_config(value: Any, context: str) -> dict[str, Any]:
+    mapping = _as_mapping(value, context)
+    allowed_fields = {field.name for field in fields(CarrierSelectionConfig)}
+    unknown = set(mapping) - allowed_fields
+    if unknown:
+        raise ValueError(
+            "Unknown carrier-selection config keys: "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+
+    payload: dict[str, Any] = {}
+    if "enabled" in mapping:
+        payload["enabled"] = _as_bool(mapping["enabled"], f"{context}.enabled")
+    if "candidate_pool_size" in mapping:
+        payload["candidate_pool_size"] = _as_float(
+            mapping["candidate_pool_size"],
+            f"{context}.candidate_pool_size",
+        )
+    if "final_attack_size" in mapping:
+        payload["final_attack_size"] = _as_float(
+            mapping["final_attack_size"],
+            f"{context}.final_attack_size",
+        )
+    if "scorer" in mapping:
+        payload["scorer"] = _as_str(mapping["scorer"], f"{context}.scorer")
+    if "embedding_weight" in mapping:
+        payload["embedding_weight"] = _as_float(
+            mapping["embedding_weight"],
+            f"{context}.embedding_weight",
+        )
+    if "cooccurrence_weight" in mapping:
+        payload["cooccurrence_weight"] = _as_float(
+            mapping["cooccurrence_weight"],
+            f"{context}.cooccurrence_weight",
+        )
+    if "transition_weight" in mapping:
+        payload["transition_weight"] = _as_float(
+            mapping["transition_weight"],
+            f"{context}.transition_weight",
+        )
+    if "use_length_control" in mapping:
+        payload["use_length_control"] = _as_bool(
+            mapping["use_length_control"],
+            f"{context}.use_length_control",
+        )
+    if "length_buckets" in mapping:
+        payload["length_buckets"] = _as_str(
+            mapping["length_buckets"],
+            f"{context}.length_buckets",
+        )
+    if "normalize" in mapping:
+        payload["normalize"] = _as_str(mapping["normalize"], f"{context}.normalize")
+
+    config = CarrierSelectionConfig(**payload)
+    return _primitive_from_obj(config)
 
 
 def _normalize_position_opt_config(value: Any, context: str) -> dict[str, Any]:
@@ -1814,6 +1996,18 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
                 if attack.get("rank_bucket_cem") is not None
                 else None
             ),
+            carrier_selection=(
+                CarrierSelectionConfig(
+                    **dict(
+                        _as_mapping(
+                            attack["carrier_selection"],
+                            "attack.carrier_selection",
+                        )
+                    )
+                )
+                if attack.get("carrier_selection") is not None
+                else None
+            ),
         ),
         targets=TargetsConfig(
             mode=_as_str(_require(targets, "mode", "targets"), "targets.mode"),
@@ -1872,6 +2066,7 @@ def load_config(path: str | Path) -> Config:
 
 __all__ = [
     "CanonicalSplitConfig",
+    "CarrierSelectionConfig",
     "Config",
     "PositionOptConfig",
     "RankBucketCEMConfig",
@@ -1881,6 +2076,9 @@ __all__ = [
     "RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR",
     "RANK_BUCKET_CEM_ZERO_MEAN_INIT_MODE",
     "SurrogateEvalPoisonBalanceConfig",
+    "TARGET_AWARE_CARRIER_SELECTION_LENGTH_BUCKETS_EXACT_UNTIL_4_PLUS",
+    "TARGET_AWARE_CARRIER_SELECTION_NORMALIZE_MINMAX",
+    "TARGET_AWARE_CARRIER_SELECTION_SCORER",
     "load_config",
     "normalize_config_mapping",
     "parse_config",

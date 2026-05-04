@@ -1396,6 +1396,9 @@ def _initial_artifact_manifest(
         poison_artifact = {
             "shared_dir": _repo_relative_path(context.shared_paths["attack_shared_dir"]),
             "poison_model": _repo_relative_path(context.shared_paths["poison_model"]),
+            "poison_model_identity": _repo_relative_path(
+                context.shared_paths["poison_model_identity"]
+            ),
             "fake_sessions": _repo_relative_path(context.shared_paths["fake_sessions"]),
             "poison_train_history": _repo_relative_path(context.shared_paths["poison_train_history"]),
             "config_snapshot": _repo_relative_path(context.shared_paths["attack_config_snapshot"]),
