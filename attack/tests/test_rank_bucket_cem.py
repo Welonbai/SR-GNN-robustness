@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import math
 import pickle
 import random
 from pathlib import Path
@@ -17,7 +18,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from attack.common.config import (
+    RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR,
+    RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR,
     RankBucketCEMConfig,
+    RankBucketCEMSurrogateEvaluatorConfig,
     SurrogateEvalPoisonBalanceConfig,
     load_config,
 )
@@ -216,6 +220,8 @@ class _DummyBackend:
 class _DummyInnerTrainer:
     def __init__(self) -> None:
         self.seeds: list[int | None] = []
+        self.clean_checkpoint_paths: list[object] = []
+        self.eval_data_flags: list[bool] = []
         self.run_count = 0
 
     def run(
@@ -228,10 +234,32 @@ class _DummyInnerTrainer:
         eval_data=None,
         seed=None,
     ) -> InnerTrainResult:
-        del surrogate_backend, clean_checkpoint_path, eval_data
+        del surrogate_backend
+        self.clean_checkpoint_paths.append(clean_checkpoint_path)
+        self.eval_data_flags.append(eval_data is not None)
         self.seeds.append(seed)
         score_index = self.run_count
         self.run_count += 1
+        full_retrain = clean_checkpoint_path is None and eval_data is not None and config is None
+        history = {
+            "steps": 0 if config is None else int(config.steps),
+            "epochs": 0 if config is None else int(config.epochs),
+            "avg_loss": 0.0,
+        }
+        if full_retrain:
+            history.update(
+                {
+                    "surrogate_evaluator_mode": RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR,
+                    "steps": None,
+                    "epochs": 12,
+                    "selected_checkpoint_epoch": 2,
+                    "best_valid_mrr20": 0.123,
+                    "best_valid_recall20_at_best_mrr20_epoch": 0.456,
+                    "best_valid_recall20": 0.5,
+                    "stopped_epoch": 12,
+                    "stop_reason": "patience_exhausted",
+                }
+            )
         return InnerTrainResult(
             model={
                 "kind": "trained",
@@ -239,11 +267,7 @@ class _DummyInnerTrainer:
                 "score_index": score_index,
                 "poisoned_fake_count": poisoned_train_data.fake_count,
             },
-            history={
-                "steps": 0 if config is None else int(config.steps),
-                "epochs": 0 if config is None else int(config.epochs),
-                "avg_loss": 0.0,
-            },
+            history=history,
         )
 
 
@@ -256,14 +280,19 @@ def _shared_artifacts() -> SimpleNamespace:
     )
 
 
-def _artifact_paths(tmp_path: Path) -> RankBucketCEMArtifactPaths:
+def _artifact_paths(
+    tmp_path: Path,
+    *,
+    require_clean_checkpoint: bool = True,
+) -> RankBucketCEMArtifactPaths:
     base_dir = tmp_path / "rank_bucket_cem"
     clean_checkpoint = tmp_path / "clean_surrogate.pt"
-    clean_checkpoint.parent.mkdir(parents=True, exist_ok=True)
-    clean_checkpoint.write_text("checkpoint", encoding="utf-8")
+    if require_clean_checkpoint:
+        clean_checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        clean_checkpoint.write_text("checkpoint", encoding="utf-8")
     return RankBucketCEMArtifactPaths(
         base_dir=base_dir,
-        clean_surrogate_checkpoint=clean_checkpoint,
+        clean_surrogate_checkpoint=clean_checkpoint if require_clean_checkpoint else None,
         optimized_poisoned_sessions=base_dir / "optimized_poisoned_sessions.pkl",
         availability_summary=base_dir / "availability_summary.json",
         cem_trace=base_dir / "cem_trace.jsonl",
@@ -292,6 +321,7 @@ def _run_dummy_trainer(
     save_final_selected_positions: bool = False,
     save_optimized_poisoned_sessions: bool = True,
     save_replay_metadata: bool = True,
+    surrogate_evaluator: RankBucketCEMSurrogateEvaluatorConfig | None = None,
     fake_sessions: list[list[int]] | None = None,
     iterations: int = 1,
     population_size: int = 3,
@@ -320,6 +350,11 @@ def _run_dummy_trainer(
         save_final_selected_positions=save_final_selected_positions,
         save_optimized_poisoned_sessions=save_optimized_poisoned_sessions,
         save_replay_metadata=save_replay_metadata,
+        surrogate_evaluator=(
+            config.attack.rank_bucket_cem.surrogate_evaluator
+            if surrogate_evaluator is None
+            else surrogate_evaluator
+        ),
     )
     config = replace(
         config,
@@ -332,14 +367,21 @@ def _run_dummy_trainer(
 
     backend = _DummyBackend() if backend is None else backend
     inner_trainer = _DummyInnerTrainer()
+    full_retrain = (
+        rank_bucket_cem.surrogate_evaluator.mode
+        == RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR
+    )
+    artifact_paths = _artifact_paths(
+        tmp_path,
+        require_clean_checkpoint=not full_retrain,
+    )
     trainer = RankBucketCEMTrainer(
         backend,
         inner_trainer,
-        clean_surrogate_checkpoint_path=_artifact_paths(tmp_path).clean_surrogate_checkpoint,
+        clean_surrogate_checkpoint_path=artifact_paths.clean_surrogate_checkpoint,
         position_opt_config=position_opt,
         rank_bucket_cem_config=rank_bucket_cem,
     )
-    artifact_paths = _artifact_paths(tmp_path)
     result = trainer.train(
         [_session(2), _session(3), _session(5)] if fake_sessions is None else fake_sessions,
         5334,
@@ -413,12 +455,94 @@ def test_rank_bucket_cem_config_loads_with_clean_defaults() -> None:
     assert config.attack.rank_bucket_cem.save_final_selected_positions is False
     assert config.attack.rank_bucket_cem.save_optimized_poisoned_sessions is True
     assert config.attack.rank_bucket_cem.save_replay_metadata is True
+    assert config.attack.rank_bucket_cem.cem_init_mode == "zero_mean"
+    assert config.attack.rank_bucket_cem.g2_initial_pi is None
+    assert config.attack.rank_bucket_cem.g3_initial_pi is None
     poison_balance = config.attack.rank_bucket_cem.surrogate_eval_poison_balance
     assert poison_balance.enabled is False
     assert poison_balance.mode == "fixed_ratio"
     assert poison_balance.poison_ratio_in_batch == pytest.approx(0.20)
     assert poison_balance.loss_weighting == "none"
+    assert (
+        config.attack.rank_bucket_cem.surrogate_evaluator.mode
+        == RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR
+    )
+    assert "surrogate_evaluator" not in rank_bucket_cem_identity_payload(
+        config.attack.rank_bucket_cem
+    )
     assert config.victims.enabled == ("srgnn", "miasrec", "tron")
+
+
+def test_full_retrain_diagnostic_config_loads_and_changes_cem_identity() -> None:
+    config = load_config(
+        REPO_ROOT
+        / "attack"
+        / "configs"
+        / "diginetica_valbest_attack_rank_bucket_cem_scratch4epoch_surrogate_tiny_11103.yaml"
+    )
+
+    assert config.targets.mode == "explicit_list"
+    assert config.targets.explicit_list == (11103,)
+    assert config.attack.position_opt.clean_surrogate_checkpoint is None
+    assert config.attack.position_opt.fine_tune_steps == 0
+    assert config.attack.rank_bucket_cem.population_per_iteration == (4, 2, 2)
+    assert config.attack.rank_bucket_cem.effective_population_schedule == (4, 2, 2)
+    assert config.attack.rank_bucket_cem.candidate_count == 8
+    assert config.attack.rank_bucket_cem.save_candidate_selected_positions is True
+    assert config.attack.rank_bucket_cem.save_final_selected_positions is True
+    assert (
+        config.attack.rank_bucket_cem.surrogate_evaluator.mode
+        == RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR
+    )
+    assert config.attack.rank_bucket_cem.surrogate_evaluator.max_epochs == 4
+    assert config.attack.rank_bucket_cem.surrogate_evaluator.patience == 5
+    assert config.attack.rank_bucket_cem.cem_init_mode == "zero_mean"
+    assert config.attack.poison_model.params["train"]["epochs"] == 30
+    assert config.attack.poison_model.params["train"]["patience"] == 10
+    assert config.victims.params["srgnn"]["train"]["epochs"] == 30
+    assert config.victims.params["srgnn"]["train"]["patience"] == 10
+    identity = rank_bucket_cem_identity_payload(config.attack.rank_bucket_cem)
+    assert identity["surrogate_evaluator"] == {
+        "mode": RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR,
+        "max_epochs": 4,
+        "patience": 5,
+    }
+    assert "cem_init_mode" not in identity
+    assert "g2_initial_pi" not in identity
+    assert "g3_initial_pi" not in identity
+
+
+def test_tail_boosted_scratch4epoch_config_loads_and_changes_cem_identity() -> None:
+    config = load_config(
+        REPO_ROOT
+        / "attack"
+        / "configs"
+        / "diginetica_valbest_attack_rank_bucket_cem_scratch4epoch_valbest_surrogate_tailboosted_p12_11103.yaml"
+    )
+
+    cem = config.attack.rank_bucket_cem
+    assert cem.population_per_iteration == (12, 6, 6)
+    assert cem.effective_population_schedule == (12, 6, 6)
+    assert cem.candidate_count == 24
+    assert cem.surrogate_evaluator.mode == RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR
+    assert cem.surrogate_evaluator.max_epochs == 4
+    assert cem.surrogate_evaluator.patience == 5
+    assert cem.cem_init_mode == "tail_boosted"
+    assert cem.g2_initial_pi == pytest.approx((0.35, 0.65))
+    assert cem.g3_initial_pi == pytest.approx((0.15, 0.20, 0.65))
+
+    state = initialize_cem_state(
+        cem.initial_std,
+        mean_g2=[math.log(value) for value in cem.g2_initial_pi],
+        mean_g3=[math.log(value) for value in cem.g3_initial_pi],
+    )
+    assert state.mean_g2 == pytest.approx([math.log(0.35), math.log(0.65)])
+    assert state.mean_g3 == pytest.approx([math.log(0.15), math.log(0.20), math.log(0.65)])
+
+    identity = rank_bucket_cem_identity_payload(cem)
+    assert identity["cem_init_mode"] == "tail_boosted"
+    assert identity["g2_initial_pi"] == pytest.approx([0.35, 0.65])
+    assert identity["g3_initial_pi"] == pytest.approx([0.15, 0.20, 0.65])
 
 
 def test_rank_bucket_cem_population_schedule_validation() -> None:
@@ -816,6 +940,51 @@ def test_cem_trace_omits_candidate_selected_positions_by_default_and_keeps_seed_
         assert best_policy["replay_metadata"]["validation_subset_strategy"] == (
             "deterministic_random_subset"
         )
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def test_full_retrain_surrogate_mode_uses_no_clean_checkpoint_and_records_validation_best_metadata() -> None:
+    tmp_path = _repo_temp_dir()
+    try:
+        result, artifact_paths, inner_trainer = _run_dummy_trainer(
+            tmp_path,
+            reward_metric=NORMALIZED_LOWK_MRR_RECALL_10_20_REWARD,
+            iterations=1,
+            population_size=2,
+            surrogate_evaluator=RankBucketCEMSurrogateEvaluatorConfig(
+                mode=RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR,
+            ),
+        )
+        trace_rows = _read_jsonl(artifact_paths.cem_trace)
+        best_policy = json.loads(artifact_paths.cem_best_policy.read_text(encoding="utf-8"))
+
+        assert artifact_paths.clean_surrogate_checkpoint is None
+        assert result["candidate_count"] == 2
+        assert inner_trainer.clean_checkpoint_paths == [None, None]
+        assert inner_trainer.eval_data_flags == [True, True]
+        assert trace_rows
+        assert all(
+            row["surrogate_evaluator_mode"]
+            == RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR
+            for row in trace_rows
+        )
+        assert all(row["configured_fine_tune_steps"] == 0 for row in trace_rows)
+        assert all(row["actual_optimizer_steps"] is None for row in trace_rows)
+        assert all(row["selected_checkpoint_epoch"] == 2 for row in trace_rows)
+        assert all(row["valid_ground_truth_mrr@20"] == pytest.approx(0.123) for row in trace_rows)
+        assert all(
+            row["valid_ground_truth_recall@20"] == pytest.approx(0.456)
+            for row in trace_rows
+        )
+        assert all(row["best_valid_recall20"] == pytest.approx(0.5) for row in trace_rows)
+        assert all(row["stopped_epoch"] == 12 for row in trace_rows)
+        assert all(row["stop_reason"] == "patience_exhausted" for row in trace_rows)
+        assert best_policy["replay_metadata"]["surrogate_evaluator"] == {
+            "mode": RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR,
+            "max_epochs": None,
+            "patience": None,
+        }
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 

@@ -30,6 +30,18 @@ _ALLOWED_POSITION_OPT_FINAL_POLICY_SELECTIONS = {
     "last",
     "best_deterministic",
 }
+RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR = "warm_start_fine_tune"
+RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR = "full_retrain_validation_best"
+_ALLOWED_RANK_BUCKET_CEM_SURROGATE_EVALUATORS = {
+    RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR,
+    RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR,
+}
+RANK_BUCKET_CEM_ZERO_MEAN_INIT_MODE = "zero_mean"
+RANK_BUCKET_CEM_TAIL_BOOSTED_INIT_MODE = "tail_boosted"
+_ALLOWED_RANK_BUCKET_CEM_INIT_MODES = {
+    RANK_BUCKET_CEM_ZERO_MEAN_INIT_MODE,
+    RANK_BUCKET_CEM_TAIL_BOOSTED_INIT_MODE,
+}
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -332,12 +344,59 @@ class SurrogateEvalPoisonBalanceConfig:
 
 
 @dataclass(frozen=True)
+class RankBucketCEMSurrogateEvaluatorConfig:
+    mode: str = RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR
+    max_epochs: int | None = None
+    patience: int | None = None
+
+    def __post_init__(self) -> None:
+        mode = _as_str(
+            self.mode,
+            "attack.rank_bucket_cem.surrogate_evaluator.mode",
+        ).strip().lower()
+        if mode not in _ALLOWED_RANK_BUCKET_CEM_SURROGATE_EVALUATORS:
+            allowed = ", ".join(sorted(_ALLOWED_RANK_BUCKET_CEM_SURROGATE_EVALUATORS))
+            raise ValueError(
+                "attack.rank_bucket_cem.surrogate_evaluator.mode must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "mode", mode)
+
+        if self.max_epochs is not None:
+            max_epochs = _as_int(
+                self.max_epochs,
+                "attack.rank_bucket_cem.surrogate_evaluator.max_epochs",
+            )
+            if max_epochs <= 0:
+                raise ValueError(
+                    "attack.rank_bucket_cem.surrogate_evaluator.max_epochs "
+                    "must be positive when provided."
+                )
+            object.__setattr__(self, "max_epochs", max_epochs)
+
+        if self.patience is not None:
+            patience = _as_int(
+                self.patience,
+                "attack.rank_bucket_cem.surrogate_evaluator.patience",
+            )
+            if patience <= 0:
+                raise ValueError(
+                    "attack.rank_bucket_cem.surrogate_evaluator.patience "
+                    "must be positive when provided."
+                )
+            object.__setattr__(self, "patience", patience)
+
+
+@dataclass(frozen=True)
 class RankBucketCEMConfig:
     iterations: int = 3
     population_size: int = 8
     population_per_iteration: tuple[int, ...] | None = None
     elite_ratio: float = 0.25
     initial_std: float = 1.0
+    cem_init_mode: str = RANK_BUCKET_CEM_ZERO_MEAN_INIT_MODE
+    g2_initial_pi: tuple[float, float] | None = None
+    g3_initial_pi: tuple[float, float, float] | None = None
     min_std: float = 0.2
     smoothing: float = 0.3
     reward_metric: str | None = None
@@ -347,6 +406,9 @@ class RankBucketCEMConfig:
     save_replay_metadata: bool = True
     surrogate_eval_poison_balance: SurrogateEvalPoisonBalanceConfig = field(
         default_factory=SurrogateEvalPoisonBalanceConfig
+    )
+    surrogate_evaluator: RankBucketCEMSurrogateEvaluatorConfig = field(
+        default_factory=RankBucketCEMSurrogateEvaluatorConfig
     )
 
     def __post_init__(self) -> None:
@@ -395,6 +457,47 @@ class RankBucketCEMConfig:
         if initial_std <= 0.0:
             raise ValueError("attack.rank_bucket_cem.initial_std must be positive.")
         object.__setattr__(self, "initial_std", initial_std)
+
+        cem_init_mode = _as_str(
+            self.cem_init_mode,
+            "attack.rank_bucket_cem.cem_init_mode",
+        ).strip().lower()
+        if cem_init_mode not in _ALLOWED_RANK_BUCKET_CEM_INIT_MODES:
+            raise ValueError(
+                "attack.rank_bucket_cem.cem_init_mode must be one of "
+                f"{sorted(_ALLOWED_RANK_BUCKET_CEM_INIT_MODES)}."
+            )
+        object.__setattr__(self, "cem_init_mode", cem_init_mode)
+
+        g2_initial_pi = self.g2_initial_pi
+        if g2_initial_pi is not None:
+            g2_initial_pi = _coerce_probability_tuple(
+                g2_initial_pi,
+                length=2,
+                context="attack.rank_bucket_cem.g2_initial_pi",
+            )
+        object.__setattr__(self, "g2_initial_pi", g2_initial_pi)
+
+        g3_initial_pi = self.g3_initial_pi
+        if g3_initial_pi is not None:
+            g3_initial_pi = _coerce_probability_tuple(
+                g3_initial_pi,
+                length=3,
+                context="attack.rank_bucket_cem.g3_initial_pi",
+            )
+        object.__setattr__(self, "g3_initial_pi", g3_initial_pi)
+
+        if cem_init_mode == RANK_BUCKET_CEM_ZERO_MEAN_INIT_MODE:
+            if g2_initial_pi is not None or g3_initial_pi is not None:
+                raise ValueError(
+                    "attack.rank_bucket_cem.g2_initial_pi/g3_initial_pi require "
+                    "cem_init_mode='tail_boosted'."
+                )
+        elif g2_initial_pi is None or g3_initial_pi is None:
+            raise ValueError(
+                "attack.rank_bucket_cem.cem_init_mode='tail_boosted' requires both "
+                "g2_initial_pi and g3_initial_pi."
+            )
 
         min_std = _as_float(self.min_std, "attack.rank_bucket_cem.min_std")
         if min_std < 0.0:
@@ -465,6 +568,24 @@ class RankBucketCEMConfig:
             self,
             "surrogate_eval_poison_balance",
             resolved_poison_balance,
+        )
+
+        surrogate_evaluator = self.surrogate_evaluator
+        if isinstance(surrogate_evaluator, RankBucketCEMSurrogateEvaluatorConfig):
+            resolved_surrogate_evaluator = surrogate_evaluator
+        elif isinstance(surrogate_evaluator, Mapping):
+            resolved_surrogate_evaluator = RankBucketCEMSurrogateEvaluatorConfig(
+                **dict(surrogate_evaluator)
+            )
+        else:
+            raise TypeError(
+                "attack.rank_bucket_cem.surrogate_evaluator must be a mapping "
+                "or RankBucketCEMSurrogateEvaluatorConfig."
+            )
+        object.__setattr__(
+            self,
+            "surrogate_evaluator",
+            resolved_surrogate_evaluator,
         )
 
     @property
@@ -622,6 +743,57 @@ def _as_int_list(value: Any, context: str) -> tuple[int, ...]:
             raise TypeError(f"Expected {context} to contain only ints.")
         result.append(int(item))
     return tuple(result)
+
+
+def _coerce_probability_tuple(
+    value: Any,
+    *,
+    length: int,
+    context: str,
+) -> tuple[float, ...]:
+    if isinstance(value, Mapping):
+        keys = ("rank1", "rank2") if int(length) == 2 else ("rank1", "rank2", "tail")
+        missing = [key for key in keys if key not in value]
+        extra = sorted(str(key) for key in set(value) - set(keys))
+        if missing or extra:
+            raise ValueError(
+                f"Expected {context} keys {list(keys)}; "
+                f"missing={missing}, extra={extra}."
+            )
+        value = [value[key] for key in keys]
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise TypeError(f"Expected {context} to be a list of probabilities.")
+    if len(value) != int(length):
+        raise ValueError(f"Expected {context} to contain exactly {int(length)} values.")
+    result = tuple(_as_float(item, f"{context}[]") for item in value)
+    if any(float(item) <= 0.0 for item in result):
+        raise ValueError(f"Expected {context} probabilities to be positive.")
+    total = float(sum(result))
+    if abs(total - 1.0) > 1.0e-6:
+        raise ValueError(f"Expected {context} probabilities to sum to 1.0, got {total}.")
+    return tuple(float(item) for item in result)
+
+
+def _coerce_rank_bucket_pi_mapping_or_sequence(
+    value: Any,
+    *,
+    keys: Sequence[str],
+    context: str,
+) -> tuple[float, ...]:
+    if isinstance(value, Mapping):
+        missing = [key for key in keys if key not in value]
+        extra = sorted(str(key) for key in set(value) - set(keys))
+        if missing or extra:
+            raise ValueError(
+                f"Expected {context} keys {list(keys)}; "
+                f"missing={missing}, extra={extra}."
+            )
+        value = [value[key] for key in keys]
+    return _coerce_probability_tuple(
+        value,
+        length=len(keys),
+        context=context,
+    )
 
 
 def _unique_preserve_order(items: Sequence[Any]) -> list[Any]:
@@ -1038,6 +1210,33 @@ def _normalize_rank_bucket_cem_config(value: Any, context: str) -> dict[str, Any
             mapping["initial_std"],
             f"{context}.initial_std",
         )
+    if "cem_init_mode" in mapping:
+        payload["cem_init_mode"] = _as_str(
+            mapping["cem_init_mode"],
+            f"{context}.cem_init_mode",
+        )
+    if "g2_initial_pi" in mapping:
+        raw_g2_initial_pi = mapping["g2_initial_pi"]
+        payload["g2_initial_pi"] = (
+            None
+            if raw_g2_initial_pi is None
+            else _coerce_rank_bucket_pi_mapping_or_sequence(
+                raw_g2_initial_pi,
+                keys=("rank1", "rank2"),
+                context=f"{context}.g2_initial_pi",
+            )
+        )
+    if "g3_initial_pi" in mapping:
+        raw_g3_initial_pi = mapping["g3_initial_pi"]
+        payload["g3_initial_pi"] = (
+            None
+            if raw_g3_initial_pi is None
+            else _coerce_rank_bucket_pi_mapping_or_sequence(
+                raw_g3_initial_pi,
+                keys=("rank1", "rank2", "tail"),
+                context=f"{context}.g3_initial_pi",
+            )
+        )
     if "min_std" in mapping:
         payload["min_std"] = _as_float(
             mapping["min_std"],
@@ -1082,8 +1281,46 @@ def _normalize_rank_bucket_cem_config(value: Any, context: str) -> dict[str, Any
                 f"{context}.surrogate_eval_poison_balance",
             )
         )
+    if "surrogate_evaluator" in mapping:
+        payload["surrogate_evaluator"] = _normalize_rank_bucket_cem_surrogate_evaluator_config(
+            mapping["surrogate_evaluator"],
+            f"{context}.surrogate_evaluator",
+        )
 
     return _primitive_from_obj(RankBucketCEMConfig(**payload))
+
+
+def _normalize_rank_bucket_cem_surrogate_evaluator_config(
+    value: Any,
+    context: str,
+) -> dict[str, Any]:
+    mapping = _as_mapping(value, context)
+    allowed_fields = {"mode", "max_epochs", "patience"}
+    unknown = set(mapping) - allowed_fields
+    if unknown:
+        raise ValueError(
+            "Unknown rank_bucket_cem surrogate_evaluator config keys: "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+
+    payload: dict[str, Any] = {}
+    if "mode" in mapping:
+        payload["mode"] = _as_str(mapping["mode"], f"{context}.mode")
+    if "max_epochs" in mapping:
+        raw_max_epochs = mapping["max_epochs"]
+        payload["max_epochs"] = (
+            None
+            if raw_max_epochs is None
+            else _as_int(raw_max_epochs, f"{context}.max_epochs")
+        )
+    if "patience" in mapping:
+        raw_patience = mapping["patience"]
+        payload["patience"] = (
+            None
+            if raw_patience is None
+            else _as_int(raw_patience, f"{context}.patience")
+        )
+    return _primitive_from_obj(RankBucketCEMSurrogateEvaluatorConfig(**payload))
 
 
 def _normalize_surrogate_eval_poison_balance_config(
@@ -1638,6 +1875,11 @@ __all__ = [
     "Config",
     "PositionOptConfig",
     "RankBucketCEMConfig",
+    "RankBucketCEMSurrogateEvaluatorConfig",
+    "RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR",
+    "RANK_BUCKET_CEM_TAIL_BOOSTED_INIT_MODE",
+    "RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR",
+    "RANK_BUCKET_CEM_ZERO_MEAN_INIT_MODE",
     "SurrogateEvalPoisonBalanceConfig",
     "load_config",
     "normalize_config_mapping",

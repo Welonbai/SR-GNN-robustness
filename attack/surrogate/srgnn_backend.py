@@ -94,6 +94,11 @@ class SRGNNBackend:
         runner.model.train()
         return SRGNNModelHandle(runner=runner)
 
+    def build_fresh_model(self) -> SRGNNModelHandle:
+        runner = self._new_runner()
+        runner.model.train()
+        return SRGNNModelHandle(runner=runner)
+
     def fine_tune(
         self,
         model: object,

@@ -12,12 +12,20 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from attack.common.artifact_io import load_json
-from attack.common.config import Config, load_config
+from attack.common.config import (
+    Config,
+    RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR,
+    RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR,
+    load_config,
+)
 from attack.common.paths import (
     POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     target_dir,
 )
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
+from attack.inner_train.srgnn_full_retrain_validation_best import (
+    SRGNNFullRetrainValidationBestInnerTrainer,
+)
 from attack.inner_train.truncated_finetune import TruncatedFineTuneInnerTrainer
 from attack.pipeline.core.orchestrator import (
     RunContext,
@@ -75,18 +83,31 @@ def run_rank_bucket_cem(
         config.attack.rank_bucket_cem,
         rank_bucket_cem_config,
     )
-    _validate_rank_bucket_cem_resolved_config(resolved_position_opt_config)
-    clean_checkpoint = resolve_clean_surrogate_checkpoint_path(
-        config,
-        run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
-        override=(
-            str(clean_surrogate_checkpoint_path)
-            if clean_surrogate_checkpoint_path is not None
-            else resolved_position_opt_config.clean_surrogate_checkpoint
-        ),
-    ).resolve()
-    if not clean_checkpoint.exists():
-        raise FileNotFoundError(f"Clean surrogate checkpoint not found: {clean_checkpoint}")
+    _validate_rank_bucket_cem_resolved_config(
+        resolved_position_opt_config,
+        resolved_rank_bucket_cem_config,
+    )
+    full_retrain_surrogate = _uses_full_retrain_surrogate_evaluator(
+        resolved_rank_bucket_cem_config
+    )
+    clean_checkpoint = None
+    if not full_retrain_surrogate:
+        clean_checkpoint = resolve_clean_surrogate_checkpoint_path(
+            config,
+            run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+            override=(
+                str(clean_surrogate_checkpoint_path)
+                if clean_surrogate_checkpoint_path is not None
+                else resolved_position_opt_config.clean_surrogate_checkpoint
+            ),
+        ).resolve()
+        if not clean_checkpoint.exists():
+            raise FileNotFoundError(f"Clean surrogate checkpoint not found: {clean_checkpoint}")
+    elif clean_surrogate_checkpoint_path is not None:
+        raise ValueError(
+            "--clean-surrogate-checkpoint must not be used with "
+            "rank_bucket_cem.surrogate_evaluator.mode='full_retrain_validation_best'."
+        )
 
     attack_identity_context = build_rank_bucket_cem_attack_identity_context(
         position_opt_config=position_opt_identity_payload(resolved_position_opt_config),
@@ -107,6 +128,7 @@ def run_rank_bucket_cem(
     )
     print(
         f"{_LOG_PREFIX} "
+        f"surrogate_evaluator={resolved_rank_bucket_cem_config.surrogate_evaluator.mode} "
         f"clean_surrogate_checkpoint={clean_checkpoint} "
         f"iterations={int(resolved_rank_bucket_cem_config.iterations)} "
         f"population_schedule="
@@ -124,6 +146,7 @@ def run_rank_bucket_cem(
                 run_type=POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
                 target_item=target_item,
                 clean_checkpoint_override=clean_checkpoint,
+                require_clean_checkpoint=not full_retrain_surrogate,
                 attack_identity_context=attack_identity_context,
             )
         )
@@ -142,7 +165,16 @@ def run_rank_bucket_cem(
             return cached_output
 
         surrogate_backend = SRGNNBackend(config, base_dir=Path.cwd())
-        inner_trainer = TruncatedFineTuneInnerTrainer()
+        inner_trainer = (
+            SRGNNFullRetrainValidationBestInnerTrainer(
+                train_config=surrogate_backend.train_config,
+                max_epochs=resolved_rank_bucket_cem_config.surrogate_evaluator.max_epochs,
+                patience=resolved_rank_bucket_cem_config.surrogate_evaluator.patience,
+                log_prefix="[rank-bucket-cem:surrogate-full-retrain]",
+            )
+            if full_retrain_surrogate
+            else TruncatedFineTuneInnerTrainer()
+        )
         trainer = RankBucketCEMTrainer(
             surrogate_backend,
             inner_trainer,
@@ -207,7 +239,7 @@ def run_rank_bucket_cem(
             "position_stats_path": str(position_stats_path),
             "position_opt_clean_surrogate_checkpoint": str(
                 artifact_paths.clean_surrogate_checkpoint
-            ),
+            ) if artifact_paths.clean_surrogate_checkpoint is not None else None,
             "position_opt_optimized_poisoned_sessions_path": (
                 str(artifact_paths.optimized_poisoned_sessions)
                 if resolved_rank_bucket_cem_config.save_optimized_poisoned_sessions
@@ -296,7 +328,17 @@ def _validate_rank_bucket_cem_run_config(config: Config) -> None:
         )
 
 
-def _validate_rank_bucket_cem_resolved_config(position_opt_config) -> None:
+def _uses_full_retrain_surrogate_evaluator(rank_bucket_cem_config) -> bool:
+    return (
+        str(rank_bucket_cem_config.surrogate_evaluator.mode)
+        == RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR
+    )
+
+
+def _validate_rank_bucket_cem_resolved_config(
+    position_opt_config,
+    rank_bucket_cem_config,
+) -> None:
     if str(position_opt_config.reward_mode) not in {
         "poisoned_target_utility",
         "delta_target_utility",
@@ -304,6 +346,23 @@ def _validate_rank_bucket_cem_resolved_config(position_opt_config) -> None:
         raise ValueError(
             "RankBucket-CEM supports only attack.position_opt.reward_mode values "
             "'poisoned_target_utility' and 'delta_target_utility'."
+        )
+    if not _uses_full_retrain_surrogate_evaluator(rank_bucket_cem_config):
+        return
+    if str(position_opt_config.reward_mode) != "poisoned_target_utility":
+        raise ValueError(
+            "RankBucket-CEM full-retrain surrogate evaluation supports only "
+            "attack.position_opt.reward_mode='poisoned_target_utility'."
+        )
+    if bool(position_opt_config.enable_gt_penalty):
+        raise ValueError(
+            "RankBucket-CEM full-retrain surrogate evaluation does not support "
+            "attack.position_opt.enable_gt_penalty."
+        )
+    if bool(rank_bucket_cem_config.surrogate_eval_poison_balance.enabled):
+        raise ValueError(
+            "RankBucket-CEM full-retrain surrogate evaluation does not support "
+            "attack.rank_bucket_cem.surrogate_eval_poison_balance."
         )
 
 
@@ -343,6 +402,10 @@ def _load_cached_rank_bucket_cem_target_output(
     run_metadata = load_json(artifact_paths.run_metadata) or {}
     if not isinstance(run_metadata, Mapping):
         raise ValueError("Cached RankBucket-CEM run_metadata.json must be a JSON object.")
+    _validate_cached_rank_bucket_cem_surrogate_evaluator(
+        run_metadata,
+        requested_rank_bucket_cem_config=rank_bucket_cem_config,
+    )
     trainer_result = run_metadata.get("trainer_result", {})
     if not isinstance(trainer_result, Mapping):
         trainer_result = {}
@@ -362,6 +425,29 @@ def _load_cached_rank_bucket_cem_target_output(
     return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
 
 
+def _validate_cached_rank_bucket_cem_surrogate_evaluator(
+    run_metadata: Mapping[str, Any],
+    *,
+    requested_rank_bucket_cem_config,
+) -> None:
+    requested_mode = str(requested_rank_bucket_cem_config.surrogate_evaluator.mode)
+    cached_config = run_metadata.get("rank_bucket_cem_config", {})
+    if not isinstance(cached_config, Mapping):
+        cached_config = {}
+    cached_evaluator = cached_config.get("surrogate_evaluator", {})
+    if not isinstance(cached_evaluator, Mapping):
+        cached_evaluator = {}
+    cached_mode = str(
+        cached_evaluator.get("mode", RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR)
+    )
+    if cached_mode != requested_mode:
+        raise RuntimeError(
+            "Cached RankBucket-CEM artifacts were produced with a different "
+            "surrogate_evaluator.mode: "
+            f"cached={cached_mode!r}, requested={requested_mode!r}."
+        )
+
+
 def _rank_bucket_cem_target_metadata_from_result(
     *,
     artifact_paths,
@@ -374,8 +460,10 @@ def _rank_bucket_cem_target_metadata_from_result(
     return {
         "position_opt_method": POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
         "position_stats_path": str(position_stats_path),
-        "position_opt_clean_surrogate_checkpoint": str(
-            artifact_paths.clean_surrogate_checkpoint
+        "position_opt_clean_surrogate_checkpoint": (
+            None
+            if artifact_paths.clean_surrogate_checkpoint is None
+            else str(artifact_paths.clean_surrogate_checkpoint)
         ),
         "position_opt_optimized_poisoned_sessions_path": (
             str(artifact_paths.optimized_poisoned_sessions)
@@ -456,7 +544,7 @@ def _save_rank_bucket_cem_run_metadata(
     trainer: RankBucketCEMTrainer,
     trainer_result: Mapping[str, Any],
     config: Config,
-    clean_checkpoint: Path,
+    clean_checkpoint: Path | None,
 ) -> None:
     if artifact_paths.run_metadata is None:
         return
@@ -475,7 +563,7 @@ def _save_rank_bucket_cem_run_metadata(
         "target_item": int(target_item),
         "run_type": POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
         "position_opt_method": POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
-        "clean_surrogate_checkpoint": str(clean_checkpoint),
+        "clean_surrogate_checkpoint": None if clean_checkpoint is None else str(clean_checkpoint),
         "shared_fake_sessions_path": str(shared.shared_paths["fake_sessions"]),
         "shared_attack_dir": str(shared.shared_paths["attack_shared_dir"]),
         "shared_target_dir": str(shared.shared_paths["target_shared_dir"]),

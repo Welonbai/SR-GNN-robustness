@@ -7,7 +7,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from attack.common.config import Config, PositionOptConfig, RankBucketCEMConfig
+from attack.common.config import (
+    Config,
+    PositionOptConfig,
+    RankBucketCEMConfig,
+    RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR,
+    RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR,
+)
 from attack.common.seed import derive_seed, set_seed
 from attack.data.poisoned_dataset_builder import (
     build_poisoned_dataset,
@@ -22,6 +28,7 @@ from attack.position_opt.types import (
     TruncatedFineTuneConfig,
 )
 from attack.surrogate.base import SurrogateBackend
+from pytorch_code.utils import Data
 
 from .artifacts import (
     RankBucketCEMArtifactPaths,
@@ -67,6 +74,14 @@ _LOWK_REWARD_EPS = 1.0e-12
 _SUPPORTED_REWARD_MODES = frozenset(("poisoned_target_utility", "delta_target_utility"))
 _LOG_PREFIX = "[rank-bucket-cem]"
 _TRACE_OPTIONAL_METRIC_KEYS = (
+    "surrogate_evaluator_mode",
+    "selected_checkpoint_epoch",
+    "valid_ground_truth_mrr@20",
+    "valid_ground_truth_recall@20",
+    "best_valid_mrr20",
+    "best_valid_recall20",
+    "stopped_epoch",
+    "stop_reason",
     "clean_gt_utility",
     "poisoned_gt_utility",
     "gt_penalty",
@@ -115,19 +130,31 @@ class RankBucketCEMTrainer:
         surrogate_backend: SurrogateBackend,
         inner_trainer: InnerTrainer,
         *,
-        clean_surrogate_checkpoint_path: str | Path,
+        clean_surrogate_checkpoint_path: str | Path | None,
         position_opt_config: PositionOptConfig,
         rank_bucket_cem_config: RankBucketCEMConfig,
     ) -> None:
-        checkpoint_path = Path(clean_surrogate_checkpoint_path)
-        if not str(checkpoint_path).strip():
-            raise ValueError("clean_surrogate_checkpoint_path must be provided explicitly.")
-
         self.surrogate_backend = surrogate_backend
         self.inner_trainer = inner_trainer
-        self.clean_surrogate_checkpoint_path = checkpoint_path
         self.position_opt_config = position_opt_config
         self.rank_bucket_cem_config = rank_bucket_cem_config
+        self.surrogate_evaluator_mode = str(rank_bucket_cem_config.surrogate_evaluator.mode)
+
+        checkpoint_path: Path | None = None
+        if self._uses_warm_start_surrogate_evaluator():
+            if clean_surrogate_checkpoint_path is None:
+                raise ValueError("clean_surrogate_checkpoint_path must be provided explicitly.")
+            checkpoint_path = Path(clean_surrogate_checkpoint_path)
+            if not str(checkpoint_path).strip():
+                raise ValueError("clean_surrogate_checkpoint_path must be provided explicitly.")
+        elif clean_surrogate_checkpoint_path is not None:
+            checkpoint_text = str(clean_surrogate_checkpoint_path).strip()
+            if checkpoint_text:
+                raise ValueError(
+                    "RankBucket-CEM full-retrain surrogate evaluation must not receive "
+                    "a clean_surrogate_checkpoint_path."
+                )
+        self.clean_surrogate_checkpoint_path = checkpoint_path
 
         self._trained_config: Config | None = None
         self._target_item: int | None = None
@@ -165,6 +192,7 @@ class RankBucketCEMTrainer:
         if target_id <= 0:
             raise ValueError("target_item must be a positive item id.")
         _validate_reward_mode(self.position_opt_config.reward_mode)
+        self._validate_surrogate_evaluator_settings()
 
         clean_sessions, clean_labels = _resolve_clean_pairs(shared_artifacts)
         validation_sessions, validation_labels = _resolve_validation_pairs(shared_artifacts)
@@ -187,6 +215,11 @@ class RankBucketCEMTrainer:
             validation_labels,
             subset_size=self.position_opt_config.validation_subset_size,
             subset_seed=validation_subset_seed,
+        )
+        validation_eval_data = (
+            Data((validation_sessions, validation_labels), shuffle=False)
+            if self._uses_full_retrain_surrogate_evaluator()
+            else None
         )
 
         paths = None
@@ -249,16 +282,21 @@ class RankBucketCEMTrainer:
             steps=int(self.position_opt_config.fine_tune_steps),
             epochs=1,
         )
-        clean_target_result = self._precompute_clean_target_result(
-            validation_sessions=validation_sessions,
-            target_item=target_id,
-        )
-        self._clean_target_result_mean = float(clean_target_result.mean)
-        self._clean_target_metrics = _coerce_target_metrics(clean_target_result.metrics)
-        self._clean_reward_baseline = _resolve_reward_value(
-            target_result=clean_target_result,
-            reward_metric=self.rank_bucket_cem_config.reward_metric,
-        )
+        if self._uses_full_retrain_surrogate_evaluator():
+            self._clean_target_result_mean = None
+            self._clean_target_metrics = {}
+            self._clean_reward_baseline = None
+        else:
+            clean_target_result = self._precompute_clean_target_result(
+                validation_sessions=validation_sessions,
+                target_item=target_id,
+            )
+            self._clean_target_result_mean = float(clean_target_result.mean)
+            self._clean_target_metrics = _coerce_target_metrics(clean_target_result.metrics)
+            self._clean_reward_baseline = _resolve_reward_value(
+                target_result=clean_target_result,
+                reward_metric=self.rank_bucket_cem_config.reward_metric,
+            )
         clean_gt_utility = None
         if self.position_opt_config.enable_gt_penalty:
             clean_gt_utility = self._precompute_clean_gt_utility(
@@ -266,7 +304,11 @@ class RankBucketCEMTrainer:
                 validation_labels=validation_labels,
             )
 
-        state = initialize_cem_state(self.rank_bucket_cem_config.initial_std)
+        state = initialize_cem_state(
+            self.rank_bucket_cem_config.initial_std,
+            mean_g2=_initial_logit_mean(self.rank_bucket_cem_config.g2_initial_pi),
+            mean_g3=_initial_logit_mean(self.rank_bucket_cem_config.g3_initial_pi),
+        )
         self._cem_state_history.append(
             self._state_history_entry(
                 iteration=-1,
@@ -347,8 +389,10 @@ class RankBucketCEMTrainer:
                     )
                 ]
                 candidate_start_time = time.perf_counter()
-                poison_balance_enabled = bool(
-                    self.rank_bucket_cem_config.surrogate_eval_poison_balance.enabled
+                poison_balance_enabled = (
+                    False
+                    if self._uses_full_retrain_surrogate_evaluator()
+                    else bool(self.rank_bucket_cem_config.surrogate_eval_poison_balance.enabled)
                 )
                 poisoned_train_data = (
                     None
@@ -360,7 +404,20 @@ class RankBucketCEMTrainer:
                     )
                 )
                 fine_tune_start_time = time.perf_counter()
-                if poison_balance_enabled:
+                if self._uses_full_retrain_surrogate_evaluator():
+                    if poisoned_train_data is None:
+                        raise RuntimeError(
+                            "Full-retrain CEM surrogate evaluation missing poisoned_train_data."
+                        )
+                    inner_result = self.inner_trainer.run(
+                        self.surrogate_backend,
+                        None,
+                        poisoned_train_data,
+                        config=None,
+                        eval_data=validation_eval_data,
+                        seed=self._shared_surrogate_train_seed,
+                    )
+                elif poison_balance_enabled:
                     inner_result = self._run_fixed_ratio_surrogate_fine_tune(
                         clean_sessions=clean_sessions,
                         clean_labels=clean_labels,
@@ -448,14 +505,18 @@ class RankBucketCEMTrainer:
                     _candidate_fine_tune_metadata(
                         history=inner_result.history,
                         poison_balance_enabled=poison_balance_enabled,
-                        configured_fine_tune_steps=int(
-                            self.position_opt_config.fine_tune_steps
+                        configured_fine_tune_steps=(
+                            0
+                            if self._uses_full_retrain_surrogate_evaluator()
+                            else int(self.position_opt_config.fine_tune_steps)
                         ),
+                        surrogate_evaluator_mode=self.surrogate_evaluator_mode,
                         fine_tune_seconds=fine_tune_seconds,
                         score_target_seconds=score_target_seconds,
                         candidate_total_seconds=candidate_total_seconds,
                     )
                 )
+                candidate_metrics.update(_candidate_checkpoint_metadata(inner_result.history))
                 if clean_gt_utility is not None or poisoned_gt_utility is not None:
                     candidate_metrics.update(
                         {
@@ -646,6 +707,31 @@ class RankBucketCEMTrainer:
             raise RuntimeError("train() must be called before exporting final sessions.")
         return [list(session) for session in self._best_poisoned_sessions]
 
+    def _uses_warm_start_surrogate_evaluator(self) -> bool:
+        return self.surrogate_evaluator_mode == RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR
+
+    def _uses_full_retrain_surrogate_evaluator(self) -> bool:
+        return self.surrogate_evaluator_mode == RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR
+
+    def _validate_surrogate_evaluator_settings(self) -> None:
+        if not self._uses_full_retrain_surrogate_evaluator():
+            return
+        if bool(self.rank_bucket_cem_config.surrogate_eval_poison_balance.enabled):
+            raise ValueError(
+                "RankBucket-CEM full-retrain surrogate evaluation does not support "
+                "surrogate_eval_poison_balance."
+            )
+        if bool(self.position_opt_config.enable_gt_penalty):
+            raise ValueError(
+                "RankBucket-CEM full-retrain surrogate evaluation does not support "
+                "position_opt.enable_gt_penalty."
+            )
+        if str(self.position_opt_config.reward_mode) != "poisoned_target_utility":
+            raise ValueError(
+                "RankBucket-CEM full-retrain surrogate evaluation supports only "
+                "position_opt.reward_mode='poisoned_target_utility'."
+            )
+
     def _promote_candidate_entry_to_best(
         self,
         entry: Mapping[str, Any],
@@ -770,6 +856,8 @@ class RankBucketCEMTrainer:
                 "RankBucket-CEM fixed-ratio surrogate fine-tune requires a non-empty "
                 "poison pool."
             )
+        if self.clean_surrogate_checkpoint_path is None:
+            raise RuntimeError("Warm-start surrogate fine-tune requires a clean checkpoint.")
         set_seed(int(seed))
         self.surrogate_backend.load_clean_checkpoint(self.clean_surrogate_checkpoint_path)
         model = self.surrogate_backend.clone_clean_model()
@@ -828,6 +916,8 @@ class RankBucketCEMTrainer:
         validation_sessions: Sequence[Sequence[int]],
         target_item: int,
     ) -> SurrogateScoreResult:
+        if self.clean_surrogate_checkpoint_path is None:
+            raise RuntimeError("Warm-start clean target precompute requires a clean checkpoint.")
         self.surrogate_backend.load_clean_checkpoint(self.clean_surrogate_checkpoint_path)
         clean_model = self.surrogate_backend.clone_clean_model()
         return self.surrogate_backend.score_target(
@@ -842,6 +932,8 @@ class RankBucketCEMTrainer:
         validation_sessions: Sequence[Sequence[int]],
         validation_labels: Sequence[int],
     ) -> float:
+        if self.clean_surrogate_checkpoint_path is None:
+            raise RuntimeError("Warm-start clean GT precompute requires a clean checkpoint.")
         self.surrogate_backend.load_clean_checkpoint(self.clean_surrogate_checkpoint_path)
         clean_model = self.surrogate_backend.clone_clean_model()
         clean_result = self.surrogate_backend.score_gt(
@@ -1041,6 +1133,9 @@ class RankBucketCEMTrainer:
             "final_selection_reward_value": self._final_selection_reward_value(),
             "surrogate_eval_poison_balance": asdict(
                 self.rank_bucket_cem_config.surrogate_eval_poison_balance
+            ),
+            "surrogate_evaluator": asdict(
+                self.rank_bucket_cem_config.surrogate_evaluator
             ),
             "validation_subset_strategy": self._validation_subset_strategy,
             "validation_subset_seed": self._validation_subset_seed,
@@ -1345,6 +1440,12 @@ def _candidate_key(result: CEMCandidateResult) -> tuple[int, int]:
     return int(result.candidate.iteration), int(result.candidate.candidate_id)
 
 
+def _initial_logit_mean(probabilities: Sequence[float] | None) -> list[float] | None:
+    if probabilities is None:
+        return None
+    return [float(math.log(float(probability))) for probability in probabilities]
+
+
 def _elite_candidate_ids(
     results: Sequence[CEMCandidateResult],
     *,
@@ -1387,6 +1488,7 @@ def _candidate_fine_tune_metadata(
     history: Mapping[str, Any] | None,
     poison_balance_enabled: bool,
     configured_fine_tune_steps: int,
+    surrogate_evaluator_mode: str,
     fine_tune_seconds: float,
     score_target_seconds: float,
     candidate_total_seconds: float,
@@ -1450,12 +1552,45 @@ def _candidate_fine_tune_metadata(
         }
     payload.update(
         {
+            "surrogate_evaluator_mode": str(surrogate_evaluator_mode),
             "fine_tune_seconds": float(fine_tune_seconds),
             "score_target_seconds": float(score_target_seconds),
             "candidate_total_seconds": float(candidate_total_seconds),
         }
     )
     return payload
+
+
+def _candidate_checkpoint_metadata(
+    history: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    history_map = dict(history or {})
+    mode = history_map.get("surrogate_evaluator_mode")
+    if mode != RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR:
+        return {}
+    selected_epoch = history_map.get("selected_checkpoint_epoch")
+    best_mrr20 = history_map.get("best_valid_mrr20")
+    recall_at_best_mrr20 = history_map.get("best_valid_recall20_at_best_mrr20_epoch")
+    best_recall20 = history_map.get("best_valid_recall20")
+    return {
+        "selected_checkpoint_epoch": None if selected_epoch is None else int(selected_epoch),
+        "valid_ground_truth_mrr@20": None if best_mrr20 is None else float(best_mrr20),
+        "valid_ground_truth_recall@20": (
+            None if recall_at_best_mrr20 is None else float(recall_at_best_mrr20)
+        ),
+        "best_valid_mrr20": None if best_mrr20 is None else float(best_mrr20),
+        "best_valid_recall20": None if best_recall20 is None else float(best_recall20),
+        "stopped_epoch": (
+            None
+            if history_map.get("stopped_epoch") is None
+            else int(history_map["stopped_epoch"])
+        ),
+        "stop_reason": (
+            None
+            if history_map.get("stop_reason") is None
+            else str(history_map["stop_reason"])
+        ),
+    }
 
 
 def _resolve_reward_target_utility(
@@ -1515,10 +1650,22 @@ def _cem_hyperparameters_payload(
         "candidate_count": int(sum(schedule)),
         "elite_ratio": float(config.elite_ratio),
         "initial_std": float(config.initial_std),
+        "cem_init_mode": str(config.cem_init_mode),
+        "g2_initial_pi": (
+            None
+            if config.g2_initial_pi is None
+            else [float(value) for value in config.g2_initial_pi]
+        ),
+        "g3_initial_pi": (
+            None
+            if config.g3_initial_pi is None
+            else [float(value) for value in config.g3_initial_pi]
+        ),
         "min_std": float(config.min_std),
         "smoothing": float(config.smoothing),
         "reward_metric": config.reward_metric,
         "surrogate_eval_poison_balance": asdict(config.surrogate_eval_poison_balance),
+        "surrogate_evaluator": asdict(config.surrogate_evaluator),
     }
 
 

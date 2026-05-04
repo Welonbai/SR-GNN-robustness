@@ -21,7 +21,7 @@ from .rank_policy import RankBucketSelectionRecord
 @dataclass(frozen=True)
 class RankBucketCEMArtifactPaths:
     base_dir: Path
-    clean_surrogate_checkpoint: Path
+    clean_surrogate_checkpoint: Path | None
     optimized_poisoned_sessions: Path
     availability_summary: Path
     cem_trace: Path
@@ -38,6 +38,7 @@ def build_rank_bucket_cem_artifact_paths(
     run_type: str = POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     target_item: int | None = None,
     clean_checkpoint_override: str | Path | None = None,
+    require_clean_checkpoint: bool = True,
     attack_identity_context: Mapping[str, Any] | None = None,
 ) -> RankBucketCEMArtifactPaths:
     if target_item is None:
@@ -55,10 +56,14 @@ def build_rank_bucket_cem_artifact_paths(
         )
     return RankBucketCEMArtifactPaths(
         base_dir=base_dir,
-        clean_surrogate_checkpoint=resolve_clean_surrogate_checkpoint_path(
-            config,
-            run_type=run_type,
-            override=clean_checkpoint_override,
+        clean_surrogate_checkpoint=(
+            resolve_clean_surrogate_checkpoint_path(
+                config,
+                run_type=run_type,
+                override=clean_checkpoint_override,
+            )
+            if require_clean_checkpoint
+            else None
         ),
         optimized_poisoned_sessions=base_dir / "optimized_poisoned_sessions.pkl",
         availability_summary=base_dir / "availability_summary.json",

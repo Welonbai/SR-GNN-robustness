@@ -32,13 +32,24 @@ class CEMState:
     std_g3: list[float]
 
 
-def initialize_cem_state(initial_std: float) -> CEMState:
+def initialize_cem_state(
+    initial_std: float,
+    *,
+    mean_g2: Sequence[float] | None = None,
+    mean_g3: Sequence[float] | None = None,
+) -> CEMState:
     if float(initial_std) <= 0.0:
         raise ValueError("initial_std must be positive.")
+    resolved_mean_g2 = [0.0, 0.0] if mean_g2 is None else [float(value) for value in mean_g2]
+    resolved_mean_g3 = [0.0, 0.0, 0.0] if mean_g3 is None else [float(value) for value in mean_g3]
+    if len(resolved_mean_g2) != 2:
+        raise ValueError("mean_g2 must contain exactly 2 values.")
+    if len(resolved_mean_g3) != 3:
+        raise ValueError("mean_g3 must contain exactly 3 values.")
     return CEMState(
-        mean_g2=[0.0, 0.0],
+        mean_g2=resolved_mean_g2,
         std_g2=[float(initial_std), float(initial_std)],
-        mean_g3=[0.0, 0.0, 0.0],
+        mean_g3=resolved_mean_g3,
         std_g3=[float(initial_std), float(initial_std), float(initial_std)],
     )
 

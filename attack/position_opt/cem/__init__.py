@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Mapping
 
 from attack.common.config import RankBucketCEMConfig
+from attack.common.config import RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR
 from attack.common.paths import (
     POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     checkpoint_identity_payload,
@@ -60,6 +61,17 @@ def rank_bucket_cem_identity_payload(config: RankBucketCEMConfig) -> dict[str, A
     poison_balance = payload.get("surrogate_eval_poison_balance")
     if isinstance(poison_balance, Mapping) and not bool(poison_balance.get("enabled", False)):
         payload.pop("surrogate_eval_poison_balance", None)
+    surrogate_evaluator = payload.get("surrogate_evaluator")
+    if (
+        isinstance(surrogate_evaluator, Mapping)
+        and str(surrogate_evaluator.get("mode", "")).strip().lower()
+        == RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR
+    ):
+        payload.pop("surrogate_evaluator", None)
+    if str(payload.get("cem_init_mode", "")).strip().lower() == "zero_mean":
+        payload.pop("cem_init_mode", None)
+        payload.pop("g2_initial_pi", None)
+        payload.pop("g3_initial_pi", None)
     for key in (
         "save_candidate_selected_positions",
         "save_final_selected_positions",
@@ -74,9 +86,17 @@ def build_rank_bucket_cem_attack_identity_context(
     *,
     position_opt_config: Mapping[str, Any],
     rank_bucket_cem_config: Mapping[str, Any],
-    clean_surrogate_checkpoint: str | Path,
+    clean_surrogate_checkpoint: str | Path | None,
     runtime_seeds: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    clean_surrogate_identity = (
+        {
+            "type": "not_used",
+            "reason": "rank_bucket_cem_full_retrain_surrogate",
+        }
+        if clean_surrogate_checkpoint is None
+        else checkpoint_identity_payload(clean_surrogate_checkpoint)
+    )
     return {
         "position_opt": {
             "config": _normalize_identity_value(position_opt_config),
@@ -86,7 +106,7 @@ def build_rank_bucket_cem_attack_identity_context(
                 if runtime_seeds is None
                 else _normalize_identity_value(runtime_seeds)
             ),
-            "clean_surrogate": checkpoint_identity_payload(clean_surrogate_checkpoint),
+            "clean_surrogate": clean_surrogate_identity,
         }
     }
 
@@ -114,6 +134,9 @@ def _coerce_rank_bucket_cem_layer(
             "population_per_iteration",
             "elite_ratio",
             "initial_std",
+            "cem_init_mode",
+            "g2_initial_pi",
+            "g3_initial_pi",
             "min_std",
             "smoothing",
             "reward_metric",
@@ -122,6 +145,7 @@ def _coerce_rank_bucket_cem_layer(
             "save_optimized_poisoned_sessions",
             "save_replay_metadata",
             "surrogate_eval_poison_balance",
+            "surrogate_evaluator",
         }
         unknown = set(payload) - allowed_fields
         if unknown:
