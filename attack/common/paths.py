@@ -23,6 +23,9 @@ TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE = "target_aware_coverage_local_pos
 RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
     "random_insertion_nonzero_when_possible"
 )
+TAIL_REPLACEMENT_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
+    "tail_replacement_nonzero_when_possible"
+)
 _TARGET_AWARE_CANDIDATE_POOL_RUN_TYPES = {
     TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
     TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
@@ -801,6 +804,9 @@ def run_artifact_paths(
         "dpsbr_position_metadata": local_base / "dpsbr_position_metadata.json",
         "random_nonzero_position_metadata": local_base / "random_nonzero_position_metadata.json",
         "random_insertion_slot_metadata": local_base / "random_insertion_slot_metadata.json",
+        "tail_replacement_position_metadata": (
+            local_base / "tail_replacement_position_metadata.json"
+        ),
         "shared_dir": shared_base,
         "shared_predictions": shared_base / "predictions.json",
         "shared_train_history": shared_base / "train_history.json",
@@ -815,6 +821,7 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
     "RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
+    "TAIL_REPLACEMENT_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE",
     "TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE",
     "TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE",
