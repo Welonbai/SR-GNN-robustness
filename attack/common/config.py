@@ -31,10 +31,34 @@ _ALLOWED_POSITION_OPT_FINAL_POLICY_SELECTIONS = {
     "best_deterministic",
 }
 TARGET_AWARE_CARRIER_SELECTION_SCORER = "hybrid_target_session_compatibility"
+TARGET_AWARE_CARRIER_LOCAL_POSITION_SCORER = "hybrid_local_position_compatibility"
+COVERAGE_AWARE_LOCAL_POSITION_SCORER = "coverage_aware_local_position"
+TARGET_AWARE_CARRIER_LOCAL_POSITION_PLACEMENT_MODE = "best_local_position"
+TARGET_AWARE_CARRIER_LOCAL_POSITION_OPERATION = "replacement"
+TARGET_AWARE_CARRIER_LOCAL_POSITION_CANDIDATE_POSITIONS = "nonzero"
 TARGET_AWARE_CARRIER_SELECTION_NORMALIZE_MINMAX = "minmax"
 TARGET_AWARE_CARRIER_SELECTION_LENGTH_BUCKETS_EXACT_UNTIL_4_PLUS = "exact_until_4_plus"
+COVERAGE_PREFIX_SOURCE_VALIDATION = "validation"
+COVERAGE_PREFIX_REPRESENTATION_MEAN_ITEM_EMBEDDING = "mean_item_embedding"
+COVERAGE_CANDIDATE_REPRESENTATION_TARGETIZED_PREFIX_MEAN_EMBEDDING = (
+    "targetized_prefix_mean_embedding"
+)
+COVERAGE_RANK_WEIGHTING_INVERSE_LOG_RANK = "inverse_log_rank"
+COVERAGE_RANK_WEIGHTING_NONE = "none"
+COVERAGE_SIMILARITY_COSINE = "cosine"
 _ALLOWED_CARRIER_SELECTION_SCORERS = {
     TARGET_AWARE_CARRIER_SELECTION_SCORER,
+    TARGET_AWARE_CARRIER_LOCAL_POSITION_SCORER,
+    COVERAGE_AWARE_LOCAL_POSITION_SCORER,
+}
+_ALLOWED_CARRIER_SELECTION_PLACEMENT_MODES = {
+    TARGET_AWARE_CARRIER_LOCAL_POSITION_PLACEMENT_MODE,
+}
+_ALLOWED_CARRIER_SELECTION_OPERATIONS = {
+    TARGET_AWARE_CARRIER_LOCAL_POSITION_OPERATION,
+}
+_ALLOWED_CARRIER_SELECTION_CANDIDATE_POSITIONS = {
+    TARGET_AWARE_CARRIER_LOCAL_POSITION_CANDIDATE_POSITIONS,
 }
 _ALLOWED_CARRIER_SELECTION_NORMALIZE = {
     TARGET_AWARE_CARRIER_SELECTION_NORMALIZE_MINMAX,
@@ -42,6 +66,18 @@ _ALLOWED_CARRIER_SELECTION_NORMALIZE = {
 _ALLOWED_CARRIER_SELECTION_LENGTH_BUCKETS = {
     TARGET_AWARE_CARRIER_SELECTION_LENGTH_BUCKETS_EXACT_UNTIL_4_PLUS,
 }
+_ALLOWED_COVERAGE_PREFIX_SOURCES = {COVERAGE_PREFIX_SOURCE_VALIDATION}
+_ALLOWED_COVERAGE_PREFIX_REPRESENTATIONS = {
+    COVERAGE_PREFIX_REPRESENTATION_MEAN_ITEM_EMBEDDING,
+}
+_ALLOWED_COVERAGE_CANDIDATE_REPRESENTATIONS = {
+    COVERAGE_CANDIDATE_REPRESENTATION_TARGETIZED_PREFIX_MEAN_EMBEDDING,
+}
+_ALLOWED_COVERAGE_RANK_WEIGHTINGS = {
+    COVERAGE_RANK_WEIGHTING_INVERSE_LOG_RANK,
+    COVERAGE_RANK_WEIGHTING_NONE,
+}
+_ALLOWED_COVERAGE_SIMILARITIES = {COVERAGE_SIMILARITY_COSINE}
 RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR = "warm_start_fine_tune"
 RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR = "full_retrain_validation_best"
 _ALLOWED_RANK_BUCKET_CEM_SURROGATE_EVALUATORS = {
@@ -623,6 +659,27 @@ class CarrierSelectionConfig:
     use_length_control: bool = True
     length_buckets: str = TARGET_AWARE_CARRIER_SELECTION_LENGTH_BUCKETS_EXACT_UNTIL_4_PLUS
     normalize: str = TARGET_AWARE_CARRIER_SELECTION_NORMALIZE_MINMAX
+    placement_mode: str | None = None
+    operation: str | None = None
+    candidate_positions: str | None = None
+    local_embedding_weight: float = 0.5
+    local_transition_weight: float = 0.5
+    session_compatibility_weight: float = 0.0
+    left_to_target_weight: float = 0.5
+    target_to_right_weight: float = 0.5
+    debug_save_all_session_records: bool = False
+    coverage_prefix_source: str = COVERAGE_PREFIX_SOURCE_VALIDATION
+    vulnerable_rank_min: int = 20
+    vulnerable_rank_max: int = 200
+    max_vulnerable_prefixes: int = 5000
+    prefix_representation: str = COVERAGE_PREFIX_REPRESENTATION_MEAN_ITEM_EMBEDDING
+    candidate_representation: str = (
+        COVERAGE_CANDIDATE_REPRESENTATION_TARGETIZED_PREFIX_MEAN_EMBEDDING
+    )
+    top_m_coverage: int = 20
+    rank_weighting: str = COVERAGE_RANK_WEIGHTING_INVERSE_LOG_RANK
+    coverage_similarity: str = COVERAGE_SIMILARITY_COSINE
+    debug_save_all_position_records: bool = False
 
     def __post_init__(self) -> None:
         enabled = _as_bool(self.enabled, "attack.carrier_selection.enabled")
@@ -705,6 +762,212 @@ class CarrierSelectionConfig:
                 f"{allowed}."
             )
         object.__setattr__(self, "normalize", normalize)
+
+        placement_mode = self.placement_mode
+        if placement_mode is not None:
+            placement_mode = _as_str(
+                placement_mode,
+                "attack.carrier_selection.placement_mode",
+            ).strip().lower()
+            if placement_mode not in _ALLOWED_CARRIER_SELECTION_PLACEMENT_MODES:
+                allowed = ", ".join(sorted(_ALLOWED_CARRIER_SELECTION_PLACEMENT_MODES))
+                raise ValueError(
+                    "attack.carrier_selection.placement_mode must be one of: "
+                    f"{allowed}."
+                )
+        object.__setattr__(self, "placement_mode", placement_mode)
+
+        operation = self.operation
+        if operation is not None:
+            operation = _as_str(
+                operation,
+                "attack.carrier_selection.operation",
+            ).strip().lower()
+            if operation not in _ALLOWED_CARRIER_SELECTION_OPERATIONS:
+                allowed = ", ".join(sorted(_ALLOWED_CARRIER_SELECTION_OPERATIONS))
+                raise ValueError(
+                    "attack.carrier_selection.operation must be one of: "
+                    f"{allowed}."
+                )
+        object.__setattr__(self, "operation", operation)
+
+        candidate_positions = self.candidate_positions
+        if candidate_positions is not None:
+            candidate_positions = _as_str(
+                candidate_positions,
+                "attack.carrier_selection.candidate_positions",
+            ).strip().lower()
+            if candidate_positions not in _ALLOWED_CARRIER_SELECTION_CANDIDATE_POSITIONS:
+                allowed = ", ".join(sorted(_ALLOWED_CARRIER_SELECTION_CANDIDATE_POSITIONS))
+                raise ValueError(
+                    "attack.carrier_selection.candidate_positions must be one of: "
+                    f"{allowed}."
+                )
+        object.__setattr__(self, "candidate_positions", candidate_positions)
+
+        local_embedding_weight = _as_float(
+            self.local_embedding_weight,
+            "attack.carrier_selection.local_embedding_weight",
+        )
+        local_transition_weight = _as_float(
+            self.local_transition_weight,
+            "attack.carrier_selection.local_transition_weight",
+        )
+        session_compatibility_weight = _as_float(
+            self.session_compatibility_weight,
+            "attack.carrier_selection.session_compatibility_weight",
+        )
+        local_weights = (
+            local_embedding_weight,
+            local_transition_weight,
+            session_compatibility_weight,
+        )
+        if any(weight < 0.0 for weight in local_weights):
+            raise ValueError("attack.carrier_selection local weights must be non-negative.")
+        if scorer == TARGET_AWARE_CARRIER_LOCAL_POSITION_SCORER and sum(local_weights) <= 0.0:
+            raise ValueError("attack.carrier_selection local weights must sum to > 0.")
+        object.__setattr__(self, "local_embedding_weight", local_embedding_weight)
+        object.__setattr__(self, "local_transition_weight", local_transition_weight)
+        object.__setattr__(self, "session_compatibility_weight", session_compatibility_weight)
+
+        left_to_target_weight = _as_float(
+            self.left_to_target_weight,
+            "attack.carrier_selection.left_to_target_weight",
+        )
+        target_to_right_weight = _as_float(
+            self.target_to_right_weight,
+            "attack.carrier_selection.target_to_right_weight",
+        )
+        direction_weights = (left_to_target_weight, target_to_right_weight)
+        if any(weight < 0.0 for weight in direction_weights):
+            raise ValueError(
+                "attack.carrier_selection directional transition weights must be non-negative."
+            )
+        if sum(direction_weights) <= 0.0:
+            raise ValueError(
+                "attack.carrier_selection directional transition weights must sum to > 0."
+            )
+        object.__setattr__(self, "left_to_target_weight", left_to_target_weight)
+        object.__setattr__(self, "target_to_right_weight", target_to_right_weight)
+
+        debug_save_all_session_records = _as_bool(
+            self.debug_save_all_session_records,
+            "attack.carrier_selection.debug_save_all_session_records",
+        )
+        object.__setattr__(
+            self,
+            "debug_save_all_session_records",
+            debug_save_all_session_records,
+        )
+
+        coverage_prefix_source = _as_str(
+            self.coverage_prefix_source,
+            "attack.carrier_selection.coverage_prefix_source",
+        ).strip().lower()
+        if coverage_prefix_source not in _ALLOWED_COVERAGE_PREFIX_SOURCES:
+            allowed = ", ".join(sorted(_ALLOWED_COVERAGE_PREFIX_SOURCES))
+            raise ValueError(
+                "attack.carrier_selection.coverage_prefix_source must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "coverage_prefix_source", coverage_prefix_source)
+
+        vulnerable_rank_min = _as_int(
+            self.vulnerable_rank_min,
+            "attack.carrier_selection.vulnerable_rank_min",
+        )
+        if vulnerable_rank_min < 1:
+            raise ValueError(
+                "attack.carrier_selection.vulnerable_rank_min must be >= 1."
+            )
+        object.__setattr__(self, "vulnerable_rank_min", vulnerable_rank_min)
+
+        vulnerable_rank_max = _as_int(
+            self.vulnerable_rank_max,
+            "attack.carrier_selection.vulnerable_rank_max",
+        )
+        if vulnerable_rank_max <= vulnerable_rank_min:
+            raise ValueError(
+                "attack.carrier_selection.vulnerable_rank_max must be > "
+                "vulnerable_rank_min."
+            )
+        object.__setattr__(self, "vulnerable_rank_max", vulnerable_rank_max)
+
+        max_vulnerable_prefixes = _as_int(
+            self.max_vulnerable_prefixes,
+            "attack.carrier_selection.max_vulnerable_prefixes",
+        )
+        if max_vulnerable_prefixes < 1:
+            raise ValueError(
+                "attack.carrier_selection.max_vulnerable_prefixes must be >= 1."
+            )
+        object.__setattr__(self, "max_vulnerable_prefixes", max_vulnerable_prefixes)
+
+        prefix_representation = _as_str(
+            self.prefix_representation,
+            "attack.carrier_selection.prefix_representation",
+        ).strip().lower()
+        if prefix_representation not in _ALLOWED_COVERAGE_PREFIX_REPRESENTATIONS:
+            allowed = ", ".join(sorted(_ALLOWED_COVERAGE_PREFIX_REPRESENTATIONS))
+            raise ValueError(
+                "attack.carrier_selection.prefix_representation must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "prefix_representation", prefix_representation)
+
+        candidate_representation = _as_str(
+            self.candidate_representation,
+            "attack.carrier_selection.candidate_representation",
+        ).strip().lower()
+        if candidate_representation not in _ALLOWED_COVERAGE_CANDIDATE_REPRESENTATIONS:
+            allowed = ", ".join(sorted(_ALLOWED_COVERAGE_CANDIDATE_REPRESENTATIONS))
+            raise ValueError(
+                "attack.carrier_selection.candidate_representation must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "candidate_representation", candidate_representation)
+
+        top_m_coverage = _as_int(
+            self.top_m_coverage,
+            "attack.carrier_selection.top_m_coverage",
+        )
+        if top_m_coverage < 1:
+            raise ValueError("attack.carrier_selection.top_m_coverage must be >= 1.")
+        object.__setattr__(self, "top_m_coverage", top_m_coverage)
+
+        rank_weighting = _as_str(
+            self.rank_weighting,
+            "attack.carrier_selection.rank_weighting",
+        ).strip().lower()
+        if rank_weighting not in _ALLOWED_COVERAGE_RANK_WEIGHTINGS:
+            allowed = ", ".join(sorted(_ALLOWED_COVERAGE_RANK_WEIGHTINGS))
+            raise ValueError(
+                "attack.carrier_selection.rank_weighting must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "rank_weighting", rank_weighting)
+
+        coverage_similarity = _as_str(
+            self.coverage_similarity,
+            "attack.carrier_selection.coverage_similarity",
+        ).strip().lower()
+        if coverage_similarity not in _ALLOWED_COVERAGE_SIMILARITIES:
+            allowed = ", ".join(sorted(_ALLOWED_COVERAGE_SIMILARITIES))
+            raise ValueError(
+                "attack.carrier_selection.coverage_similarity must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "coverage_similarity", coverage_similarity)
+
+        debug_save_all_position_records = _as_bool(
+            self.debug_save_all_position_records,
+            "attack.carrier_selection.debug_save_all_position_records",
+        )
+        object.__setattr__(
+            self,
+            "debug_save_all_position_records",
+            debug_save_all_position_records,
+        )
 
 
 @dataclass(frozen=True)
@@ -1242,6 +1505,107 @@ def _normalize_carrier_selection_config(value: Any, context: str) -> dict[str, A
         )
     if "normalize" in mapping:
         payload["normalize"] = _as_str(mapping["normalize"], f"{context}.normalize")
+    if "placement_mode" in mapping:
+        placement_mode = mapping["placement_mode"]
+        payload["placement_mode"] = (
+            None
+            if placement_mode is None
+            else _as_str(placement_mode, f"{context}.placement_mode")
+        )
+    if "operation" in mapping:
+        operation = mapping["operation"]
+        payload["operation"] = (
+            None
+            if operation is None
+            else _as_str(operation, f"{context}.operation")
+        )
+    if "candidate_positions" in mapping:
+        candidate_positions = mapping["candidate_positions"]
+        payload["candidate_positions"] = (
+            None
+            if candidate_positions is None
+            else _as_str(candidate_positions, f"{context}.candidate_positions")
+        )
+    if "local_embedding_weight" in mapping:
+        payload["local_embedding_weight"] = _as_float(
+            mapping["local_embedding_weight"],
+            f"{context}.local_embedding_weight",
+        )
+    if "local_transition_weight" in mapping:
+        payload["local_transition_weight"] = _as_float(
+            mapping["local_transition_weight"],
+            f"{context}.local_transition_weight",
+        )
+    if "session_compatibility_weight" in mapping:
+        payload["session_compatibility_weight"] = _as_float(
+            mapping["session_compatibility_weight"],
+            f"{context}.session_compatibility_weight",
+        )
+    if "left_to_target_weight" in mapping:
+        payload["left_to_target_weight"] = _as_float(
+            mapping["left_to_target_weight"],
+            f"{context}.left_to_target_weight",
+        )
+    if "target_to_right_weight" in mapping:
+        payload["target_to_right_weight"] = _as_float(
+            mapping["target_to_right_weight"],
+            f"{context}.target_to_right_weight",
+        )
+    if "debug_save_all_session_records" in mapping:
+        payload["debug_save_all_session_records"] = _as_bool(
+            mapping["debug_save_all_session_records"],
+            f"{context}.debug_save_all_session_records",
+        )
+    if "coverage_prefix_source" in mapping:
+        payload["coverage_prefix_source"] = _as_str(
+            mapping["coverage_prefix_source"],
+            f"{context}.coverage_prefix_source",
+        )
+    if "vulnerable_rank_min" in mapping:
+        payload["vulnerable_rank_min"] = _as_int(
+            mapping["vulnerable_rank_min"],
+            f"{context}.vulnerable_rank_min",
+        )
+    if "vulnerable_rank_max" in mapping:
+        payload["vulnerable_rank_max"] = _as_int(
+            mapping["vulnerable_rank_max"],
+            f"{context}.vulnerable_rank_max",
+        )
+    if "max_vulnerable_prefixes" in mapping:
+        payload["max_vulnerable_prefixes"] = _as_int(
+            mapping["max_vulnerable_prefixes"],
+            f"{context}.max_vulnerable_prefixes",
+        )
+    if "prefix_representation" in mapping:
+        payload["prefix_representation"] = _as_str(
+            mapping["prefix_representation"],
+            f"{context}.prefix_representation",
+        )
+    if "candidate_representation" in mapping:
+        payload["candidate_representation"] = _as_str(
+            mapping["candidate_representation"],
+            f"{context}.candidate_representation",
+        )
+    if "top_m_coverage" in mapping:
+        payload["top_m_coverage"] = _as_int(
+            mapping["top_m_coverage"],
+            f"{context}.top_m_coverage",
+        )
+    if "rank_weighting" in mapping:
+        payload["rank_weighting"] = _as_str(
+            mapping["rank_weighting"],
+            f"{context}.rank_weighting",
+        )
+    if "coverage_similarity" in mapping:
+        payload["coverage_similarity"] = _as_str(
+            mapping["coverage_similarity"],
+            f"{context}.coverage_similarity",
+        )
+    if "debug_save_all_position_records" in mapping:
+        payload["debug_save_all_position_records"] = _as_bool(
+            mapping["debug_save_all_position_records"],
+            f"{context}.debug_save_all_position_records",
+        )
 
     config = CarrierSelectionConfig(**payload)
     return _primitive_from_obj(config)
@@ -2071,11 +2435,22 @@ __all__ = [
     "PositionOptConfig",
     "RankBucketCEMConfig",
     "RankBucketCEMSurrogateEvaluatorConfig",
+    "COVERAGE_AWARE_LOCAL_POSITION_SCORER",
+    "COVERAGE_CANDIDATE_REPRESENTATION_TARGETIZED_PREFIX_MEAN_EMBEDDING",
+    "COVERAGE_PREFIX_REPRESENTATION_MEAN_ITEM_EMBEDDING",
+    "COVERAGE_PREFIX_SOURCE_VALIDATION",
+    "COVERAGE_RANK_WEIGHTING_INVERSE_LOG_RANK",
+    "COVERAGE_RANK_WEIGHTING_NONE",
+    "COVERAGE_SIMILARITY_COSINE",
     "RANK_BUCKET_CEM_FULL_RETRAIN_SURROGATE_EVALUATOR",
     "RANK_BUCKET_CEM_TAIL_BOOSTED_INIT_MODE",
     "RANK_BUCKET_CEM_WARM_START_SURROGATE_EVALUATOR",
     "RANK_BUCKET_CEM_ZERO_MEAN_INIT_MODE",
     "SurrogateEvalPoisonBalanceConfig",
+    "TARGET_AWARE_CARRIER_LOCAL_POSITION_CANDIDATE_POSITIONS",
+    "TARGET_AWARE_CARRIER_LOCAL_POSITION_OPERATION",
+    "TARGET_AWARE_CARRIER_LOCAL_POSITION_PLACEMENT_MODE",
+    "TARGET_AWARE_CARRIER_LOCAL_POSITION_SCORER",
     "TARGET_AWARE_CARRIER_SELECTION_LENGTH_BUCKETS_EXACT_UNTIL_4_PLUS",
     "TARGET_AWARE_CARRIER_SELECTION_NORMALIZE_MINMAX",
     "TARGET_AWARE_CARRIER_SELECTION_SCORER",

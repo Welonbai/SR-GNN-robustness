@@ -250,6 +250,15 @@ def _carrier_selection_config_payload(config: CarrierSelectionConfig) -> dict[st
         "use_length_control": bool(config.use_length_control),
         "length_buckets": config.length_buckets,
         "normalize": config.normalize,
+        "placement_mode": config.placement_mode,
+        "operation": config.operation,
+        "candidate_positions": config.candidate_positions,
+        "local_embedding_weight": float(config.local_embedding_weight),
+        "local_transition_weight": float(config.local_transition_weight),
+        "session_compatibility_weight": float(config.session_compatibility_weight),
+        "left_to_target_weight": float(config.left_to_target_weight),
+        "target_to_right_weight": float(config.target_to_right_weight),
+        "debug_save_all_session_records": bool(config.debug_save_all_session_records),
     }
 
 

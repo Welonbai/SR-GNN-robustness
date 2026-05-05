@@ -5,7 +5,7 @@ from typing import Any, Mapping
 import hashlib
 import json
 
-from .config import Config
+from .config import Config, COVERAGE_AWARE_LOCAL_POSITION_SCORER
 from .srgnn_training_protocol import (
     SRGNN_VALIDATION_BEST_PROTOCOL,
     srgnn_checkpoint_protocol,
@@ -18,6 +18,13 @@ POSITION_OPT_SHARED_POLICY_RUN_TYPE = "position_opt_shared_policy"
 POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE = "rank_bucket_cem"
 POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE = "rank_bucket_cem_candidate_replay"
 TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE = "target_aware_carrier_selection_nz"
+TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE = "target_aware_carrier_local_position"
+TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE = "target_aware_coverage_local_position"
+_TARGET_AWARE_CANDIDATE_POOL_RUN_TYPES = {
+    TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
+    TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
+    TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE,
+}
 _POSITION_OPT_RUNTIME_RUN_TYPES = {
     POSITION_OPT_RUN_TYPE,
     POSITION_OPT_SHARED_POLICY_RUN_TYPE,
@@ -126,7 +133,7 @@ def carrier_selection_identity_payload(config: Config) -> dict[str, Any]:
     carrier_selection = config.attack.carrier_selection
     if carrier_selection is None:
         raise ValueError("attack.carrier_selection is required for TACS-NZ identity.")
-    return {
+    payload = {
         "enabled": bool(carrier_selection.enabled),
         "candidate_pool_size": float(carrier_selection.candidate_pool_size),
         "final_attack_size": float(carrier_selection.final_attack_size),
@@ -137,7 +144,34 @@ def carrier_selection_identity_payload(config: Config) -> dict[str, Any]:
         "use_length_control": bool(carrier_selection.use_length_control),
         "length_buckets": carrier_selection.length_buckets,
         "normalize": carrier_selection.normalize,
+        "placement_mode": carrier_selection.placement_mode,
+        "operation": carrier_selection.operation,
+        "candidate_positions": carrier_selection.candidate_positions,
+        "local_embedding_weight": float(carrier_selection.local_embedding_weight),
+        "local_transition_weight": float(carrier_selection.local_transition_weight),
+        "session_compatibility_weight": float(
+            carrier_selection.session_compatibility_weight
+        ),
+        "left_to_target_weight": float(carrier_selection.left_to_target_weight),
+        "target_to_right_weight": float(carrier_selection.target_to_right_weight),
     }
+    if carrier_selection.scorer == COVERAGE_AWARE_LOCAL_POSITION_SCORER:
+        payload.update(
+            {
+                "coverage_prefix_source": carrier_selection.coverage_prefix_source,
+                "vulnerable_rank_min": int(carrier_selection.vulnerable_rank_min),
+                "vulnerable_rank_max": int(carrier_selection.vulnerable_rank_max),
+                "max_vulnerable_prefixes": int(
+                    carrier_selection.max_vulnerable_prefixes
+                ),
+                "prefix_representation": carrier_selection.prefix_representation,
+                "candidate_representation": carrier_selection.candidate_representation,
+                "top_m_coverage": int(carrier_selection.top_m_coverage),
+                "rank_weighting": carrier_selection.rank_weighting,
+                "coverage_similarity": carrier_selection.coverage_similarity,
+            }
+        )
+    return payload
 
 
 def carrier_selection_shared_generation_payload(config: Config) -> dict[str, Any]:
@@ -145,7 +179,7 @@ def carrier_selection_shared_generation_payload(config: Config) -> dict[str, Any
     if carrier_selection is None:
         raise ValueError("attack.carrier_selection is required for TACS-NZ generation identity.")
     return {
-        "method": "tacs_nz",
+        "family": "target_aware_candidate_pool",
         "candidate_pool_size": float(carrier_selection.candidate_pool_size),
     }
 
@@ -293,7 +327,7 @@ def attack_key_payload(
             },
         },
     }
-    if run_type == TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE:
+    if run_type in _TARGET_AWARE_CANDIDATE_POOL_RUN_TYPES:
         payload["attack"]["carrier_selection"] = carrier_selection_identity_payload(config)
     if run_type in _POSITION_OPT_RUNTIME_RUN_TYPES:
         if attack_identity_context is None:
@@ -333,7 +367,7 @@ def shared_attack_artifact_key_payload(config: Config, *, run_type: str) -> dict
 
     generation_size = float(config.attack.size)
     carrier_generation_payload: dict[str, Any] | None = None
-    if run_type == TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE:
+    if run_type in _TARGET_AWARE_CANDIDATE_POOL_RUN_TYPES:
         carrier_generation_payload = carrier_selection_shared_generation_payload(config)
         generation_size = float(carrier_generation_payload["candidate_pool_size"])
 
@@ -776,7 +810,9 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE",
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
+    "TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE",
     "TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE",
+    "TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE",
     "attack_key",
     "attack_key_payload",
     "carrier_selection_identity_payload",

@@ -30,7 +30,9 @@ from attack.common.artifact_io import (
     save_target_registry,
 )
 from attack.common.paths import (
+    TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
     TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
+    TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE,
     TARGET_COHORT_SELECTION_POLICY_VERSION,
     poison_model_key,
     poison_model_key_payload,
@@ -97,7 +99,11 @@ def fake_session_count_from_ratio(ratio: float, clean_count: int) -> int:
 
 
 def _fake_session_generation_ratio(config: Config, *, run_type: str) -> float:
-    if run_type == TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE:
+    if run_type in {
+        TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
+        TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
+        TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE,
+    }:
         carrier_selection = config.attack.carrier_selection
         if carrier_selection is None:
             raise ValueError("TACS-NZ requires attack.carrier_selection to be configured.")
