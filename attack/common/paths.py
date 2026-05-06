@@ -26,6 +26,15 @@ RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
 TAIL_REPLACEMENT_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
     "tail_replacement_nonzero_when_possible"
 )
+TAIL_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
+    "tail_insertion_nonzero_when_possible"
+)
+RANDOM_INSERTION_THEN_CROP_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
+    "random_insertion_then_crop_nonzero_when_possible"
+)
+INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
+    "internal_random_insertion_nonzero_when_possible"
+)
 _TARGET_AWARE_CANDIDATE_POOL_RUN_TYPES = {
     TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
     TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
@@ -807,6 +816,15 @@ def run_artifact_paths(
         "tail_replacement_position_metadata": (
             local_base / "tail_replacement_position_metadata.json"
         ),
+        "tail_insertion_slot_metadata": (
+            local_base / "tail_insertion_slot_metadata.json"
+        ),
+        "random_insertion_then_crop_metadata": (
+            local_base / "random_insertion_then_crop_metadata.json"
+        ),
+        "internal_random_insertion_metadata": (
+            local_base / "internal_random_insertion_metadata.json"
+        ),
         "shared_dir": shared_base,
         "shared_predictions": shared_base / "predictions.json",
         "shared_train_history": shared_base / "train_history.json",
@@ -820,7 +838,10 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE",
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
+    "INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
+    "RANDOM_INSERTION_THEN_CROP_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
+    "TAIL_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "TAIL_REPLACEMENT_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE",
     "TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE",

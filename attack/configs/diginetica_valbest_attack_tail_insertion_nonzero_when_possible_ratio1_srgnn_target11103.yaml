@@ -1,0 +1,77 @@
+experiment:
+  name: valbest_attack_tail_insertion_nonzero_when_possible_ratio1_srgnn_target11103
+
+data:
+  dataset_name: diginetica
+  split_protocol: unified
+  poison_train_only: true
+  canonical_split:
+    min_item_count: 5
+    min_session_len: 2
+    valid_ratio: 0.1
+    test_days: 7
+
+seeds:
+  fake_session_seed: 20260405
+  target_selection_seed: 20260405
+  position_opt_seed: 20260405
+  surrogate_train_seed: 20260405
+  victim_train_seed: 20260405
+
+attack:
+  size: 0.01
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 1.0
+  poison_model:
+    name: srgnn
+    params:
+      train:
+        epochs: 30
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-5
+        step: 1
+        patience: 10
+        nonhybrid: false
+        checkpoint_protocol: validation_best
+        best_metric: valid_ground_truth_mrr@20
+        patience_metric: recall20_or_mrr20
+
+targets:
+  mode: explicit_list
+  explicit_list: [11103]
+  bucket: popular
+  count: 1
+  reuse_saved_targets: true
+
+victims:
+  enabled: [srgnn]
+  params:
+    srgnn:
+      train:
+        epochs: 30
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-5
+        step: 1
+        patience: 10
+        nonhybrid: false
+        checkpoint_protocol: validation_best
+        best_metric: valid_ground_truth_mrr@20
+        patience_metric: recall20_or_mrr20
+
+evaluation:
+  topk: [5, 10, 15, 20, 25, 30, 40, 50]
+  targeted_metrics: [precision, recall, mrr, ndcg]
+  ground_truth_metrics: [precision, recall, mrr, ndcg]
+
+artifacts:
+  root: outputs
+  shared_dir: shared
+  runs_dir: runs
