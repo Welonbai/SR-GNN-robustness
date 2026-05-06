@@ -35,6 +35,9 @@ RANDOM_INSERTION_THEN_CROP_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
 INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
     "internal_random_insertion_nonzero_when_possible"
 )
+VULNERABLE_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE = (
+    "vulnerable_anchor_internal_construction"
+)
 _TARGET_AWARE_CANDIDATE_POOL_RUN_TYPES = {
     TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
     TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
@@ -45,6 +48,9 @@ _POSITION_OPT_RUNTIME_RUN_TYPES = {
     POSITION_OPT_SHARED_POLICY_RUN_TYPE,
     POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
     POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE,
+}
+_ANCHOR_CONSTRUCTION_RUNTIME_RUN_TYPES = {
+    VULNERABLE_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE,
 }
 TARGET_COHORT_SELECTION_POLICY_VERSION = "appendable_target_cohort_v1"
 
@@ -352,6 +358,18 @@ def attack_key_payload(
                 "surrogate identity."
             )
         payload["attack_runtime_identity"] = _normalize_identity_value(attack_identity_context)
+    if run_type in _ANCHOR_CONSTRUCTION_RUNTIME_RUN_TYPES:
+        payload["attack"]["anchor_construction"] = _normalize_identity_value(
+            config.anchor_construction.__dict__
+        )
+        if attack_identity_context is None:
+            raise ValueError(
+                f"{run_type} final attack identity requires explicit "
+                "attack_identity_context with selected anchor pools and survey hashes."
+            )
+        payload["attack_runtime_identity"] = _normalize_identity_value(
+            attack_identity_context
+        )
     return payload
 
 
@@ -825,6 +843,9 @@ def run_artifact_paths(
         "internal_random_insertion_metadata": (
             local_base / "internal_random_insertion_metadata.json"
         ),
+        "vulnerable_anchor_internal_construction_metadata": (
+            local_base / "vulnerable_anchor_internal_construction_metadata.json"
+        ),
         "shared_dir": shared_base,
         "shared_predictions": shared_base / "predictions.json",
         "shared_train_history": shared_base / "train_history.json",
@@ -839,6 +860,7 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
+    "VULNERABLE_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE",
     "RANDOM_INSERTION_THEN_CROP_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "TAIL_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",

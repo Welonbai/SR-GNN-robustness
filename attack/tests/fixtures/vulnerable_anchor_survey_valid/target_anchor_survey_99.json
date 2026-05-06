@@ -1,0 +1,7 @@
+{
+  "survey_config": {
+    "rank_min": 20,
+    "rank_max": 200
+  },
+  "target_item": 99
+}

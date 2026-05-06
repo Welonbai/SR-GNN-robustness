@@ -90,6 +90,16 @@ _ALLOWED_RANK_BUCKET_CEM_INIT_MODES = {
     RANK_BUCKET_CEM_ZERO_MEAN_INIT_MODE,
     RANK_BUCKET_CEM_TAIL_BOOSTED_INIT_MODE,
 }
+ANCHOR_CONSTRUCTION_SOURCE_VULNERABLE_VALIDATION_LAST_ITEM = (
+    "vulnerable_validation_last_item"
+)
+ANCHOR_CONSTRUCTION_STRATEGY_ROUND_ROBIN = "round_robin"
+_ALLOWED_ANCHOR_CONSTRUCTION_SOURCES = {
+    ANCHOR_CONSTRUCTION_SOURCE_VULNERABLE_VALIDATION_LAST_ITEM,
+}
+_ALLOWED_ANCHOR_ASSIGNMENT_STRATEGIES = {
+    ANCHOR_CONSTRUCTION_STRATEGY_ROUND_ROBIN,
+}
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -138,6 +148,68 @@ class SeedsConfig:
 class PoisonModelConfig:
     name: str
     params: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class AnchorConstructionConfig:
+    enabled: bool = False
+    anchor_source: str = ANCHOR_CONSTRUCTION_SOURCE_VULNERABLE_VALIDATION_LAST_ITEM
+    anchor_top_m: int = 20
+    anchor_assignment_strategy: str = ANCHOR_CONSTRUCTION_STRATEGY_ROUND_ROBIN
+    survey_output_dir: str = "outputs/analysis/target_anchor_survey"
+    require_survey_file: bool = True
+
+    def __post_init__(self) -> None:
+        enabled = _as_bool(self.enabled, "anchor_construction.enabled")
+        object.__setattr__(self, "enabled", enabled)
+
+        anchor_source = _as_str(
+            self.anchor_source,
+            "anchor_construction.anchor_source",
+        ).strip().lower()
+        if anchor_source not in _ALLOWED_ANCHOR_CONSTRUCTION_SOURCES:
+            allowed = ", ".join(sorted(_ALLOWED_ANCHOR_CONSTRUCTION_SOURCES))
+            raise ValueError(
+                "anchor_construction.anchor_source must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "anchor_source", anchor_source)
+
+        anchor_top_m = _as_int(
+            self.anchor_top_m,
+            "anchor_construction.anchor_top_m",
+        )
+        if anchor_top_m < 1:
+            raise ValueError("anchor_construction.anchor_top_m must be >= 1.")
+        object.__setattr__(self, "anchor_top_m", anchor_top_m)
+
+        strategy = _as_str(
+            self.anchor_assignment_strategy,
+            "anchor_construction.anchor_assignment_strategy",
+        ).strip().lower()
+        if strategy not in _ALLOWED_ANCHOR_ASSIGNMENT_STRATEGIES:
+            allowed = ", ".join(sorted(_ALLOWED_ANCHOR_ASSIGNMENT_STRATEGIES))
+            raise ValueError(
+                "anchor_construction.anchor_assignment_strategy must be one of: "
+                f"{allowed}."
+            )
+        object.__setattr__(self, "anchor_assignment_strategy", strategy)
+
+        survey_output_dir = _as_str(
+            self.survey_output_dir,
+            "anchor_construction.survey_output_dir",
+        ).strip()
+        if not survey_output_dir:
+            raise ValueError(
+                "anchor_construction.survey_output_dir must be a non-empty string."
+            )
+        object.__setattr__(self, "survey_output_dir", survey_output_dir)
+
+        require_survey_file = _as_bool(
+            self.require_survey_file,
+            "anchor_construction.require_survey_file",
+        )
+        object.__setattr__(self, "require_survey_file", require_survey_file)
 
 
 @dataclass(frozen=True)
@@ -1017,6 +1089,7 @@ class Config:
     data: DataConfig
     seeds: SeedsConfig
     attack: AttackConfig
+    anchor_construction: AnchorConstructionConfig
     targets: TargetsConfig
     victims: VictimsConfig
     evaluation: EvaluationConfig
@@ -1033,6 +1106,7 @@ class Config:
             "seeds": payload["seeds"],
             "targets": payload["targets"],
             "attack": payload["attack"],
+            "anchor_construction": payload["anchor_construction"],
             "victims": {
                 "enabled": victims["enabled"],
                 "params": victims["params"],
@@ -1236,6 +1310,10 @@ def parse_config_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
         "data": _as_mapping(_require(root, "data", "root"), "data"),
         "seeds": _as_mapping(_require(root, "seeds", "root"), "seeds"),
         "attack": _as_mapping(_require(root, "attack", "root"), "attack"),
+        "anchor_construction": _as_mapping(
+            root.get("anchor_construction", {}),
+            "anchor_construction",
+        ),
         "targets": _as_mapping(_require(root, "targets", "root"), "targets"),
         "victims": _as_mapping(_require(root, "victims", "root"), "victims"),
         "evaluation": _as_mapping(_require(root, "evaluation", "root"), "evaluation"),
@@ -1264,6 +1342,7 @@ def _normalize_config_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
     data_cfg = parsed["data"]
     seeds = parsed["seeds"]
     attack = parsed["attack"]
+    anchor_construction = parsed["anchor_construction"]
     targets = parsed["targets"]
     victims = parsed["victims"]
     evaluation = parsed["evaluation"]
@@ -1316,6 +1395,9 @@ def _normalize_config_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
     }
 
     normalized_attack = _normalize_attack_config(attack)
+    normalized_anchor_construction = _normalize_anchor_construction_config(
+        anchor_construction
+    )
     normalized_targets = _normalize_targets_config(targets)
     normalized_victims = _normalize_victims_config(victims)
     normalized_evaluation = _normalize_evaluation_config(evaluation)
@@ -1342,6 +1424,7 @@ def _normalize_config_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
         "data": normalized_data,
         "seeds": normalized_seeds,
         "attack": normalized_attack,
+        "anchor_construction": normalized_anchor_construction,
         "targets": normalized_targets,
         "victims": normalized_victims,
         "evaluation": normalized_evaluation,
@@ -1451,6 +1534,50 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
                 "for TACS-NZ v1."
             )
     return normalized
+
+
+def _normalize_anchor_construction_config(value: Mapping[str, Any]) -> dict[str, Any]:
+    mapping = _as_mapping(value, "anchor_construction")
+    allowed_fields = {field.name for field in fields(AnchorConstructionConfig)}
+    unknown = set(mapping) - allowed_fields
+    if unknown:
+        raise ValueError(
+            "Unknown anchor_construction config keys: "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+
+    payload: dict[str, Any] = {}
+    if "enabled" in mapping:
+        payload["enabled"] = _as_bool(
+            mapping["enabled"],
+            "anchor_construction.enabled",
+        )
+    if "anchor_source" in mapping:
+        payload["anchor_source"] = _as_str(
+            mapping["anchor_source"],
+            "anchor_construction.anchor_source",
+        )
+    if "anchor_top_m" in mapping:
+        payload["anchor_top_m"] = _as_int(
+            mapping["anchor_top_m"],
+            "anchor_construction.anchor_top_m",
+        )
+    if "anchor_assignment_strategy" in mapping:
+        payload["anchor_assignment_strategy"] = _as_str(
+            mapping["anchor_assignment_strategy"],
+            "anchor_construction.anchor_assignment_strategy",
+        )
+    if "survey_output_dir" in mapping:
+        payload["survey_output_dir"] = _as_str(
+            mapping["survey_output_dir"],
+            "anchor_construction.survey_output_dir",
+        )
+    if "require_survey_file" in mapping:
+        payload["require_survey_file"] = _as_bool(
+            mapping["require_survey_file"],
+            "anchor_construction.require_survey_file",
+        )
+    return _primitive_from_obj(AnchorConstructionConfig(**payload))
 
 
 def _normalize_carrier_selection_config(value: Any, context: str) -> dict[str, Any]:
@@ -2234,6 +2361,10 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
     data_cfg = _as_mapping(_require(normalized, "data", "root"), "data")
     seeds = _as_mapping(_require(normalized, "seeds", "root"), "seeds")
     attack = _as_mapping(_require(normalized, "attack", "root"), "attack")
+    anchor_construction = _as_mapping(
+        _require(normalized, "anchor_construction", "root"),
+        "anchor_construction",
+    )
     targets = _as_mapping(_require(normalized, "targets", "root"), "targets")
     victims = _as_mapping(_require(normalized, "victims", "root"), "victims")
     evaluation = _as_mapping(_require(normalized, "evaluation", "root"), "evaluation")
@@ -2373,6 +2504,9 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
                 else None
             ),
         ),
+        anchor_construction=AnchorConstructionConfig(
+            **dict(anchor_construction)
+        ),
         targets=TargetsConfig(
             mode=_as_str(_require(targets, "mode", "targets"), "targets.mode"),
             explicit_list=tuple(
@@ -2430,6 +2564,9 @@ def load_config(path: str | Path) -> Config:
 
 __all__ = [
     "CanonicalSplitConfig",
+    "AnchorConstructionConfig",
+    "ANCHOR_CONSTRUCTION_SOURCE_VULNERABLE_VALIDATION_LAST_ITEM",
+    "ANCHOR_CONSTRUCTION_STRATEGY_ROUND_ROBIN",
     "CarrierSelectionConfig",
     "Config",
     "PositionOptConfig",
