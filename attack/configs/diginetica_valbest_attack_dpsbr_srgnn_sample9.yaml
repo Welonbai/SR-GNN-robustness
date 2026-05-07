@@ -1,5 +1,5 @@
 experiment:
-  name: valbest_clean_run_no_attack_srgnn_sample3
+  name: valbest_attack_dpsbr_srgnn_sample3
 
 data:
   dataset_name: diginetica
@@ -21,7 +21,7 @@ seeds:
 attack:
   size: 0.01
   fake_session_generation_topk: 100
-  replacement_topk_ratio: 1.0
+  replacement_topk_ratio: 0.2
   poison_model:
     name: srgnn
     params:
@@ -44,7 +44,7 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 3
+  count: 9
   reuse_saved_targets: true
 
 victims:
