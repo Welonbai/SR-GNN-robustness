@@ -35,6 +35,9 @@ RANDOM_INSERTION_THEN_CROP_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
 INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
     "internal_random_insertion_nonzero_when_possible"
 )
+INTERNAL_RANDOM_REPLACEMENT_NONZERO_WHEN_POSSIBLE_RUN_TYPE = (
+    "internal_random_replacement_nonzero_when_possible"
+)
 VULNERABLE_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE = (
     "vulnerable_anchor_internal_construction"
 )
@@ -847,6 +850,9 @@ def run_artifact_paths(
         "internal_random_insertion_metadata": (
             local_base / "internal_random_insertion_metadata.json"
         ),
+        "internal_random_replacement_metadata": (
+            local_base / "internal_random_replacement_metadata.json"
+        ),
         "vulnerable_anchor_internal_construction_metadata": (
             local_base / "vulnerable_anchor_internal_construction_metadata.json"
         ),
@@ -867,6 +873,7 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
+    "INTERNAL_RANDOM_REPLACEMENT_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "POPULAR_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE",
     "VULNERABLE_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE",
     "RANDOM_INSERTION_THEN_CROP_NONZERO_WHEN_POSSIBLE_RUN_TYPE",

@@ -41,7 +41,7 @@ from attack.pipeline.core.slot_stats import build_slot_stats_payload
 DEFAULT_INTERNAL_RANDOM_INSERTION_CONFIG_PATH = (
     "attack/configs/"
     "diginetica_valbest_attack_internal_random_insertion_nonzero_when_possible_"
-    "ratio1_srgnn_target11103_partial5.yaml"
+    "ratio1_srgnn_partial4.yaml"
 )
 RANDOM_NZ_RUN_TYPE = "random_nonzero_when_possible"
 
