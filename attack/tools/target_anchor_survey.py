@@ -5,9 +5,8 @@ import csv
 import json
 import math
 import pickle
-import random
-from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -19,15 +18,9 @@ if __package__ is None or __package__ == "":
 import torch
 
 from attack.common.config import Config, load_config
-from attack.common.paths import (
-    INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
-    shared_artifact_paths,
-)
+from attack.common.paths import shared_artifact_paths
 from attack.data.poisoned_dataset_builder import expand_session_to_samples
 from attack.data.unified_split import ensure_canonical_dataset
-from attack.insertion.internal_random_insertion_nonzero_when_possible import (
-    InternalRandomInsertionNonzeroWhenPossiblePolicy,
-)
 from attack.models._srgnn_base import SRGNNBaseRunner
 from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
 from pytorch_code.model import forward as srg_forward
@@ -38,31 +31,194 @@ from pytorch_code.utils import Data
 RANK_CONVENTION = "rank = 1 + count(scores > target_score); lower is better"
 DEFAULT_CONFIG = (
     "attack/configs/"
-    "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sample3.yaml"
+    "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sampled.yaml"
 )
+DEFAULT_OUTPUT_DIR = "outputs/analysis/target_action_feature_survey"
 
 
-@dataclass
-class RunningRows:
-    ranks: list[int] = field(default_factory=list)
-    scores: list[float] = field(default_factory=list)
+SUMMARY_COLUMNS = [
+    "target_item",
+    "train_target_occurrence_count",
+    "train_target_session_count",
+    "train_target_label_count",
+    "valid_target_occurrence_count",
+    "valid_target_session_count",
+    "valid_target_label_count",
+    "target_frequency_rank",
+    "target_popularity_percentile",
+    "target_density_bucket",
+    "num_unique_predecessors",
+    "num_unique_successors",
+    "num_cooccurrence_items",
+    "top1_predecessor_count",
+    "top5_predecessor_count",
+    "top1_predecessor_share",
+    "top5_predecessor_share",
+    "predecessor_entropy",
+    "predecessor_effective_count",
+    "top1_successor_count",
+    "top5_successor_count",
+    "top1_successor_share",
+    "top5_successor_share",
+    "successor_entropy",
+    "successor_effective_count",
+    "top1_cooccurrence_count",
+    "top5_cooccurrence_count",
+    "top1_cooccurrence_share",
+    "top5_cooccurrence_share",
+    "cooccurrence_entropy",
+    "cooccurrence_effective_count",
+    "top5_predecessor_items",
+    "top5_successor_items",
+    "top5_cooccurrence_items",
+    "validation_prefix_count",
+    "near_top_prefix_count",
+    "near_top_prefix_ratio",
+    "clean_target_rank_mean",
+    "clean_target_rank_median",
+    "clean_target_rank_q25",
+    "clean_target_rank_q75",
+    "clean_target_rank_min",
+    "clean_target_rank_max",
+    "near_top_rank_mean",
+    "near_top_rank_median",
+    "near_top_rank_q25",
+    "near_top_rank_q75",
+    "rank_1_20_count",
+    "rank_21_50_count",
+    "rank_51_100_count",
+    "rank_101_200_count",
+    "rank_above_200_count",
+    "target_score_mean",
+    "target_score_median",
+    "margin_to_top20_mean",
+    "margin_to_top20_median",
+    "num_near_top_last_item_anchors",
+    "top1_near_top_anchor_count",
+    "top1_near_top_anchor_coverage",
+    "top5_near_top_anchor_coverage",
+    "top10_near_top_anchor_coverage",
+    "top20_near_top_anchor_coverage",
+    "near_top_anchor_entropy",
+    "near_top_anchor_effective_count",
+    "top5_near_top_anchor_items",
+    "top20_near_top_anchor_items",
+    "top5_near_top_anchor_train_predecessor_overlap_count",
+    "top20_near_top_anchor_train_predecessor_overlap_count",
+    "top20_near_top_anchor_train_predecessor_overlap_ratio",
+    "fake_session_coverage_count_top20_near_top_anchors",
+    "fake_session_coverage_ratio_top20_near_top_anchors",
+    "fake_session_occurrence_count_top20_near_top_anchors",
+    "fake_session_coverage_count_top20_train_predecessors",
+    "fake_session_coverage_ratio_top20_train_predecessors",
+    "fake_session_occurrence_count_top20_train_predecessors",
+    "insertion_exposure_source",
+    "insertion_metadata_available",
+    "insertion_fake_session_count",
+    "insertion_length_shift_min",
+    "insertion_length_shift_max",
+    "insertion_length_shift_mean",
+    "insertion_tail_slot_ratio",
+    "insertion_unique_left_item_count",
+    "insertion_unique_right_item_count",
+    "insertion_unique_left_right_pair_count",
+    "insertion_candidate_unique_left_item_count",
+    "insertion_candidate_unique_right_item_count",
+    "insertion_candidate_unique_left_right_pair_count",
+    "insertion_candidate_left_entropy",
+    "insertion_candidate_right_entropy",
+    "insertion_candidate_pair_entropy",
+    "insertion_sampled_unique_left_item_count",
+    "insertion_sampled_unique_right_item_count",
+    "insertion_sampled_unique_left_right_pair_count",
+    "insertion_every_target_has_left_neighbor",
+    "insertion_every_target_has_right_neighbor",
+    "insertion_left_entropy",
+    "insertion_right_entropy",
+    "insertion_pair_entropy",
+    "insertion_left_overlap_count_with_top20_near_top_anchors",
+    "insertion_left_overlap_ratio_relative_to_unique_left",
+    "insertion_left_overlap_ratio_relative_to_top20_near_top_anchors",
+    "replacement_exposure_source",
+    "replacement_metadata_available",
+    "replacement_fake_session_count",
+    "replacement_length_shift_min",
+    "replacement_length_shift_max",
+    "replacement_length_shift_mean",
+    "replacement_internal_replacement_count",
+    "replacement_internal_replacement_ratio",
+    "replacement_tail_fallback_count",
+    "replacement_tail_fallback_ratio",
+    "replacement_unique_left_item_count",
+    "replacement_unique_right_item_count",
+    "replacement_unique_left_right_pair_count",
+    "replacement_candidate_unique_left_item_count",
+    "replacement_candidate_unique_right_item_count",
+    "replacement_candidate_unique_left_right_pair_count",
+    "replacement_candidate_left_entropy",
+    "replacement_candidate_right_entropy",
+    "replacement_candidate_pair_entropy",
+    "replacement_sampled_unique_left_item_count",
+    "replacement_sampled_unique_right_item_count",
+    "replacement_sampled_unique_left_right_pair_count",
+    "replacement_every_internal_target_has_left_neighbor",
+    "replacement_every_internal_target_has_right_neighbor",
+    "replacement_every_target_has_left_neighbor",
+    "replacement_every_target_has_right_neighbor",
+    "replacement_pos1_ratio",
+    "replacement_pos2_ratio",
+    "replacement_pos3_ratio",
+    "replacement_pos4_5_ratio",
+    "replacement_pos6_plus_ratio",
+    "replacement_tail_position_ratio",
+    "replacement_left_entropy",
+    "replacement_right_entropy",
+    "replacement_pair_entropy",
+    "replacement_left_overlap_count_with_top20_near_top_anchors",
+    "replacement_left_overlap_ratio_relative_to_unique_left",
+    "replacement_left_overlap_ratio_relative_to_top20_near_top_anchors",
+]
 
-    def add(self, rank: int, score: float) -> None:
-        self.ranks.append(int(rank))
-        self.scores.append(float(score))
+
+SUMMARY_MD_COLUMNS = [
+    "target_item",
+    "train_target_occurrence_count",
+    "target_frequency_rank",
+    "target_popularity_percentile",
+    "num_unique_predecessors",
+    "predecessor_effective_count",
+    "num_unique_successors",
+    "successor_effective_count",
+    "near_top_prefix_count",
+    "near_top_prefix_ratio",
+    "top1_near_top_anchor_coverage",
+    "top5_near_top_anchor_coverage",
+    "near_top_anchor_effective_count",
+    "fake_session_coverage_ratio_top20_near_top_anchors",
+    "insertion_exposure_source",
+    "insertion_tail_slot_ratio",
+    "insertion_candidate_unique_left_item_count",
+    "insertion_candidate_unique_left_right_pair_count",
+    "replacement_exposure_source",
+    "replacement_tail_fallback_ratio",
+    "replacement_candidate_unique_left_item_count",
+    "replacement_candidate_unique_left_right_pair_count",
+]
 
 
 def _repo_path(path: str | Path) -> Path:
     path_obj = Path(path)
-    return path_obj if path_obj.is_absolute() else (Path.cwd() / path_obj)
+    return path_obj if path_obj.is_absolute() else Path.cwd() / path_obj
 
 
 def _to_jsonable(value: Any) -> Any:
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, Counter):
+        return {str(key): int(count) for key, count in value.items()}
     if isinstance(value, dict):
         return {str(key): _to_jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
+    if isinstance(value, (list, tuple, set)):
         return [_to_jsonable(item) for item in value]
     return value
 
@@ -73,10 +229,13 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
         json.dump(_to_jsonable(payload), handle, indent=2, sort_keys=True)
 
 
-def _read_json(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
+def _load_json_or_none(path: str | Path | None) -> dict[str, Any] | None:
+    if path is None:
         return None
-    with path.open("r", encoding="utf-8") as handle:
+    path_obj = _repo_path(path)
+    if not path_obj.exists():
+        return None
+    with path_obj.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     return payload if isinstance(payload, dict) else None
 
@@ -86,16 +245,24 @@ def _load_pickle(path: Path) -> Any:
         return pickle.load(handle)
 
 
+def _csv_value(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, dict, set)):
+        return json.dumps(_to_jsonable(value), sort_keys=True)
+    return value
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]], fieldnames: Sequence[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(fieldnames), extrasaction="ignore")
         writer.writeheader()
         for row in rows:
-            writer.writerow({field: row.get(field, "") for field in fieldnames})
+            writer.writerow({field: _csv_value(row.get(field)) for field in fieldnames})
 
 
-def _percentile(values: Sequence[float], q: float) -> float | None:
+def _percentile(values: Sequence[float | int], q: float) -> float | None:
     if not values:
         return None
     ordered = sorted(float(value) for value in values)
@@ -133,11 +300,64 @@ def _summary(values: Sequence[float | int]) -> dict[str, float | int | None]:
     }
 
 
-def _top_counter(counter: Counter[int], limit: int) -> list[dict[str, int]]:
+def _safe_get_nested(dct: Mapping[str, Any] | None, path: Sequence[str], default: Any = None) -> Any:
+    current: Any = dct
+    for key in path:
+        if not isinstance(current, Mapping) or key not in current:
+            return default
+        current = current[key]
+    return current
+
+
+def _shannon_entropy(counter: Mapping[Any, int]) -> float:
+    total = sum(int(count) for count in counter.values())
+    if total <= 0:
+        return 0.0
+    entropy = 0.0
+    for count in counter.values():
+        count = int(count)
+        if count <= 0:
+            continue
+        p = float(count) / float(total)
+        entropy -= p * math.log(p)
+    return float(entropy)
+
+
+def _effective_count(counter: Mapping[Any, int]) -> float:
+    total = sum(int(count) for count in counter.values())
+    if total <= 0:
+        return 0.0
+    return float(math.exp(_shannon_entropy(counter)))
+
+
+def _top_counter(counter: Mapping[int, int], limit: int) -> list[dict[str, int]]:
     return [
         {"item": int(item), "count": int(count)}
-        for item, count in counter.most_common(int(limit))
+        for item, count in Counter(counter).most_common(int(limit))
     ]
+
+
+def _top_pair_counter(counter: Mapping[tuple[int, int], int], limit: int) -> list[dict[str, int]]:
+    return [
+        {"left_item": int(pair[0]), "right_item": int(pair[1]), "count": int(count)}
+        for pair, count in Counter(counter).most_common(int(limit))
+    ]
+
+
+def _item_list(rows: Sequence[Mapping[str, Any]], key: str = "item") -> list[int]:
+    return [int(row[key]) for row in rows]
+
+
+def _top_items_string(rows: Sequence[Mapping[str, Any]], key: str = "item") -> str:
+    return ";".join(str(int(row[key])) for row in rows)
+
+
+def _coverage_for_top_k(counter: Mapping[Any, int], k: int, total: int | None = None) -> float:
+    if total is None:
+        total = sum(int(count) for count in counter.values())
+    if not total:
+        return 0.0
+    return float(sum(int(count) for _, count in Counter(counter).most_common(int(k)))) / float(total)
 
 
 def item_counts(sessions: Sequence[Sequence[int]]) -> Counter[int]:
@@ -157,223 +377,194 @@ def expanded_cases(sessions: Sequence[Sequence[int]]) -> tuple[list[list[int]], 
     labels: list[int] = []
     for session in sessions:
         session_prefixes, session_labels = expand_session_to_samples(session)
-        prefixes.extend(session_prefixes)
+        prefixes.extend([list(map(int, prefix)) for prefix in session_prefixes])
         labels.extend(int(label) for label in session_labels)
     return prefixes, labels
 
 
-def compute_target_split_stats(
+def _label_counts(sessions: Sequence[Sequence[int]]) -> Counter[int]:
+    _, labels = expanded_cases(sessions)
+    return Counter(int(label) for label in labels)
+
+
+def _split_target_counts(
     sessions: Sequence[Sequence[int]],
+    label_counts: Mapping[int, int],
     target: int,
-    *,
-    counts: Mapping[int, int] | None = None,
-    ranks: Mapping[int, int] | None = None,
-    include_position_distribution: bool,
-    expanded_label_count: bool,
-) -> dict[str, Any]:
+) -> dict[str, int]:
     target = int(target)
-    counts = counts or item_counts(sessions)
-    ranks = ranks or frequency_ranks(counts)
-    positions: list[int] = []
-    target_sessions = 0
-    position_buckets: Counter[str] = Counter()
-    for session in sessions:
-        normalized = [int(item) for item in session]
-        session_positions = [index for index, item in enumerate(normalized) if item == target]
-        if session_positions:
-            target_sessions += 1
-        for position in session_positions:
-            positions.append(position)
-            if position == 0:
-                bucket = "pos0"
-            elif position == 1:
-                bucket = "pos1"
-            elif position == 2:
-                bucket = "pos2"
-            elif position == 3:
-                bucket = "pos3"
-            elif position in {4, 5}:
-                bucket = "pos4_5"
-            else:
-                bucket = "pos6_plus"
-            position_buckets[bucket] += 1
-            if position == len(normalized) - 1:
-                position_buckets["tail_position"] += 1
-
-    label_count = None
-    if expanded_label_count:
-        _, labels = expanded_cases(sessions)
-        label_count = sum(1 for label in labels if int(label) == target)
-
-    item_count_values = list(int(value) for value in counts.values())
-    occurrence = int(counts.get(target, 0))
-    rank = ranks.get(target)
-    popularity_percentile = None
-    if rank is not None and len(ranks) > 1:
-        popularity_percentile = 1.0 - ((int(rank) - 1) / float(len(ranks) - 1))
-    q25 = _percentile(item_count_values, 0.25) or 0.0
-    q75 = _percentile(item_count_values, 0.75) or 0.0
-    if occurrence <= q25:
-        density = "sparse"
-    elif occurrence >= q75:
-        density = "dense"
-    else:
-        density = "medium"
-
-    payload: dict[str, Any] = {
-        "target_occurrence_count": occurrence,
-        "sessions_containing_target": int(target_sessions),
-        "target_item_frequency_rank": None if rank is None else int(rank),
-        "target_popularity_percentile": popularity_percentile,
-        "density_relative_to_dataset": density,
-        "avg_position": (
-            None if not positions else float(sum(positions) / len(positions))
-        ),
-        "position_summary": _summary(positions),
+    occurrence = 0
+    session_count = 0
+    for raw_session in sessions:
+        session = [int(item) for item in raw_session]
+        count = sum(1 for item in session if item == target)
+        occurrence += count
+        if count:
+            session_count += 1
+    return {
+        "occurrence_count": int(occurrence),
+        "session_count": int(session_count),
+        "label_count": int(label_counts.get(target, 0)),
     }
-    if include_position_distribution:
-        payload["position_distribution"] = {
-            key: int(position_buckets.get(key, 0))
-            for key in (
-                "pos0",
-                "pos1",
-                "pos2",
-                "pos3",
-                "pos4_5",
-                "pos6_plus",
-                "tail_position",
-            )
-        }
-    if expanded_label_count:
-        payload["target_label_count_expanded_prefix_cases"] = int(label_count or 0)
-    return payload
 
 
-def compute_neighbor_stats(
+def _density_bucket(occurrence: int, all_train_counts: Mapping[int, int]) -> tuple[str, dict[str, Any]]:
+    values = list(int(value) for value in all_train_counts.values())
+    q25 = _percentile(values, 0.25) or 0.0
+    q75 = _percentile(values, 0.75) or 0.0
+    if int(occurrence) <= q25:
+        bucket = "sparse"
+    elif int(occurrence) >= q75:
+        bucket = "dense"
+    else:
+        bucket = "medium"
+    return bucket, {
+        "rule": "sparse if train occurrence <= all-train item q25; dense if >= q75; otherwise medium",
+        "q25": q25,
+        "q75": q75,
+    }
+
+
+def compute_target_popularity(
+    *,
+    train_sessions: Sequence[Sequence[int]],
+    valid_sessions: Sequence[Sequence[int]],
+    train_counts: Mapping[int, int],
+    train_ranks: Mapping[int, int],
+    train_label_counts: Mapping[int, int],
+    valid_label_counts: Mapping[int, int],
+    target: int,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    target = int(target)
+    train = _split_target_counts(train_sessions, train_label_counts, target)
+    valid = _split_target_counts(valid_sessions, valid_label_counts, target)
+    rank = train_ranks.get(target)
+    percentile = None
+    if rank is not None and len(train_ranks) > 1:
+        percentile = 1.0 - ((int(rank) - 1) / float(len(train_ranks) - 1))
+    density, density_metadata = _density_bucket(train["occurrence_count"], train_counts)
+    flat = {
+        "target_item": target,
+        "train_target_occurrence_count": train["occurrence_count"],
+        "train_target_session_count": train["session_count"],
+        "train_target_label_count": train["label_count"],
+        "valid_target_occurrence_count": valid["occurrence_count"],
+        "valid_target_session_count": valid["session_count"],
+        "valid_target_label_count": valid["label_count"],
+        "target_frequency_rank": None if rank is None else int(rank),
+        "target_popularity_percentile": percentile,
+        "target_density_bucket": density,
+    }
+    grouped = {
+        "train_sub": train,
+        "validation": valid,
+        "target_frequency_rank": None if rank is None else int(rank),
+        "target_popularity_percentile": percentile,
+        "target_density_bucket": density,
+        "density_bucket_metadata": density_metadata,
+    }
+    return grouped, flat
+
+
+def _counter_distribution_profile(counter: Counter[int], *, prefix: str, top_k: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    total = sum(int(count) for count in counter.values())
+    top5 = _top_counter(counter, 5)
+    top20 = _top_counter(counter, min(20, top_k))
+    entropy = _shannon_entropy(counter)
+    effective = _effective_count(counter)
+    flat = {
+        f"num_{prefix if prefix == 'cooccurrence_items' else 'unique_' + prefix}": int(len(counter)),
+        f"top1_{prefix[:-1] if prefix.endswith('s') else prefix}_count": (
+            int(counter.most_common(1)[0][1]) if counter else 0
+        ),
+        f"top5_{prefix[:-1] if prefix.endswith('s') else prefix}_count": (
+            int(sum(count for _, count in counter.most_common(5)))
+        ),
+        f"top1_{prefix[:-1] if prefix.endswith('s') else prefix}_share": _coverage_for_top_k(counter, 1, total),
+        f"top5_{prefix[:-1] if prefix.endswith('s') else prefix}_share": _coverage_for_top_k(counter, 5, total),
+        f"{prefix[:-1] if prefix.endswith('s') else prefix}_entropy": entropy,
+        f"{prefix[:-1] if prefix.endswith('s') else prefix}_effective_count": effective,
+        f"top5_{prefix[:-1] if prefix.endswith('s') else prefix}_items": _top_items_string(top5),
+    }
+    grouped = {
+        "total_count": int(total),
+        "num_unique_items": int(len(counter)),
+        "top_items": _top_counter(counter, top_k),
+        "top5_items": top5,
+        "top20_items": top20,
+        "entropy": entropy,
+        "effective_count": effective,
+        "empty_counter_behavior": "count/share/entropy/effective_count are 0 when no observations exist",
+    }
+    return grouped, flat
+
+
+def compute_natural_transition_profile(
     sessions: Sequence[Sequence[int]],
     target: int,
     *,
     top_k: int,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     target = int(target)
-    counts = item_counts(sessions)
-    transition_left_count: Counter[int] = Counter()
-    transition_right_count: Counter[int] = Counter()
-    predecessor_counts: Counter[int] = Counter()
-    successor_counts: Counter[int] = Counter()
-    predecessor_sessions: defaultdict[int, set[int]] = defaultdict(set)
-    successor_sessions: defaultdict[int, set[int]] = defaultdict(set)
-    cooccur_occurrences: Counter[int] = Counter()
-    cooccur_sessions: Counter[int] = Counter()
-    target_session_count = 0
-    total_transitions = 0
-
-    for session_index, raw_session in enumerate(sessions):
+    predecessors: Counter[int] = Counter()
+    successors: Counter[int] = Counter()
+    cooccurrence: Counter[int] = Counter()
+    for raw_session in sessions:
         session = [int(item) for item in raw_session]
         if target in session:
-            target_session_count += 1
-            session_item_counts = Counter(session)
-            for item, count in session_item_counts.items():
-                if int(item) == target:
-                    continue
-                cooccur_occurrences[int(item)] += int(count)
-                cooccur_sessions[int(item)] += 1
-        for left, right in zip(session, session[1:]):
-            left = int(left)
-            right = int(right)
-            transition_left_count[left] += 1
-            transition_right_count[right] += 1
-            total_transitions += 1
-            if right == target:
-                predecessor_counts[left] += 1
-                predecessor_sessions[left].add(session_index)
-            if left == target:
-                successor_counts[right] += 1
-                successor_sessions[right].add(session_index)
+            session_counts = Counter(session)
+            for item, count in session_counts.items():
+                if int(item) != target:
+                    cooccurrence[int(item)] += int(count)
+        for index, item in enumerate(session):
+            if int(item) != target:
+                continue
+            if index > 0:
+                predecessors[int(session[index - 1])] += 1
+            if index < len(session) - 1:
+                successors[int(session[index + 1])] += 1
 
-    base_rate_target = (
-        float(sum(predecessor_counts.values())) / float(total_transitions)
-        if total_transitions
-        else 0.0
-    )
-    predecessors: list[dict[str, Any]] = []
-    for item, count in predecessor_counts.most_common(top_k):
-        context_count = int(transition_left_count.get(item, 0))
-        confidence = float(count) / float(context_count) if context_count else 0.0
-        predecessors.append(
-            {
-                "predecessor_item": int(item),
-                "count_i_to_target": int(count),
-                "item_frequency": int(counts.get(item, 0)),
-                "predecessor_frequency": context_count,
-                "confidence_i_to_target": confidence,
-                "base_rate_target_as_next_item": base_rate_target,
-                "lift_i_to_target": (
-                    confidence / base_rate_target if base_rate_target else None
-                ),
-                "support_session_count": int(len(predecessor_sessions[item])),
-                "normalized_support": (
-                    float(len(predecessor_sessions[item])) / float(len(sessions))
-                    if sessions
-                    else 0.0
-                ),
-            }
-        )
-
-    target_as_left = int(transition_left_count.get(target, 0))
-    successors: list[dict[str, Any]] = []
-    for item, count in successor_counts.most_common(top_k):
-        confidence = float(count) / float(target_as_left) if target_as_left else 0.0
-        base_rate_item = (
-            float(transition_right_count.get(item, 0)) / float(total_transitions)
-            if total_transitions
-            else 0.0
-        )
-        successors.append(
-            {
-                "successor_item": int(item),
-                "count_target_to_j": int(count),
-                "item_frequency": int(counts.get(item, 0)),
-                "confidence_target_to_j": confidence,
-                "lift_target_to_j": confidence / base_rate_item if base_rate_item else None,
-                "support_session_count": int(len(successor_sessions[item])),
-            }
-        )
-
-    cooccurrence: list[dict[str, Any]] = []
-    session_count = len(sessions)
-    p_target = float(target_session_count) / float(session_count) if session_count else 0.0
-    for item, session_support in cooccur_sessions.most_common(top_k):
-        p_item = (
-            float(sum(1 for session in sessions if int(item) in set(map(int, session))))
-            / float(session_count)
-            if session_count
-            else 0.0
-        )
-        p_both = float(session_support) / float(session_count) if session_count else 0.0
-        lift = p_both / (p_item * p_target) if p_item and p_target else None
-        pmi = math.log(lift) if lift and lift > 0 else None
-        cooccurrence.append(
-            {
-                "cooccur_item": int(item),
-                "cooccur_count": int(cooccur_occurrences[item]),
-                "cooccur_session_count": int(session_support),
-                "item_frequency": int(counts.get(item, 0)),
-                "lift": lift,
-                "pmi": pmi,
-            }
-        )
-
-    return {
-        "predecessors": predecessors,
-        "successors": successors,
-        "cooccurrence": cooccurrence,
-        "base_rate_target_as_next_item": base_rate_target,
-        "total_transitions": int(total_transitions),
+    pred_group, pred_flat_raw = _counter_distribution_profile(predecessors, prefix="predecessors", top_k=top_k)
+    succ_group, succ_flat_raw = _counter_distribution_profile(successors, prefix="successors", top_k=top_k)
+    co_group, co_flat_raw = _counter_distribution_profile(cooccurrence, prefix="cooccurrence_items", top_k=top_k)
+    flat = {
+        "num_unique_predecessors": pred_flat_raw["num_unique_predecessors"],
+        "num_unique_successors": succ_flat_raw["num_unique_successors"],
+        "num_cooccurrence_items": co_flat_raw["num_cooccurrence_items"],
+        "top1_predecessor_count": pred_flat_raw["top1_predecessor_count"],
+        "top5_predecessor_count": pred_flat_raw["top5_predecessor_count"],
+        "top1_predecessor_share": pred_flat_raw["top1_predecessor_share"],
+        "top5_predecessor_share": pred_flat_raw["top5_predecessor_share"],
+        "predecessor_entropy": pred_flat_raw["predecessor_entropy"],
+        "predecessor_effective_count": pred_flat_raw["predecessor_effective_count"],
+        "top1_successor_count": succ_flat_raw["top1_successor_count"],
+        "top5_successor_count": succ_flat_raw["top5_successor_count"],
+        "top1_successor_share": succ_flat_raw["top1_successor_share"],
+        "top5_successor_share": succ_flat_raw["top5_successor_share"],
+        "successor_entropy": succ_flat_raw["successor_entropy"],
+        "successor_effective_count": succ_flat_raw["successor_effective_count"],
+        "top1_cooccurrence_count": co_flat_raw["top1_cooccurrence_item_count"],
+        "top5_cooccurrence_count": co_flat_raw["top5_cooccurrence_item_count"],
+        "top1_cooccurrence_share": co_flat_raw["top1_cooccurrence_item_share"],
+        "top5_cooccurrence_share": co_flat_raw["top5_cooccurrence_item_share"],
+        "cooccurrence_entropy": co_flat_raw["cooccurrence_item_entropy"],
+        "cooccurrence_effective_count": co_flat_raw["cooccurrence_item_effective_count"],
+        "top5_predecessor_items": pred_flat_raw["top5_predecessor_items"],
+        "top5_successor_items": succ_flat_raw["top5_successor_items"],
+        "top5_cooccurrence_items": co_flat_raw["top5_cooccurrence_item_items"],
     }
+    grouped = {
+        "predecessors": pred_group,
+        "successors": succ_group,
+        "cooccurrence": co_group,
+        "predecessor_counts": predecessors,
+        "successor_counts": successors,
+        "cooccurrence_counts": cooccurrence,
+    }
+    return grouped, flat
 
 
-def filter_vulnerable_cases(
+def near_top_indices(
     ranks: Sequence[int],
     *,
     rank_min: int,
@@ -382,241 +573,11 @@ def filter_vulnerable_cases(
     return [
         index
         for index, rank in enumerate(ranks)
-        if int(rank_min) < int(rank) <= int(rank_max)
+        if int(rank_min) <= int(rank) <= int(rank_max)
     ]
 
 
-def anchor_score(
-    *,
-    vulnerable_coverage: float,
-    fake_session_count_with_anchor: int,
-    avg_vulnerable_target_rank: float | None,
-) -> float:
-    if avg_vulnerable_target_rank is None or avg_vulnerable_target_rank <= 0:
-        return 0.0
-    rank_closeness_weight = 1.0 / math.log2(float(avg_vulnerable_target_rank) + 1.0)
-    return (
-        float(vulnerable_coverage)
-        * math.log1p(int(fake_session_count_with_anchor))
-        * rank_closeness_weight
-    )
-
-
-def fake_session_anchor_availability(
-    fake_sessions: Sequence[Sequence[int]],
-    anchors: Iterable[int],
-) -> dict[int, dict[str, Any]]:
-    anchor_set = {int(anchor) for anchor in anchors}
-    result: dict[int, dict[str, Any]] = {}
-    total_sessions = len(fake_sessions)
-    for anchor in anchor_set:
-        session_count = 0
-        occurrence_count = 0
-        feasible_count = 0
-        positions: list[int] = []
-        for raw_session in fake_sessions:
-            session = [int(item) for item in raw_session]
-            found = False
-            for pos, item in enumerate(session):
-                if item != anchor:
-                    continue
-                found = True
-                occurrence_count += 1
-                positions.append(int(pos))
-                if pos < len(session) - 1:
-                    feasible_count += 1
-            if found:
-                session_count += 1
-        result[anchor] = {
-            "anchor_item": int(anchor),
-            "fake_session_count_with_anchor": int(session_count),
-            "fake_session_coverage": (
-                float(session_count) / float(total_sessions) if total_sessions else 0.0
-            ),
-            "total_anchor_occurrences_in_fake_sessions": int(occurrence_count),
-            "avg_position_in_fake_sessions": (
-                None if not positions else float(sum(positions) / len(positions))
-            ),
-            "anchor_after_insertion_feasible_count": int(feasible_count),
-            "internal_insertion_feasible_ratio": (
-                float(feasible_count) / float(occurrence_count)
-                if occurrence_count
-                else 0.0
-            ),
-        }
-    return result
-
-
-def score_validation_prefixes(
-    config: Config,
-    *,
-    checkpoint_path: Path,
-    prefixes: Sequence[Sequence[int]],
-    targets: Sequence[int],
-) -> dict[int, dict[str, list[float | int]]]:
-    train_config = dict(config.attack.poison_model.params["train"])
-    runner = SRGNNBaseRunner(config)
-    runner.build_model(build_srgnn_opt_from_train_config(train_config))
-    runner.load_model(checkpoint_path, map_location="cpu")
-    if runner.model is None:
-        raise RuntimeError("SR-GNN model failed to initialize.")
-
-    normalized_prefixes = [list(map(int, prefix)) for prefix in prefixes]
-    data = Data((normalized_prefixes, [1] * len(normalized_prefixes)), shuffle=False)
-    targets_list = [int(target) for target in targets]
-    output = {
-        int(target): {"ranks": [], "scores": []}
-        for target in targets_list
-    }
-    target_tensor = None
-    runner.model.eval()
-    with torch.no_grad():
-        for batch_indices in data.generate_batch(runner.model.batch_size):
-            _, scores = srg_forward(runner.model, batch_indices, data)
-            probabilities = torch.softmax(scores, dim=1)
-            if target_tensor is None or target_tensor.device != scores.device:
-                target_tensor = torch.as_tensor(
-                    [target - 1 for target in targets_list],
-                    dtype=torch.long,
-                    device=scores.device,
-                )
-            for target_position, target in enumerate(targets_list):
-                item_index = target_tensor[target_position]
-                target_scores = scores[:, item_index]
-                ranks = 1 + torch.sum(scores > target_scores.unsqueeze(1), dim=1)
-                target_probs = probabilities[:, item_index]
-                output[target]["ranks"].extend(
-                    int(value) for value in trans_to_cpu(ranks).tolist()
-                )
-                output[target]["scores"].extend(
-                    float(value) for value in trans_to_cpu(target_probs).tolist()
-                )
-    return output
-
-
-def vulnerable_anchor_analysis(
-    prefixes: Sequence[Sequence[int]],
-    ranks: Sequence[int],
-    scores: Sequence[float],
-    *,
-    rank_min: int,
-    rank_max: int,
-    train_counts: Mapping[int, int],
-    train_ranks: Mapping[int, int],
-    train_predecessor_by_item: Mapping[int, Mapping[str, Any]],
-    train_cooccur_by_item: Mapping[int, Mapping[str, Any]],
-    top_k: int,
-) -> dict[str, Any]:
-    vulnerable_indices = filter_vulnerable_cases(
-        ranks,
-        rank_min=rank_min,
-        rank_max=rank_max,
-    )
-    last_items: dict[int, RunningRows] = defaultdict(RunningRows)
-    last_pairs: dict[tuple[int, int], RunningRows] = defaultdict(RunningRows)
-    length_buckets: Counter[str] = Counter()
-    lengths: list[int] = []
-    for index in vulnerable_indices:
-        prefix = [int(item) for item in prefixes[index]]
-        if not prefix:
-            continue
-        length = len(prefix)
-        lengths.append(length)
-        if length == 1:
-            length_buckets["len1"] += 1
-        elif length == 2:
-            length_buckets["len2"] += 1
-        elif length == 3:
-            length_buckets["len3"] += 1
-        elif length == 4:
-            length_buckets["len4"] += 1
-        else:
-            length_buckets["len5_plus"] += 1
-        last_items[prefix[-1]].add(int(ranks[index]), float(scores[index]))
-        if len(prefix) >= 2:
-            last_pairs[(prefix[-2], prefix[-1])].add(
-                int(ranks[index]),
-                float(scores[index]),
-            )
-
-    vulnerable_count = len(vulnerable_indices)
-    last_rows: list[dict[str, Any]] = []
-    for item, rows in last_items.items():
-        predecessor = train_predecessor_by_item.get(item, {})
-        cooccur = train_cooccur_by_item.get(item, {})
-        last_rows.append(
-            {
-                "anchor_item": int(item),
-                "vulnerable_count": int(len(rows.ranks)),
-                "vulnerable_coverage": (
-                    float(len(rows.ranks)) / float(vulnerable_count)
-                    if vulnerable_count
-                    else 0.0
-                ),
-                "avg_target_rank": float(sum(rows.ranks) / len(rows.ranks)),
-                "median_target_rank": _percentile(rows.ranks, 0.5),
-                "avg_target_score": float(sum(rows.scores) / len(rows.scores)),
-                "item_frequency_in_train_sub": int(train_counts.get(item, 0)),
-                "item_frequency_rank": train_ranks.get(item),
-                "appears_in_train_predecessors": bool(predecessor),
-                "train_predecessor_count_to_target": int(
-                    predecessor.get("count_i_to_target", 0)
-                ),
-                "train_cooccur_count_with_target": int(
-                    cooccur.get("cooccur_count", 0)
-                ),
-            }
-        )
-    last_rows.sort(key=lambda row: (-int(row["vulnerable_count"]), int(row["anchor_item"])))
-
-    pair_rows: list[dict[str, Any]] = []
-    for (item_a, item_b), rows in last_pairs.items():
-        pair_rows.append(
-            {
-                "item_a": int(item_a),
-                "item_b": int(item_b),
-                "vulnerable_count": int(len(rows.ranks)),
-                "vulnerable_coverage": (
-                    float(len(rows.ranks)) / float(vulnerable_count)
-                    if vulnerable_count
-                    else 0.0
-                ),
-                "avg_target_rank": float(sum(rows.ranks) / len(rows.ranks)),
-                "avg_target_score": float(sum(rows.scores) / len(rows.scores)),
-            }
-        )
-    pair_rows.sort(
-        key=lambda row: (-int(row["vulnerable_count"]), int(row["item_a"]), int(row["item_b"]))
-    )
-
-    return {
-        "rank_min": int(rank_min),
-        "rank_max": int(rank_max),
-        "rank_convention": RANK_CONVENTION,
-        "total_validation_prefix_count": int(len(prefixes)),
-        "vulnerable_prefix_count": int(vulnerable_count),
-        "vulnerable_prefix_ratio": (
-            float(vulnerable_count) / float(len(prefixes)) if prefixes else 0.0
-        ),
-        "target_rank_summary": _summary(ranks),
-        "target_score_summary": _summary(scores),
-        "vulnerable_rank_summary": _summary([ranks[i] for i in vulnerable_indices]),
-        "vulnerable_score_summary": _summary([scores[i] for i in vulnerable_indices]),
-        "last_item_anchors": last_rows[:top_k],
-        "last_2_pair_anchors": pair_rows[:top_k],
-        "prefix_length_distribution": {
-            "len1": int(length_buckets.get("len1", 0)),
-            "len2": int(length_buckets.get("len2", 0)),
-            "len3": int(length_buckets.get("len3", 0)),
-            "len4": int(length_buckets.get("len4", 0)),
-            "len5_plus": int(length_buckets.get("len5_plus", 0)),
-            "mean_length": None if not lengths else float(sum(lengths) / len(lengths)),
-            "median_length": _percentile(lengths, 0.5),
-        },
-    }
-
-
-def resolve_existing_poison_checkpoint(config: Config) -> Path | None:
+def resolve_clean_poison_checkpoint(config: Config) -> Path | None:
     paths = shared_artifact_paths(config, run_type="random_nonzero_when_possible")
     candidates = [
         paths.get("poison_model"),
@@ -652,251 +613,886 @@ def resolve_fake_sessions(
     return None, None
 
 
-def resolve_p5_metadata_paths(
+def score_validation_prefixes(
+    config: Config,
+    *,
+    checkpoint_path: Path,
+    prefixes: Sequence[Sequence[int]],
     targets: Sequence[int],
-    explicit_paths: Sequence[str | Path],
-) -> dict[int, Path]:
-    resolved: dict[int, Path] = {}
-    for raw_path in explicit_paths:
-        path = _repo_path(raw_path)
-        payload = _read_json(path)
-        if payload is None:
-            continue
-        target = payload.get("target_item")
-        if target is not None:
-            resolved[int(target)] = path
-    for target in targets:
-        if int(target) in resolved:
-            continue
-        pattern = (
-            "outputs/runs/diginetica/"
-            f"**/targets/{int(target)}/internal_random_insertion_metadata.json"
+) -> dict[int, dict[str, list[float | int | None]]]:
+    train_config = dict(config.attack.poison_model.params["train"])
+    runner = SRGNNBaseRunner(config)
+    runner.build_model(build_srgnn_opt_from_train_config(train_config))
+    runner.load_model(checkpoint_path, map_location="cpu")
+    if runner.model is None:
+        raise RuntimeError("SR-GNN model failed to initialize.")
+
+    normalized_prefixes = [list(map(int, prefix)) for prefix in prefixes]
+    data = Data((normalized_prefixes, [1] * len(normalized_prefixes)), shuffle=False)
+    targets_list = [int(target) for target in targets]
+    output = {
+        int(target): {"ranks": [], "scores": [], "margin_to_top20": []}
+        for target in targets_list
+    }
+    target_tensor = None
+    runner.model.eval()
+    with torch.no_grad():
+        for batch_indices in data.generate_batch(runner.model.batch_size):
+            _, scores = srg_forward(runner.model, batch_indices, data)
+            if target_tensor is None or target_tensor.device != scores.device:
+                target_tensor = torch.as_tensor(
+                    [target - 1 for target in targets_list],
+                    dtype=torch.long,
+                    device=scores.device,
+                )
+            top20_cutoff = None
+            if scores.shape[1] >= 20:
+                top20_cutoff = torch.topk(scores, k=20, dim=1).values[:, -1]
+            for target_position, target in enumerate(targets_list):
+                item_index = target_tensor[target_position]
+                target_scores = scores[:, item_index]
+                ranks = 1 + torch.sum(scores > target_scores.unsqueeze(1), dim=1)
+                output[target]["ranks"].extend(
+                    int(value) for value in trans_to_cpu(ranks).tolist()
+                )
+                output[target]["scores"].extend(
+                    float(value) for value in trans_to_cpu(target_scores).tolist()
+                )
+                if top20_cutoff is None:
+                    output[target]["margin_to_top20"].extend([None] * int(scores.shape[0]))
+                else:
+                    margins = top20_cutoff - target_scores
+                    output[target]["margin_to_top20"].extend(
+                        float(value) for value in trans_to_cpu(margins).tolist()
+                    )
+    return output
+
+
+def compute_clean_rank_susceptibility_profile(
+    ranks: Sequence[int],
+    scores: Sequence[float],
+    margins: Sequence[float | None],
+    *,
+    rank_min: int,
+    rank_max: int,
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    ranks_int = [int(rank) for rank in ranks]
+    scores_float = [float(score) for score in scores]
+    margin_values = [float(value) for value in margins if value is not None]
+    near_indices = near_top_indices(ranks_int, rank_min=rank_min, rank_max=rank_max)
+    near_ranks = [ranks_int[index] for index in near_indices]
+    rank_summary = _summary(ranks_int)
+    near_summary = _summary(near_ranks)
+    score_summary = _summary(scores_float)
+    margin_summary = _summary(margin_values)
+    flat = {
+        "validation_prefix_count": int(len(ranks_int)),
+        "near_top_prefix_count": int(len(near_indices)),
+        "near_top_prefix_ratio": float(len(near_indices)) / float(len(ranks_int)) if ranks_int else 0.0,
+        "clean_target_rank_mean": rank_summary["mean"],
+        "clean_target_rank_median": rank_summary["median"],
+        "clean_target_rank_q25": rank_summary["q25"],
+        "clean_target_rank_q75": rank_summary["q75"],
+        "clean_target_rank_min": rank_summary["min"],
+        "clean_target_rank_max": rank_summary["max"],
+        "near_top_rank_mean": near_summary["mean"],
+        "near_top_rank_median": near_summary["median"],
+        "near_top_rank_q25": near_summary["q25"],
+        "near_top_rank_q75": near_summary["q75"],
+        "rank_1_20_count": sum(1 for rank in ranks_int if 1 <= rank <= 20),
+        "rank_21_50_count": sum(1 for rank in ranks_int if 21 <= rank <= 50),
+        "rank_51_100_count": sum(1 for rank in ranks_int if 51 <= rank <= 100),
+        "rank_101_200_count": sum(1 for rank in ranks_int if 101 <= rank <= 200),
+        "rank_above_200_count": sum(1 for rank in ranks_int if rank > 200),
+        "target_score_mean": score_summary["mean"],
+        "target_score_median": score_summary["median"],
+        "margin_to_top20_mean": margin_summary["mean"],
+        "margin_to_top20_median": margin_summary["median"],
+    }
+    grouped = {
+        "rank_convention": RANK_CONVENTION,
+        "near_top_definition": {
+            "rank_min": int(rank_min),
+            "rank_max": int(rank_max),
+            "description": (
+                "validation prefixes where the target is not in top-20 but is "
+                "within top-200 under the clean model when defaults are used"
+            ),
+        },
+        "validation_prefix_count": flat["validation_prefix_count"],
+        "near_top_prefix_count": flat["near_top_prefix_count"],
+        "near_top_prefix_ratio": flat["near_top_prefix_ratio"],
+        "rank_summary": rank_summary,
+        "near_top_rank_summary": near_summary,
+        "target_score_summary": score_summary,
+        "margin_to_top20_summary": margin_summary,
+        "rank_buckets": {
+            "rank_1_20_count": flat["rank_1_20_count"],
+            "rank_21_50_count": flat["rank_21_50_count"],
+            "rank_51_100_count": flat["rank_51_100_count"],
+            "rank_101_200_count": flat["rank_101_200_count"],
+            "rank_above_200_count": flat["rank_above_200_count"],
+        },
+    }
+    return grouped, flat, near_indices
+
+
+def compute_near_top_anchor_concentration(
+    prefixes: Sequence[Sequence[int]],
+    near_indices: Sequence[int],
+    train_predecessor_counts: Mapping[int, int],
+    *,
+    top_k: int,
+) -> tuple[dict[str, Any], dict[str, Any], list[int]]:
+    anchor_counts: Counter[int] = Counter()
+    for index in near_indices:
+        prefix = [int(item) for item in prefixes[index]]
+        if prefix:
+            anchor_counts[int(prefix[-1])] += 1
+    near_count = len(near_indices)
+    top5 = _top_counter(anchor_counts, 5)
+    top20 = _top_counter(anchor_counts, 20)
+    top20_items = _item_list(top20)
+    train_predecessor_set = {int(item) for item in train_predecessor_counts}
+    top5_overlap = len(set(_item_list(top5)) & train_predecessor_set)
+    top20_overlap = len(set(top20_items) & train_predecessor_set)
+    flat = {
+        "num_near_top_last_item_anchors": int(len(anchor_counts)),
+        "top1_near_top_anchor_count": int(anchor_counts.most_common(1)[0][1]) if anchor_counts else 0,
+        "top1_near_top_anchor_coverage": _coverage_for_top_k(anchor_counts, 1, near_count),
+        "top5_near_top_anchor_coverage": _coverage_for_top_k(anchor_counts, 5, near_count),
+        "top10_near_top_anchor_coverage": _coverage_for_top_k(anchor_counts, 10, near_count),
+        "top20_near_top_anchor_coverage": _coverage_for_top_k(anchor_counts, 20, near_count),
+        "near_top_anchor_entropy": _shannon_entropy(anchor_counts),
+        "near_top_anchor_effective_count": _effective_count(anchor_counts),
+        "top5_near_top_anchor_items": _top_items_string(top5),
+        "top20_near_top_anchor_items": _top_items_string(top20),
+        "top5_near_top_anchor_train_predecessor_overlap_count": int(top5_overlap),
+        "top20_near_top_anchor_train_predecessor_overlap_count": int(top20_overlap),
+        "top20_near_top_anchor_train_predecessor_overlap_ratio": (
+            float(top20_overlap) / float(len(top20_items)) if top20_items else 0.0
+        ),
+    }
+    grouped = {
+        "definition": "last item of a near-top validation context",
+        "near_top_prefix_count": int(near_count),
+        "anchor_counts": anchor_counts,
+        "top_anchors": _top_counter(anchor_counts, top_k),
+        "top20_anchor_items": top20_items,
+        "entropy": flat["near_top_anchor_entropy"],
+        "effective_count": flat["near_top_anchor_effective_count"],
+        "train_predecessor_overlap": {
+            "top5_count": top5_overlap,
+            "top20_count": top20_overlap,
+            "top20_ratio": flat["top20_near_top_anchor_train_predecessor_overlap_ratio"],
+        },
+    }
+    return grouped, flat, top20_items
+
+
+def fake_session_item_availability(
+    fake_sessions: Sequence[Sequence[int]] | None,
+    items: Iterable[int],
+) -> dict[str, Any]:
+    item_set = {int(item) for item in items}
+    if fake_sessions is None:
+        return {
+            "available": False,
+            "coverage_count": None,
+            "coverage_ratio": None,
+            "occurrence_count": None,
+            "item_count": int(len(item_set)),
+        }
+    item_occurrences: Counter[int] = Counter()
+    for raw_session in fake_sessions:
+        for item in raw_session:
+            item = int(item)
+            if item in item_set:
+                item_occurrences[item] += 1
+    coverage_count = sum(1 for item in item_set if item_occurrences.get(item, 0) > 0)
+    return {
+        "available": True,
+        "coverage_count": int(coverage_count),
+        "coverage_ratio": float(coverage_count) / float(len(item_set)) if item_set else 0.0,
+        "occurrence_count": int(sum(item_occurrences.values())),
+        "item_count": int(len(item_set)),
+        "covered_items": sorted(int(item) for item in item_set if item_occurrences.get(item, 0) > 0),
+    }
+
+
+def compute_fake_session_availability(
+    fake_sessions: Sequence[Sequence[int]] | None,
+    *,
+    fake_sessions_path: Path | None,
+    top20_near_top_anchors: Sequence[int],
+    top20_train_predecessors: Sequence[int],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    anchor_payload = fake_session_item_availability(fake_sessions, top20_near_top_anchors)
+    predecessor_payload = fake_session_item_availability(fake_sessions, top20_train_predecessors)
+    flat = {
+        "fake_session_coverage_count_top20_near_top_anchors": anchor_payload["coverage_count"],
+        "fake_session_coverage_ratio_top20_near_top_anchors": anchor_payload["coverage_ratio"],
+        "fake_session_occurrence_count_top20_near_top_anchors": anchor_payload["occurrence_count"],
+        "fake_session_coverage_count_top20_train_predecessors": predecessor_payload["coverage_count"],
+        "fake_session_coverage_ratio_top20_train_predecessors": predecessor_payload["coverage_ratio"],
+        "fake_session_occurrence_count_top20_train_predecessors": predecessor_payload["occurrence_count"],
+    }
+    grouped = {
+        "available": fake_sessions is not None,
+        "fake_sessions_path": None if fake_sessions_path is None else str(fake_sessions_path),
+        "total_fake_sessions": None if fake_sessions is None else int(len(fake_sessions)),
+        "top20_near_top_anchors": anchor_payload,
+        "top20_train_predecessors": predecessor_payload,
+        "coverage_definition": "coverage_count is the number of top20 items appearing at least once in fake sessions; coverage_ratio divides by the number of top20 items",
+    }
+    return grouped, flat
+
+
+def _normalize_item_counter(value: Any) -> Counter[int] | None:
+    if not isinstance(value, Mapping):
+        return None
+    counter: Counter[int] = Counter()
+    for raw_key, raw_count in value.items():
+        try:
+            counter[int(raw_key)] += int(raw_count)
+        except (TypeError, ValueError):
+            return None
+    return counter
+
+
+def _parse_pair_key(raw_key: Any) -> tuple[int, int] | None:
+    if isinstance(raw_key, (list, tuple)) and len(raw_key) == 2:
+        return int(raw_key[0]), int(raw_key[1])
+    text = str(raw_key)
+    for separator in (",", "|", ":", "_"):
+        if separator in text:
+            left, right = text.split(separator, 1)
+            return int(left.strip()), int(right.strip())
+    return None
+
+
+def _normalize_pair_counter(value: Any) -> Counter[tuple[int, int]] | None:
+    if not isinstance(value, Mapping):
+        return None
+    counter: Counter[tuple[int, int]] = Counter()
+    for raw_key, raw_count in value.items():
+        try:
+            pair = _parse_pair_key(raw_key)
+            if pair is None:
+                return None
+            counter[pair] += int(raw_count)
+        except (TypeError, ValueError):
+            return None
+    return counter
+
+
+def _first_counter(metadata: Mapping[str, Any], keys: Sequence[str], *, pair: bool = False) -> Counter[Any] | None:
+    for key in keys:
+        value = metadata.get(key)
+        counter = _normalize_pair_counter(value) if pair else _normalize_item_counter(value)
+        if counter is not None:
+            return counter
+    return None
+
+
+def _full_records_from_metadata(metadata: Mapping[str, Any]) -> list[Mapping[str, Any]] | None:
+    fake_session_count = metadata.get("fake_session_count")
+    try:
+        expected = int(fake_session_count)
+    except (TypeError, ValueError):
+        return None
+    for key in ("records", "session_records", "operation_records", "per_session_records", "previews"):
+        value = metadata.get(key)
+        if isinstance(value, list) and len(value) == expected and all(isinstance(row, Mapping) for row in value):
+            return value
+    return None
+
+
+def _extract_preview_item_sets(metadata: Mapping[str, Any], operation_type: str) -> dict[str, Counter[Any] | None]:
+    left = _first_counter(
+        metadata,
+        ("left_item_counts", "left_counts", "left_item_count_distribution"),
+    )
+    right = _first_counter(
+        metadata,
+        ("right_item_counts", "right_counts", "right_item_count_distribution"),
+    )
+    pair = _first_counter(
+        metadata,
+        ("left_right_pair_counts", "pair_counts", "left_right_counts"),
+        pair=True,
+    )
+    if left is not None or right is not None or pair is not None:
+        return {"left": left, "right": right, "pair": pair}
+
+    records = _full_records_from_metadata(metadata)
+    if records is None:
+        return {"left": None, "right": None, "pair": None}
+    left_counter: Counter[int] = Counter()
+    right_counter: Counter[int] = Counter()
+    pair_counter: Counter[tuple[int, int]] = Counter()
+    for record in records:
+        left_item = record.get("left_item")
+        right_item = record.get("right_item")
+        if left_item is not None:
+            left_counter[int(left_item)] += 1
+        if right_item is not None:
+            right_counter[int(right_item)] += 1
+        if left_item is not None and right_item is not None:
+            pair_counter[(int(left_item), int(right_item))] += 1
+    return {
+        "left": left_counter,
+        "right": right_counter,
+        "pair": pair_counter if operation_type in {"insertion", "replacement"} else None,
+    }
+
+
+def _flatten_length_shift_summary(prefix: str, metadata: Mapping[str, Any]) -> dict[str, Any]:
+    summary = metadata.get("length_shift_summary")
+    if not isinstance(summary, Mapping):
+        return {
+            f"{prefix}_length_shift_min": None,
+            f"{prefix}_length_shift_max": None,
+            f"{prefix}_length_shift_mean": None,
+        }
+    return {
+        f"{prefix}_length_shift_min": summary.get("min"),
+        f"{prefix}_length_shift_max": summary.get("max"),
+        f"{prefix}_length_shift_mean": summary.get("mean"),
+    }
+
+
+def _extract_position_ratio(metadata: Mapping[str, Any], field: str) -> Any:
+    group_ratios = metadata.get("replacement_position_group_ratios")
+    if isinstance(group_ratios, Mapping) and field in group_ratios:
+        return group_ratios[field]
+    ratios = metadata.get("replacement_position_ratios")
+    if not isinstance(ratios, Mapping):
+        return None
+    if field == "pos4_5":
+        return float(ratios.get("4", 0.0) or 0.0) + float(ratios.get("5", 0.0) or 0.0)
+    if field == "pos6_plus":
+        total = 0.0
+        for key, value in ratios.items():
+            try:
+                if int(key) >= 6:
+                    total += float(value)
+            except (TypeError, ValueError):
+                continue
+        return total
+    if field == "tail_position":
+        return metadata.get("tail_position_ratio", metadata.get("tail_fallback_ratio"))
+    if field.startswith("pos"):
+        return ratios.get(field[3:])
+    return None
+
+
+def _insertion_tail_slot_ratio(metadata: Mapping[str, Any]) -> Any:
+    # For Internal Random Insertion-NZ, "tail slot" means appending after the
+    # final original item. The method's valid slots are 1..L-1, so appending at
+    # slot L is not part of the action space.
+    records = _full_records_from_metadata(metadata)
+    if records is None:
+        return 0.0
+    total = 0
+    append_tail = 0
+    for record in records:
+        if record.get("insertion_slot") is None or record.get("original_length") is None:
+            return None
+        slot = int(record["insertion_slot"])
+        original_length = int(record["original_length"])
+        total += 1
+        if slot == original_length:
+            append_tail += 1
+    return float(append_tail) / float(total) if total else 0.0
+
+
+def _replacement_position_ratio_from_complete_records(
+    metadata: Mapping[str, Any],
+    field: str,
+) -> Any:
+    extracted = _extract_position_ratio(metadata, field)
+    if extracted is not None:
+        return extracted
+    records = _full_records_from_metadata(metadata)
+    if records is None:
+        return None
+    counts: Counter[str] = Counter()
+    for record in records:
+        if record.get("replacement_position") is None:
+            return None
+        if bool(record.get("used_tail_fallback", False)):
+            group = "tail_position"
+        else:
+            group = _position_group(int(record["replacement_position"]))
+        counts[group] += 1
+    total = sum(counts.values())
+    return float(counts[field]) / float(total) if total else 0.0
+
+
+def _metadata_base(prefix: str, *, source: str, metadata_available: bool) -> dict[str, Any]:
+    return {
+        f"{prefix}_exposure_source": source,
+        f"{prefix}_metadata_available": bool(metadata_available),
+        f"{prefix}_fake_session_count": None,
+        f"{prefix}_length_shift_min": None,
+        f"{prefix}_length_shift_max": None,
+        f"{prefix}_length_shift_mean": None,
+        f"{prefix}_unique_left_item_count": None,
+        f"{prefix}_unique_right_item_count": None,
+        f"{prefix}_unique_left_right_pair_count": None,
+        f"{prefix}_candidate_unique_left_item_count": None,
+        f"{prefix}_candidate_unique_right_item_count": None,
+        f"{prefix}_candidate_unique_left_right_pair_count": None,
+        f"{prefix}_candidate_left_entropy": None,
+        f"{prefix}_candidate_right_entropy": None,
+        f"{prefix}_candidate_pair_entropy": None,
+        f"{prefix}_sampled_unique_left_item_count": None,
+        f"{prefix}_sampled_unique_right_item_count": None,
+        f"{prefix}_sampled_unique_left_right_pair_count": None,
+        f"{prefix}_left_entropy": None,
+        f"{prefix}_right_entropy": None,
+        f"{prefix}_pair_entropy": None,
+        f"{prefix}_left_overlap_count_with_top20_near_top_anchors": None,
+        f"{prefix}_left_overlap_ratio_relative_to_unique_left": None,
+        f"{prefix}_left_overlap_ratio_relative_to_top20_near_top_anchors": None,
+    }
+
+
+def _counter_entropy_or_none(counter: Counter[Any] | None) -> float | None:
+    return None if counter is None else _shannon_entropy(counter)
+
+
+def _overlap_from_left_counter(
+    left_counter: Counter[int] | None,
+    top20_near_top_anchors: Sequence[int],
+) -> dict[str, Any]:
+    if left_counter is None:
+        return {
+            "count": None,
+            "ratio_unique_left": None,
+            "ratio_top20_near_top_anchors": None,
+        }
+    left_set = {int(item) for item in left_counter}
+    anchor_set = {int(item) for item in top20_near_top_anchors}
+    overlap_count = len(left_set & anchor_set)
+    return {
+        "count": int(overlap_count),
+        "ratio_unique_left": float(overlap_count) / float(len(left_set)) if left_set else 0.0,
+        "ratio_top20_near_top_anchors": (
+            float(overlap_count) / float(len(anchor_set)) if anchor_set else 0.0
+        ),
+    }
+
+
+def _exposure_counts_from_counters(
+    metadata: Mapping[str, Any],
+    operation_type: str,
+) -> tuple[Counter[int] | None, Counter[int] | None, Counter[tuple[int, int]] | None]:
+    counters = _extract_preview_item_sets(metadata, operation_type)
+    return counters["left"], counters["right"], counters["pair"]
+
+
+def parse_insertion_exposure_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    top20_near_top_anchors: Sequence[int],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    left_counter, right_counter, pair_counter = _exposure_counts_from_counters(metadata, "insertion")
+    overlap = _overlap_from_left_counter(left_counter, top20_near_top_anchors)
+    flat = _metadata_base("insertion", source="metadata", metadata_available=True)
+    flat.update(_flatten_length_shift_summary("insertion", metadata))
+    flat.update(
+        {
+            "insertion_fake_session_count": metadata.get("fake_session_count"),
+            "insertion_tail_slot_ratio": _insertion_tail_slot_ratio(metadata),
+            "insertion_unique_left_item_count": metadata.get(
+                "unique_left_item_count",
+                len(left_counter) if left_counter is not None else None,
+            ),
+            "insertion_unique_right_item_count": metadata.get(
+                "unique_right_item_count",
+                len(right_counter) if right_counter is not None else None,
+            ),
+            "insertion_unique_left_right_pair_count": metadata.get(
+                "unique_left_right_pair_count",
+                len(pair_counter) if pair_counter is not None else None,
+            ),
+            "insertion_sampled_unique_left_item_count": metadata.get(
+                "unique_left_item_count",
+                len(left_counter) if left_counter is not None else None,
+            ),
+            "insertion_sampled_unique_right_item_count": metadata.get(
+                "unique_right_item_count",
+                len(right_counter) if right_counter is not None else None,
+            ),
+            "insertion_sampled_unique_left_right_pair_count": metadata.get(
+                "unique_left_right_pair_count",
+                len(pair_counter) if pair_counter is not None else None,
+            ),
+            "insertion_every_target_has_left_neighbor": metadata.get(
+                "every_inserted_target_has_left_neighbor"
+            ),
+            "insertion_every_target_has_right_neighbor": metadata.get(
+                "every_inserted_target_has_right_neighbor"
+            ),
+            "insertion_left_entropy": _counter_entropy_or_none(left_counter),
+            "insertion_right_entropy": _counter_entropy_or_none(right_counter),
+            "insertion_pair_entropy": _counter_entropy_or_none(pair_counter),
+            "insertion_left_overlap_count_with_top20_near_top_anchors": overlap["count"],
+            "insertion_left_overlap_ratio_relative_to_unique_left": overlap["ratio_unique_left"],
+            "insertion_left_overlap_ratio_relative_to_top20_near_top_anchors": overlap[
+                "ratio_top20_near_top_anchors"
+            ],
+        }
+    )
+    grouped = {
+        "available": True,
+        "source": "metadata",
+        "metadata_fields_used_for_entropy_and_overlap": left_counter is not None,
+        "flat": flat,
+        "top_left_items": [] if left_counter is None else _top_counter(left_counter, 20),
+        "top_right_items": [] if right_counter is None else _top_counter(right_counter, 20),
+        "top_left_right_pairs": [] if pair_counter is None else _top_pair_counter(pair_counter, 20),
+    }
+    return grouped, flat
+
+
+def parse_replacement_exposure_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    top20_near_top_anchors: Sequence[int],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    left_counter, right_counter, pair_counter = _exposure_counts_from_counters(metadata, "replacement")
+    overlap = _overlap_from_left_counter(left_counter, top20_near_top_anchors)
+    flat = _metadata_base("replacement", source="metadata", metadata_available=True)
+    flat.update(_flatten_length_shift_summary("replacement", metadata))
+    flat.update(
+        {
+            "replacement_fake_session_count": metadata.get("fake_session_count"),
+            "replacement_internal_replacement_count": metadata.get("internal_replacement_count"),
+            "replacement_internal_replacement_ratio": metadata.get("internal_replacement_ratio"),
+            "replacement_tail_fallback_count": metadata.get("tail_fallback_count"),
+            "replacement_tail_fallback_ratio": metadata.get("tail_fallback_ratio"),
+            "replacement_unique_left_item_count": metadata.get(
+                "unique_left_item_count",
+                len(left_counter) if left_counter is not None else None,
+            ),
+            "replacement_unique_right_item_count": metadata.get(
+                "unique_right_item_count",
+                len(right_counter) if right_counter is not None else None,
+            ),
+            "replacement_unique_left_right_pair_count": metadata.get(
+                "unique_left_right_pair_count",
+                len(pair_counter) if pair_counter is not None else None,
+            ),
+            "replacement_sampled_unique_left_item_count": metadata.get(
+                "unique_left_item_count",
+                len(left_counter) if left_counter is not None else None,
+            ),
+            "replacement_sampled_unique_right_item_count": metadata.get(
+                "unique_right_item_count",
+                len(right_counter) if right_counter is not None else None,
+            ),
+            "replacement_sampled_unique_left_right_pair_count": metadata.get(
+                "unique_left_right_pair_count",
+                len(pair_counter) if pair_counter is not None else None,
+            ),
+            "replacement_every_internal_target_has_left_neighbor": metadata.get(
+                "every_internal_replaced_target_has_left_neighbor"
+            ),
+            "replacement_every_internal_target_has_right_neighbor": metadata.get(
+                "every_internal_replaced_target_has_right_neighbor"
+            ),
+            "replacement_every_target_has_left_neighbor": metadata.get(
+                "every_replaced_target_has_left_neighbor"
+            ),
+            "replacement_every_target_has_right_neighbor": metadata.get(
+                "every_replaced_target_has_right_neighbor"
+            ),
+            "replacement_pos1_ratio": _replacement_position_ratio_from_complete_records(metadata, "pos1"),
+            "replacement_pos2_ratio": _replacement_position_ratio_from_complete_records(metadata, "pos2"),
+            "replacement_pos3_ratio": _replacement_position_ratio_from_complete_records(metadata, "pos3"),
+            "replacement_pos4_5_ratio": _replacement_position_ratio_from_complete_records(metadata, "pos4_5"),
+            "replacement_pos6_plus_ratio": _replacement_position_ratio_from_complete_records(metadata, "pos6_plus"),
+            "replacement_tail_position_ratio": _replacement_position_ratio_from_complete_records(metadata, "tail_position"),
+            "replacement_left_entropy": _counter_entropy_or_none(left_counter),
+            "replacement_right_entropy": _counter_entropy_or_none(right_counter),
+            "replacement_pair_entropy": _counter_entropy_or_none(pair_counter),
+            "replacement_left_overlap_count_with_top20_near_top_anchors": overlap["count"],
+            "replacement_left_overlap_ratio_relative_to_unique_left": overlap["ratio_unique_left"],
+            "replacement_left_overlap_ratio_relative_to_top20_near_top_anchors": overlap[
+                "ratio_top20_near_top_anchors"
+            ],
+        }
+    )
+    grouped = {
+        "available": True,
+        "source": "metadata",
+        "metadata_fields_used_for_entropy_and_overlap": left_counter is not None,
+        "flat": flat,
+        "top_left_items": [] if left_counter is None else _top_counter(left_counter, 20),
+        "top_right_items": [] if right_counter is None else _top_counter(right_counter, 20),
+        "top_left_right_pairs": [] if pair_counter is None else _top_pair_counter(pair_counter, 20),
+    }
+    return grouped, flat
+
+
+def simulate_insertion_exposure(
+    fake_sessions: Sequence[Sequence[int]] | None,
+    *,
+    top20_near_top_anchors: Sequence[int],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if fake_sessions is None:
+        flat = _metadata_base("insertion", source="missing", metadata_available=False)
+        flat.update(
+            {
+                "insertion_tail_slot_ratio": None,
+                "insertion_every_target_has_left_neighbor": None,
+                "insertion_every_target_has_right_neighbor": None,
+            }
         )
-        matches = sorted(Path.cwd().glob(pattern), key=lambda path: str(path))
-        if matches:
-            resolved[int(target)] = matches[-1]
+        return {"available": False, "source": "missing", "flat": flat}, flat
+    left_counter: Counter[int] = Counter()
+    right_counter: Counter[int] = Counter()
+    pair_counter: Counter[tuple[int, int]] = Counter()
+    valid_slot_count = 0
+    for raw_session in fake_sessions:
+        session = [int(item) for item in raw_session]
+        if len(session) < 2:
+            continue
+        for slot in range(1, len(session)):
+            left = int(session[slot - 1])
+            right = int(session[slot])
+            left_counter[left] += 1
+            right_counter[right] += 1
+            pair_counter[(left, right)] += 1
+            valid_slot_count += 1
+    overlap = _overlap_from_left_counter(left_counter, top20_near_top_anchors)
+    flat = _metadata_base("insertion", source="simulated_from_fake_sessions", metadata_available=False)
+    flat.update(
+        {
+            "insertion_fake_session_count": int(len(fake_sessions)),
+            "insertion_length_shift_min": 1.0,
+            "insertion_length_shift_max": 1.0,
+            "insertion_length_shift_mean": 1.0,
+            "insertion_tail_slot_ratio": 0.0,
+            "insertion_unique_left_item_count": int(len(left_counter)),
+            "insertion_unique_right_item_count": int(len(right_counter)),
+            "insertion_unique_left_right_pair_count": int(len(pair_counter)),
+            "insertion_candidate_unique_left_item_count": int(len(left_counter)),
+            "insertion_candidate_unique_right_item_count": int(len(right_counter)),
+            "insertion_candidate_unique_left_right_pair_count": int(len(pair_counter)),
+            "insertion_every_target_has_left_neighbor": bool(valid_slot_count > 0),
+            "insertion_every_target_has_right_neighbor": bool(valid_slot_count > 0),
+            "insertion_left_entropy": _shannon_entropy(left_counter),
+            "insertion_right_entropy": _shannon_entropy(right_counter),
+            "insertion_pair_entropy": _shannon_entropy(pair_counter),
+            "insertion_candidate_left_entropy": _shannon_entropy(left_counter),
+            "insertion_candidate_right_entropy": _shannon_entropy(right_counter),
+            "insertion_candidate_pair_entropy": _shannon_entropy(pair_counter),
+            "insertion_left_overlap_count_with_top20_near_top_anchors": overlap["count"],
+            "insertion_left_overlap_ratio_relative_to_unique_left": overlap["ratio_unique_left"],
+            "insertion_left_overlap_ratio_relative_to_top20_near_top_anchors": overlap[
+                "ratio_top20_near_top_anchors"
+            ],
+        }
+    )
+    grouped = {
+        "available": True,
+        "source": "simulated_from_fake_sessions",
+        "candidate_space_definition": "valid insertion slots are 1..L-1, excluding prepend slot 0 and append-after-tail slot L",
+        "valid_slot_count": int(valid_slot_count),
+        "flat": flat,
+        "top_left_items": _top_counter(left_counter, 20),
+        "top_right_items": _top_counter(right_counter, 20),
+        "top_left_right_pairs": _top_pair_counter(pair_counter, 20),
+    }
+    return grouped, flat
+
+
+def _position_group(position: int) -> str:
+    if position == 1:
+        return "pos1"
+    if position == 2:
+        return "pos2"
+    if position == 3:
+        return "pos3"
+    if position in {4, 5}:
+        return "pos4_5"
+    return "pos6_plus"
+
+
+def simulate_replacement_exposure(
+    fake_sessions: Sequence[Sequence[int]] | None,
+    *,
+    top20_near_top_anchors: Sequence[int],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if fake_sessions is None:
+        flat = _metadata_base("replacement", source="missing", metadata_available=False)
+        flat.update(
+            {
+                "replacement_internal_replacement_count": None,
+                "replacement_internal_replacement_ratio": None,
+                "replacement_tail_fallback_count": None,
+                "replacement_tail_fallback_ratio": None,
+                "replacement_every_internal_target_has_left_neighbor": None,
+                "replacement_every_internal_target_has_right_neighbor": None,
+                "replacement_every_target_has_left_neighbor": None,
+                "replacement_every_target_has_right_neighbor": None,
+                "replacement_pos1_ratio": None,
+                "replacement_pos2_ratio": None,
+                "replacement_pos3_ratio": None,
+                "replacement_pos4_5_ratio": None,
+                "replacement_pos6_plus_ratio": None,
+                "replacement_tail_position_ratio": None,
+            }
+        )
+        return {"available": False, "source": "missing", "flat": flat}, flat
+    left_counter: Counter[int] = Counter()
+    right_counter: Counter[int] = Counter()
+    pair_counter: Counter[tuple[int, int]] = Counter()
+    group_counts: Counter[str] = Counter()
+    tail_fallback_count = 0
+    internal_session_count = 0
+    valid_position_count = 0
+    for raw_session in fake_sessions:
+        session = [int(item) for item in raw_session]
+        if len(session) < 2:
+            continue
+        if len(session) >= 3:
+            positions = list(range(1, len(session) - 1))
+            internal_session_count += 1
+            tail_fallback = False
+        else:
+            positions = [1]
+            tail_fallback = True
+            tail_fallback_count += 1
+        for position in positions:
+            left = int(session[position - 1])
+            right = None if tail_fallback else int(session[position + 1])
+            left_counter[left] += 1
+            if right is not None:
+                right_counter[right] += 1
+                pair_counter[(left, right)] += 1
+            group_counts["tail_position" if tail_fallback else _position_group(position)] += 1
+            valid_position_count += 1
+    overlap = _overlap_from_left_counter(left_counter, top20_near_top_anchors)
+    denominator = float(valid_position_count) if valid_position_count else 0.0
+    flat = _metadata_base("replacement", source="simulated_from_fake_sessions", metadata_available=False)
+    flat.update(
+        {
+            "replacement_fake_session_count": int(len(fake_sessions)),
+            "replacement_length_shift_min": 0.0,
+            "replacement_length_shift_max": 0.0,
+            "replacement_length_shift_mean": 0.0,
+            "replacement_internal_replacement_count": int(internal_session_count),
+            "replacement_internal_replacement_ratio": (
+                float(internal_session_count) / float(len(fake_sessions)) if fake_sessions else 0.0
+            ),
+            "replacement_tail_fallback_count": int(tail_fallback_count),
+            "replacement_tail_fallback_ratio": (
+                float(tail_fallback_count) / float(len(fake_sessions)) if fake_sessions else 0.0
+            ),
+            "replacement_unique_left_item_count": int(len(left_counter)),
+            "replacement_unique_right_item_count": int(len(right_counter)),
+            "replacement_unique_left_right_pair_count": int(len(pair_counter)),
+            "replacement_candidate_unique_left_item_count": int(len(left_counter)),
+            "replacement_candidate_unique_right_item_count": int(len(right_counter)),
+            "replacement_candidate_unique_left_right_pair_count": int(len(pair_counter)),
+            "replacement_every_internal_target_has_left_neighbor": bool(internal_session_count > 0),
+            "replacement_every_internal_target_has_right_neighbor": bool(internal_session_count > 0),
+            "replacement_every_target_has_left_neighbor": bool(valid_position_count > 0),
+            "replacement_every_target_has_right_neighbor": bool(tail_fallback_count == 0 and valid_position_count > 0),
+            "replacement_pos1_ratio": float(group_counts["pos1"]) / denominator if denominator else 0.0,
+            "replacement_pos2_ratio": float(group_counts["pos2"]) / denominator if denominator else 0.0,
+            "replacement_pos3_ratio": float(group_counts["pos3"]) / denominator if denominator else 0.0,
+            "replacement_pos4_5_ratio": float(group_counts["pos4_5"]) / denominator if denominator else 0.0,
+            "replacement_pos6_plus_ratio": float(group_counts["pos6_plus"]) / denominator if denominator else 0.0,
+            "replacement_tail_position_ratio": float(group_counts["tail_position"]) / denominator if denominator else 0.0,
+            "replacement_left_entropy": _shannon_entropy(left_counter),
+            "replacement_right_entropy": _shannon_entropy(right_counter),
+            "replacement_pair_entropy": _shannon_entropy(pair_counter),
+            "replacement_candidate_left_entropy": _shannon_entropy(left_counter),
+            "replacement_candidate_right_entropy": _shannon_entropy(right_counter),
+            "replacement_candidate_pair_entropy": _shannon_entropy(pair_counter),
+            "replacement_left_overlap_count_with_top20_near_top_anchors": overlap["count"],
+            "replacement_left_overlap_ratio_relative_to_unique_left": overlap["ratio_unique_left"],
+            "replacement_left_overlap_ratio_relative_to_top20_near_top_anchors": overlap[
+                "ratio_top20_near_top_anchors"
+            ],
+        }
+    )
+    grouped = {
+        "available": True,
+        "source": "simulated_from_fake_sessions",
+        "candidate_space_definition": "valid positions are 1..L-2 for L>=3; L==2 uses fallback position 1",
+        "valid_position_count": int(valid_position_count),
+        "flat": flat,
+        "top_left_items": _top_counter(left_counter, 20),
+        "top_right_items": _top_counter(right_counter, 20),
+        "top_left_right_pairs": _top_pair_counter(pair_counter, 20),
+    }
+    return grouped, flat
+
+
+def _metadata_target_from_json(path: Path) -> int:
+    payload = _load_json_or_none(path)
+    if payload is None:
+        raise ValueError(f"Metadata file is missing or not a JSON object: {path}")
+    target = payload.get("target_item")
+    if target is None:
+        raise ValueError(f"Metadata file does not contain target_item: {path}")
+    return int(target)
+
+
+def resolve_exposure_metadata_paths(
+    *,
+    explicit_paths: Sequence[str | Path],
+    metadata_dir: str | Path | None,
+    filename: str,
+    method_name: str,
+) -> dict[int, Path]:
+    candidates: list[Path] = []
+    if explicit_paths:
+        candidates = [_repo_path(path) for path in explicit_paths]
+    elif metadata_dir is not None:
+        root = _repo_path(metadata_dir)
+        if root.exists():
+            candidates = sorted(root.rglob(filename), key=lambda path: str(path))
+    resolved: dict[int, Path] = {}
+    for path in candidates:
+        if not path.exists():
+            raise FileNotFoundError(f"{method_name} metadata path does not exist: {path}")
+        target = _metadata_target_from_json(path)
+        if target in resolved:
+            raise ValueError(
+                f"Multiple {method_name} metadata files found for target {target}: "
+                f"{resolved[target]} and {path}. Provide one explicit path list to disambiguate."
+            )
+        resolved[target] = path
     return resolved
 
 
-def compute_p5_survey(
-    *,
-    config: Config,
-    target: int,
-    metadata_path: Path | None,
-    fake_sessions: Sequence[Sequence[int]] | None,
-    vulnerable_last_items: Sequence[Mapping[str, Any]],
-    vulnerable_pairs: Sequence[Mapping[str, Any]],
-    train_predecessors: Sequence[Mapping[str, Any]],
-    train_successors: Sequence[Mapping[str, Any]],
-    train_cooccurrence: Sequence[Mapping[str, Any]],
-    top_k: int,
-) -> dict[str, Any]:
-    if metadata_path is None or not metadata_path.exists():
-        return {
-            "available": False,
-            "message": f"P5 metadata unavailable for target {int(target)}; overlap analysis skipped.",
-        }
-    metadata = _read_json(metadata_path) or {}
-    if fake_sessions is None:
-        fake_path = metadata.get("template_fake_sessions_path")
-        if isinstance(fake_path, str) and fake_path.strip() and _repo_path(fake_path).exists():
-            fake_sessions = _load_pickle(_repo_path(fake_path))
-    if fake_sessions is None:
-        return {
-            "available": False,
-            "metadata_path": str(metadata_path),
-            "message": f"P5 metadata found for target {int(target)}, but fake sessions were unavailable; overlap analysis skipped.",
-        }
-
-    topk_ratio = float(metadata.get("internal_insertion_slot_topk_ratio", config.attack.replacement_topk_ratio))
-    policy = InternalRandomInsertionNonzeroWhenPossiblePolicy(
-        topk_ratio=topk_ratio,
-        rng=random.Random(int(config.seeds.fake_session_seed)),
-    )
-    results = [policy.apply_with_metadata(session, int(target)) for session in fake_sessions]
-    left_counts = Counter(int(result.left_item) for result in results)
-    right_counts = Counter(int(result.right_item) for result in results)
-    pair_counts = Counter((int(result.left_item), int(result.right_item)) for result in results)
-    slot_counts = Counter(int(result.insertion_slot) for result in results)
-    length_counts = Counter(len(result.session) for result in results)
-
-    vulnerable_left_set = {int(row["anchor_item"]) for row in vulnerable_last_items}
-    vulnerable_pair_set = {
-        (int(row["item_a"]), int(row["item_b"])) for row in vulnerable_pairs
-    }
-    predecessor_set = {int(row["predecessor_item"]) for row in train_predecessors}
-    successor_set = {int(row["successor_item"]) for row in train_successors}
-    cooccur_set = {int(row["cooccur_item"]) for row in train_cooccurrence}
-    left_set = set(left_counts)
-    right_set = set(right_counts)
-    pair_set = set(pair_counts)
-
-    def overlap_payload(source: set[Any], anchor_set: set[Any], label: str) -> dict[str, Any]:
-        overlap = source & anchor_set
-        top = sorted(
-            overlap,
-            key=lambda item: (
-                -(
-                    left_counts.get(item, 0)
-                    if not isinstance(item, tuple)
-                    else pair_counts.get(item, 0)
-                ),
-                item,
-            ),
-        )[:top_k]
-        return {
-            "name": label,
-            "overlap_count": int(len(overlap)),
-            "overlap_ratio_relative_to_p5_unique": (
-                float(len(overlap)) / float(len(source)) if source else 0.0
-            ),
-            "overlap_ratio_relative_to_anchor_set": (
-                float(len(overlap)) / float(len(anchor_set)) if anchor_set else 0.0
-            ),
-            "top_overlapping_anchors": [
-                list(item) if isinstance(item, tuple) else int(item) for item in top
-            ],
-        }
-
-    metrics_path = metadata_path.parent / "victims" / "srgnn" / "metrics.json"
-    metrics = _read_json(metrics_path) or {}
-    metric_values = metrics.get("metrics", {}) if isinstance(metrics.get("metrics"), dict) else {}
-    raw_lowk = None
-    lowk_keys = (
-        "targeted_mrr@10",
-        "targeted_mrr@20",
-        "targeted_recall@10",
-        "targeted_recall@20",
-    )
-    if all(key in metric_values for key in lowk_keys):
-        raw_lowk = float(sum(float(metric_values[key]) for key in lowk_keys) / len(lowk_keys))
-
-    return {
-        "available": True,
-        "metadata_path": str(metadata_path),
-        "p5_raw_lowk": raw_lowk,
-        "unique_left_item_count": int(len(left_counts)),
-        "unique_right_item_count": int(len(right_counts)),
-        "unique_left_right_pair_count": int(len(pair_counts)),
-        "top_left_items": _top_counter(left_counts, top_k),
-        "top_right_items": _top_counter(right_counts, top_k),
-        "top_left_right_pairs": [
-            {"item_a": int(pair[0]), "item_b": int(pair[1]), "count": int(count)}
-            for pair, count in pair_counts.most_common(top_k)
-        ],
-        "insertion_slot_distribution": {
-            str(slot): int(count) for slot, count in sorted(slot_counts.items())
-        },
-        "session_length_distribution": {
-            f"len{length}": int(count) for length, count in sorted(length_counts.items())
-        },
-        "overlap": {
-            "p5_left_items_intersect_vulnerable_last_item_anchors": overlap_payload(
-                left_set,
-                vulnerable_left_set,
-                "P5 left items ∩ vulnerable last-item anchors",
-            ),
-            "p5_right_items_intersect_target_successors": overlap_payload(
-                right_set,
-                successor_set,
-                "P5 right items ∩ target successors",
-            ),
-            "p5_left_right_pairs_intersect_vulnerable_last_2_prefix_pairs": overlap_payload(
-                pair_set,
-                vulnerable_pair_set,
-                "P5 left-right pairs ∩ vulnerable last-2 prefix pairs",
-            ),
-            "p5_left_items_intersect_train_predecessors": overlap_payload(
-                left_set,
-                predecessor_set,
-                "P5 left items ∩ train predecessors",
-            ),
-            "p5_left_items_intersect_cooccurrence_items": overlap_payload(
-                left_set,
-                cooccur_set,
-                "P5 left items ∩ co-occurrence items",
-            ),
-        },
-        "left_counts": {str(item): int(count) for item, count in left_counts.items()},
-        "right_counts": {str(item): int(count) for item, count in right_counts.items()},
-    }
+def _load_exposure_metadata(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    payload = _load_json_or_none(path)
+    if payload is None:
+        raise ValueError(f"Exposure metadata file is missing or invalid: {path}")
+    return payload
 
 
-def candidate_rows(
-    *,
-    target: int,
-    train_predecessors: Sequence[Mapping[str, Any]],
-    vulnerable_last_items: Sequence[Mapping[str, Any]],
-    cooccurrence: Sequence[Mapping[str, Any]],
-    fake_availability: Mapping[int, Mapping[str, Any]],
-    p5: Mapping[str, Any],
-) -> list[dict[str, Any]]:
-    predecessor_by_item = {int(row["predecessor_item"]): row for row in train_predecessors}
-    vulnerable_by_item = {int(row["anchor_item"]): row for row in vulnerable_last_items}
-    cooccur_by_item = {int(row["cooccur_item"]): row for row in cooccurrence}
-    p5_left_counts = {
-        int(item): int(count)
-        for item, count in (p5.get("left_counts", {}) if p5.get("available") else {}).items()
-    }
-    p5_right_counts = {
-        int(item): int(count)
-        for item, count in (p5.get("right_counts", {}) if p5.get("available") else {}).items()
-    }
-    anchors = (
-        set(predecessor_by_item)
-        | set(vulnerable_by_item)
-        | set(cooccur_by_item)
-        | set(p5_left_counts)
-    )
-    rows: list[dict[str, Any]] = []
-    for anchor in sorted(anchors):
-        pred = predecessor_by_item.get(anchor, {})
-        vuln = vulnerable_by_item.get(anchor, {})
-        cooccur = cooccur_by_item.get(anchor, {})
-        fake = fake_availability.get(anchor, {})
-        avg_rank = vuln.get("avg_target_rank")
-        score = anchor_score(
-            vulnerable_coverage=float(vuln.get("vulnerable_coverage", 0.0) or 0.0),
-            fake_session_count_with_anchor=int(fake.get("fake_session_count_with_anchor", 0) or 0),
-            avg_vulnerable_target_rank=(
-                None if avg_rank is None else float(avg_rank)
-            ),
-        )
-        overlap_flags = []
-        if anchor in p5_left_counts and anchor in vulnerable_by_item:
-            overlap_flags.append("p5_left_and_vulnerable_last_item")
-        if anchor in p5_left_counts and anchor in predecessor_by_item:
-            overlap_flags.append("p5_left_and_train_predecessor")
-        if anchor in p5_left_counts and anchor in cooccur_by_item:
-            overlap_flags.append("p5_left_and_cooccur")
-        rows.append(
-            {
-                "target_item": int(target),
-                "anchor_item": int(anchor),
-                "is_train_predecessor": bool(anchor in predecessor_by_item),
-                "is_vulnerable_last_item": bool(anchor in vulnerable_by_item),
-                "is_cooccur_item": bool(anchor in cooccur_by_item),
-                "is_p5_left_item": bool(anchor in p5_left_counts),
-                "train_predecessor_count_to_target": int(pred.get("count_i_to_target", 0) or 0),
-                "train_predecessor_confidence": pred.get("confidence_i_to_target", 0.0),
-                "train_predecessor_lift": pred.get("lift_i_to_target"),
-                "vulnerable_count": int(vuln.get("vulnerable_count", 0) or 0),
-                "vulnerable_coverage": float(vuln.get("vulnerable_coverage", 0.0) or 0.0),
-                "avg_vulnerable_target_rank": avg_rank,
-                "avg_vulnerable_target_score": vuln.get("avg_target_score"),
-                "cooccur_count": int(cooccur.get("cooccur_count", 0) or 0),
-                "fake_session_count_with_anchor": int(fake.get("fake_session_count_with_anchor", 0) or 0),
-                "fake_session_coverage": float(fake.get("fake_session_coverage", 0.0) or 0.0),
-                "internal_insertion_feasible_count": int(fake.get("anchor_after_insertion_feasible_count", 0) or 0),
-                "internal_insertion_feasible_ratio": float(fake.get("internal_insertion_feasible_ratio", 0.0) or 0.0),
-                "p5_left_count": int(p5_left_counts.get(anchor, 0)),
-                "p5_right_count": int(p5_right_counts.get(anchor, 0)),
-                "p5_overlap_flags": ";".join(overlap_flags),
-                "anchor_score": score,
-            }
-        )
-    rows.sort(key=lambda row: (-float(row["anchor_score"]), -int(row["vulnerable_count"]), int(row["anchor_item"])))
-    return rows
+def build_summary_row(*parts: Mapping[str, Any]) -> dict[str, Any]:
+    row: dict[str, Any] = {column: None for column in SUMMARY_COLUMNS}
+    for part in parts:
+        for key, value in part.items():
+            if key in row:
+                row[key] = value
+    missing = [column for column in SUMMARY_COLUMNS if column not in row]
+    if missing:
+        raise RuntimeError(f"Summary row missing columns: {missing}")
+    return row
 
 
 def _markdown_table(rows: Sequence[Sequence[Any]], headers: Sequence[str]) -> str:
@@ -905,7 +1501,7 @@ def _markdown_table(rows: Sequence[Sequence[Any]], headers: Sequence[str]) -> st
         "| " + " | ".join("---" for _ in headers) + " |",
     ]
     for row in rows:
-        lines.append("| " + " | ".join("" if value is None else str(value) for value in row) + " |")
+        lines.append("| " + " | ".join(_fmt(value) for value in row) + " |")
     return "\n".join(lines)
 
 
@@ -914,302 +1510,209 @@ def _fmt(value: Any, digits: int = 4) -> str:
         return ""
     if isinstance(value, float):
         return f"{value:.{digits}f}"
+    if isinstance(value, (list, tuple, dict)):
+        return json.dumps(_to_jsonable(value), sort_keys=True)
     return str(value)
 
 
-def write_target_markdown(path: Path, payload: Mapping[str, Any], candidates: Sequence[Mapping[str, Any]]) -> None:
-    target = payload["target_item"]
-    train = payload["target_sparsity"]["train_sub"]
-    vulnerable = payload["vulnerable_validation_prefixes"]
-    neighbors = payload["historical_neighbors_train_sub"]
-    p5 = payload["p5_internal_random_insertion_local_pair_survey"]
-    top_vuln = vulnerable["last_item_anchors"][:10]
-    top_pred = neighbors["predecessors"][:10]
-    top_candidates = candidates[:10]
+def write_target_markdown(path: Path, payload: Mapping[str, Any], row: Mapping[str, Any]) -> None:
+    target = int(payload["target_item"])
+    notes = payload.get("notes", [])
     lines = [
-        f"# Target Anchor Survey: {target}",
+        f"# Target Action Feature Survey: {target}",
         "",
-        "This is an analysis-only survey. No attack method was implemented or modified.",
-        f"Rank convention: `{RANK_CONVENTION}`.",
-        "Vulnerable anchors represent validation contexts where the target is not top-20 yet but is close enough to be potentially promoted.",
-        "Co-occurrence is auxiliary because SBR is next-item prediction.",
-        "anchor_score is exploratory and not yet validated as a poisoning objective.",
+        "This analysis describes data-side and clean-model characteristics only. It does not compare attack outcomes or select attack methods.",
         "",
-        "## Target Sparsity",
+        "## Target popularity and sparsity",
         _markdown_table(
             [[
-                "train_sub",
-                train["target_occurrence_count"],
-                train["sessions_containing_target"],
-                train["target_item_frequency_rank"],
-                _fmt(train["target_popularity_percentile"]),
-                train["density_relative_to_dataset"],
+                row["train_target_occurrence_count"],
+                row["train_target_session_count"],
+                row["train_target_label_count"],
+                row["valid_target_occurrence_count"],
+                row["valid_target_session_count"],
+                row["valid_target_label_count"],
+                row["target_frequency_rank"],
+                row["target_popularity_percentile"],
+                row["target_density_bucket"],
             ]],
-            ["split", "occurrences", "sessions", "frequency_rank", "popularity_percentile", "density"],
+            ["train_occ", "train_sessions", "train_labels", "valid_occ", "valid_sessions", "valid_labels", "freq_rank", "pop_percentile", "density"],
         ),
         "",
-        f"Position distribution: `{train.get('position_distribution', {})}`",
-        "",
-        "## Historical Neighbors",
+        "## Natural transition profile",
         _markdown_table(
-            [
-                [
-                    row["predecessor_item"],
-                    row["count_i_to_target"],
-                    _fmt(row["confidence_i_to_target"]),
-                    _fmt(row["lift_i_to_target"]),
-                    row["support_session_count"],
-                ]
-                for row in top_pred
-            ],
-            ["predecessor", "count", "confidence", "lift", "support_sessions"],
+            [[
+                row["num_unique_predecessors"],
+                row["predecessor_effective_count"],
+                row["top5_predecessor_items"],
+                row["num_unique_successors"],
+                row["successor_effective_count"],
+                row["top5_successor_items"],
+                row["num_cooccurrence_items"],
+                row["cooccurrence_effective_count"],
+                row["top5_cooccurrence_items"],
+            ]],
+            ["pred_unique", "pred_eff", "top5_pred", "succ_unique", "succ_eff", "top5_succ", "co_unique", "co_eff", "top5_co"],
         ),
         "",
-        "## Vulnerable Validation Anchors",
-        f"Range: `{vulnerable['rank_min']} < rank <= {vulnerable['rank_max']}`. Vulnerable prefixes: `{vulnerable['vulnerable_prefix_count']}` / `{vulnerable['total_validation_prefix_count']}`.",
+        "## Clean-rank susceptibility profile",
+        "Near-top validation contexts are validation prefixes where the target is not in top-20 but is within top-200 under the clean model when defaults are used.",
         _markdown_table(
-            [
-                [
-                    row["anchor_item"],
-                    row["vulnerable_count"],
-                    _fmt(row["vulnerable_coverage"]),
-                    _fmt(row["avg_target_rank"], 2),
-                    _fmt(row["avg_target_score"], 6),
-                    row["train_predecessor_count_to_target"],
-                ]
-                for row in top_vuln
-            ],
-            ["anchor", "vuln_count", "coverage", "avg_rank", "avg_score", "train_pred_count"],
+            [[
+                row["validation_prefix_count"],
+                row["near_top_prefix_count"],
+                row["near_top_prefix_ratio"],
+                row["clean_target_rank_median"],
+                row["near_top_rank_median"],
+                row["rank_1_20_count"],
+                row["rank_21_50_count"],
+                row["rank_51_100_count"],
+                row["rank_101_200_count"],
+                row["rank_above_200_count"],
+            ]],
+            ["valid_prefixes", "near_top", "near_top_ratio", "rank_median", "near_top_median", "r1_20", "r21_50", "r51_100", "r101_200", "r200_plus"],
         ),
         "",
-        "## Fake-Session Availability",
+        "## Near-top anchor concentration",
+        "Near-top anchors are the last items of near-top validation contexts and are reported descriptively, not as attack candidates.",
         _markdown_table(
-            [
-                [
-                    row["anchor_item"],
-                    row["fake_session_count_with_anchor"],
-                    _fmt(row["fake_session_coverage"]),
-                    row["internal_insertion_feasible_count"],
-                    _fmt(row["internal_insertion_feasible_ratio"]),
-                ]
-                for row in top_candidates
-            ],
-            ["anchor", "fake_sessions", "fake_coverage", "feasible_occurrences", "feasible_ratio"],
+            [[
+                row["num_near_top_last_item_anchors"],
+                row["top1_near_top_anchor_count"],
+                row["top1_near_top_anchor_coverage"],
+                row["top5_near_top_anchor_coverage"],
+                row["near_top_anchor_effective_count"],
+                row["top20_near_top_anchor_train_predecessor_overlap_ratio"],
+                row["top5_near_top_anchor_items"],
+            ]],
+            ["unique", "top1_count", "top1_cov", "top5_cov", "effective", "pred_overlap20", "top5"],
         ),
         "",
-        "## P5 Internal-Random-Insertion Survey",
+        "## Fake-session availability",
+        _markdown_table(
+            [[
+                row["fake_session_coverage_count_top20_near_top_anchors"],
+                row["fake_session_coverage_ratio_top20_near_top_anchors"],
+                row["fake_session_occurrence_count_top20_near_top_anchors"],
+                row["fake_session_coverage_count_top20_train_predecessors"],
+                row["fake_session_coverage_ratio_top20_train_predecessors"],
+                row["fake_session_occurrence_count_top20_train_predecessors"],
+            ]],
+            ["anchor_cov_count", "anchor_cov_ratio", "anchor_occ", "pred_cov_count", "pred_cov_ratio", "pred_occ"],
+        ),
+        "",
+        "## Internal insertion exposure compatibility",
+        (
+            "These fields describe the simulated candidate space of Internal Random Insertion-NZ, not sampled attack outcomes."
+            if row["insertion_exposure_source"] == "simulated_from_fake_sessions"
+            else (
+                "These fields are parsed from sampled Internal Random Insertion-NZ metadata."
+                if row["insertion_exposure_source"] == "metadata"
+                else "Internal Random Insertion-NZ exposure metadata and fake-session simulation inputs are unavailable."
+            )
+        ),
+        _markdown_table(
+            [[
+                row["insertion_exposure_source"],
+                row["insertion_fake_session_count"],
+                row["insertion_candidate_unique_left_item_count"],
+                row["insertion_candidate_unique_right_item_count"],
+                row["insertion_candidate_unique_left_right_pair_count"],
+                row["insertion_tail_slot_ratio"],
+                row["insertion_left_overlap_ratio_relative_to_top20_near_top_anchors"],
+            ]],
+            ["source", "fake_sessions", "candidate_left_unique", "candidate_right_unique", "candidate_pair_unique", "tail_slot_ratio", "left_near_top_overlap"],
+        ),
+        "",
+        "## Internal replacement exposure compatibility",
+        (
+            "These fields describe the simulated candidate space of Internal Random Replacement-NZ, not sampled attack outcomes."
+            if row["replacement_exposure_source"] == "simulated_from_fake_sessions"
+            else (
+                "These fields are parsed from sampled Internal Random Replacement-NZ metadata."
+                if row["replacement_exposure_source"] == "metadata"
+                else "Internal Random Replacement-NZ exposure metadata and fake-session simulation inputs are unavailable."
+            )
+        ),
+        _markdown_table(
+            [[
+                row["replacement_exposure_source"],
+                row["replacement_fake_session_count"],
+                row["replacement_tail_fallback_ratio"],
+                row["replacement_candidate_unique_left_item_count"],
+                row["replacement_candidate_unique_right_item_count"],
+                row["replacement_candidate_unique_left_right_pair_count"],
+                row["replacement_left_overlap_ratio_relative_to_top20_near_top_anchors"],
+            ]],
+            ["source", "fake_sessions", "tail_fallback", "candidate_left_unique", "candidate_right_unique", "candidate_pair_unique", "left_near_top_overlap"],
+        ),
+        "",
+        "## Notes",
     ]
-    if p5.get("available"):
-        lines.extend(
-            [
-                f"Metadata: `{p5.get('metadata_path')}`",
-                f"Unique left/right/pairs: `{p5.get('unique_left_item_count')}` / `{p5.get('unique_right_item_count')}` / `{p5.get('unique_left_right_pair_count')}`.",
-                f"P5 raw_lowk: `{_fmt(p5.get('p5_raw_lowk'))}`",
-            ]
-        )
+    if notes:
+        lines.extend(f"- {note}" for note in notes)
     else:
-        lines.append(str(p5.get("message")))
-    lines.extend(
-        [
-            "",
-            "## Top Candidate Anchors",
-            _markdown_table(
-                [
-                    [
-                        row["anchor_item"],
-                        _fmt(row["anchor_score"]),
-                        row["vulnerable_count"],
-                        _fmt(row["vulnerable_coverage"]),
-                        row["fake_session_count_with_anchor"],
-                        row["train_predecessor_count_to_target"],
-                        row["p5_left_count"],
-                    ]
-                    for row in top_candidates
-                ],
-                ["anchor", "anchor_score", "vuln_count", "vuln_cov", "fake_sessions", "train_pred", "p5_left"],
-            ),
-        ]
-    )
+        lines.append("- No additional notes.")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def recommend_next_experiment(summary_row: Mapping[str, Any]) -> str:
-    vulnerable_count = int(summary_row.get("vulnerable_prefix_count", 0) or 0)
-    top_cov = float(summary_row.get("top_vulnerable_anchor_coverage", 0.0) or 0.0)
-    fake_cov = float(summary_row.get("fake_session_coverage_top20_vulnerable_anchors", 0.0) or 0.0)
-    pred_count = int(summary_row.get("top_train_predecessor_count", 0) or 0)
-    if vulnerable_count <= 0:
-        return "Not enough anchor signal"
-    if top_cov >= 0.02 and fake_cov >= 0.05:
-        return "Existing-Anchor Internal Insertion"
-    if top_cov >= 0.01 and fake_cov < 0.05:
-        return "Anchor-Replacement + Internal Insertion"
-    if pred_count <= 1 and fake_cov >= 0.20:
-        return "Continue with Internal-Random-Insertion only"
-    return "Anchor-Replacement + Internal Insertion"
-
-
-def summarize_target(
-    *,
-    target_payload: Mapping[str, Any],
-    candidates: Sequence[Mapping[str, Any]],
-    fake_sessions: Sequence[Sequence[int]] | None,
-) -> dict[str, Any]:
-    target = int(target_payload["target_item"])
-    train = target_payload["target_sparsity"]["train_sub"]
-    vulnerable = target_payload["vulnerable_validation_prefixes"]
-    top_vuln = vulnerable["last_item_anchors"][:20]
-    top_vuln_set = {int(row["anchor_item"]) for row in top_vuln}
-    fake_coverage_top20 = 0.0
-    if fake_sessions and top_vuln_set:
-        count = sum(
-            1
-            for session in fake_sessions
-            if any(int(item) in top_vuln_set for item in session)
-        )
-        fake_coverage_top20 = float(count) / float(len(fake_sessions))
-    neighbors = target_payload["historical_neighbors_train_sub"]
-    p5 = target_payload["p5_internal_random_insertion_local_pair_survey"]
-    row = {
-        "target": target,
-        "train_occurrence_count": int(train["target_occurrence_count"]),
-        "vulnerable_prefix_count": int(vulnerable["vulnerable_prefix_count"]),
-        "top_vulnerable_anchor_coverage": (
-            None if not vulnerable["last_item_anchors"] else float(vulnerable["last_item_anchors"][0]["vulnerable_coverage"])
-        ),
-        "top_train_predecessor_count": (
-            0 if not neighbors["predecessors"] else int(neighbors["predecessors"][0]["count_i_to_target"])
-        ),
-        "fake_session_coverage_top20_vulnerable_anchors": fake_coverage_top20,
-        "p5_available": bool(p5.get("available")),
-        "p5_raw_lowk": p5.get("p5_raw_lowk") if p5.get("available") else None,
-        "top5_vulnerable_anchors": ", ".join(
-            str(row["anchor_item"]) for row in vulnerable["last_item_anchors"][:5]
-        ),
-        "top5_train_predecessors": ", ".join(
-            str(row["predecessor_item"]) for row in neighbors["predecessors"][:5]
-        ),
-        "top5_candidate_anchors": ", ".join(str(row["anchor_item"]) for row in candidates[:5]),
-    }
-    row["recommendation"] = recommend_next_experiment(row)
-    if row["vulnerable_prefix_count"] <= 0 or fake_coverage_top20 <= 0.0:
-        feasible = "no"
-    elif fake_coverage_top20 < 0.05:
-        feasible = "limited"
-    else:
-        feasible = "yes"
-    row["existing_anchor_insertion_feasible"] = feasible
-    return row
-
-
-def write_summary_markdown(path: Path, rows: Sequence[Mapping[str, Any]], payloads: Sequence[Mapping[str, Any]]) -> None:
+def write_summary_markdown(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     lines = [
-        "# Target Anchor Survey Summary",
+        "# Target Action Feature Survey Summary",
         "",
-        "This survey uses train_sub and validation for anchor analysis. Test data is excluded unless explicitly enabled as post-hoc diagnostics.",
-        "anchor_score is exploratory and not yet validated as a poisoning objective.",
+        "This survey describes target/item characteristics and exposure compatibility features. It does not read or compare attack outcome metrics.",
         "",
-        "## Executive Summary",
         _markdown_table(
-            [
-                [
-                    row["target"],
-                    row["train_occurrence_count"],
-                    row["vulnerable_prefix_count"],
-                    row["top5_vulnerable_anchors"],
-                    row["top5_train_predecessors"],
-                    _fmt(row["fake_session_coverage_top20_vulnerable_anchors"]),
-                    row["existing_anchor_insertion_feasible"],
-                ]
-                for row in rows
-            ],
-            ["target", "train_count", "vuln_prefixes", "top5_vuln_anchors", "top5_train_preds", "fake_cov_top20", "feasible"],
+            [[row.get(column) for column in SUMMARY_MD_COLUMNS] for row in rows],
+            SUMMARY_MD_COLUMNS,
         ),
-        "",
-        "## Cross-Target Comparison",
-        _markdown_table(
-            [
-                [
-                    row["target"],
-                    row["train_occurrence_count"],
-                    row["vulnerable_prefix_count"],
-                    _fmt(row["top_vulnerable_anchor_coverage"]),
-                    row["top_train_predecessor_count"],
-                    _fmt(row["fake_session_coverage_top20_vulnerable_anchors"]),
-                    row["p5_available"],
-                    _fmt(row["p5_raw_lowk"]),
-                    row["recommendation"],
-                ]
-                for row in rows
-            ],
-            [
-                "target",
-                "train_occurrence_count",
-                "vulnerable_prefix_count",
-                "top_vulnerable_anchor_coverage",
-                "top_train_predecessor_count",
-                "fake_session_coverage_top20_vulnerable_anchors",
-                "p5_available",
-                "p5_raw_lowk",
-                "recommendation",
-            ],
-        ),
-        "",
-        "## Interpretation",
     ]
-    sparse_targets = [
-        int(payload["target_item"])
-        for payload in payloads
-        if payload["target_sparsity"]["train_sub"]["density_relative_to_dataset"] == "sparse"
-    ]
-    rows_by_target = {int(row["target"]): row for row in rows}
-    best = max(
-        rows,
-        key=lambda row: (
-            int(row["vulnerable_prefix_count"]),
-            float(row["fake_session_coverage_top20_vulnerable_anchors"] or 0.0),
-        ),
-    ) if rows else None
-    lines.extend(
-        [
-            f"- Historical transitions are sparse for: {', '.join(map(str, sparse_targets)) if sparse_targets else 'none by item-frequency quartile'}; predecessor counts should be treated cautiously when they are low.",
-            "- Vulnerable validation anchors can differ from historical predecessors; the per-target CSVs expose both flags side by side.",
-            "- Useful anchors are available in fake sessions when fake coverage for top vulnerable anchors is nonzero; low coverage points to anchor replacement before insertion.",
-            "- P5 should be interpreted as broad-diversity coverage when P5-left overlap with vulnerable or predecessor anchors is low.",
-            f"- Best next target for anchor-aware internal insertion: {best['target'] if best else ''}.",
-            "",
-            "## Recommended Next Experiments",
-        ]
-    )
-    for row in rows:
-        lines.append(f"- Target {row['target']}: {row['recommendation']}.")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def run_survey(args: argparse.Namespace) -> dict[str, Any]:
-    config_path = Path(args.config)
+    config_path = _repo_path(args.config)
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file does not exist: {config_path}")
     config = load_config(config_path)
-    output_dir = Path(args.output_dir)
+    output_dir = _repo_path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     targets = [int(target) for target in args.targets]
     top_k = int(args.top_k)
+    near_top_rank_min = int(args.near_top_rank_min)
+    near_top_rank_max = int(args.near_top_rank_max)
 
     dataset = ensure_canonical_dataset(config)
     train_counts = item_counts(dataset.train_sub)
     train_ranks = frequency_ranks(train_counts)
-    valid_prefixes, valid_labels = expanded_cases(dataset.valid)
-    checkpoint_path = resolve_existing_poison_checkpoint(config)
+    train_label_counts = _label_counts(dataset.train_sub)
+    valid_label_counts = _label_counts(dataset.valid)
+    valid_prefixes, _ = expanded_cases(dataset.valid)
+
+    checkpoint_path = resolve_clean_poison_checkpoint(config)
     if checkpoint_path is None:
         raise FileNotFoundError(
-            "No existing validation-best SR-GNN checkpoint was found; survey does not train a replacement."
+            "No clean SR-GNN poison-model checkpoint trained on train_sub was found; "
+            "the survey will not use poisoned victim or attack outcome checkpoints."
         )
     fake_sessions, fake_sessions_path = resolve_fake_sessions(
         config,
         explicit_path=args.fake_sessions_path,
     )
-    p5_paths = resolve_p5_metadata_paths(targets, args.p5_metadata_paths or [])
+    insertion_paths = resolve_exposure_metadata_paths(
+        explicit_paths=args.internal_insertion_metadata_paths or [],
+        metadata_dir=args.internal_insertion_metadata_dir,
+        filename="internal_random_insertion_metadata.json",
+        method_name="internal insertion",
+    )
+    replacement_paths = resolve_exposure_metadata_paths(
+        explicit_paths=args.internal_replacement_metadata_paths or [],
+        metadata_dir=args.internal_replacement_metadata_dir,
+        filename="internal_random_replacement_metadata.json",
+        method_name="internal replacement",
+    )
 
-    print(f"[survey] Scoring {len(valid_prefixes)} validation prefixes with {checkpoint_path}")
+    print(f"[survey] Scoring {len(valid_prefixes)} validation prefixes with clean checkpoint {checkpoint_path}")
     validation_scores = score_validation_prefixes(
         config,
         checkpoint_path=checkpoint_path,
@@ -1217,237 +1720,186 @@ def run_survey(args: argparse.Namespace) -> dict[str, Any]:
         targets=targets,
     )
 
+    rows: list[dict[str, Any]] = []
     target_payloads: list[dict[str, Any]] = []
-    summary_rows: list[dict[str, Any]] = []
-    all_candidate_rows: dict[int, list[dict[str, Any]]] = {}
     for target in targets:
-        print(f"[survey] Building survey outputs for target {target}")
-        sparsity = {
-            "train_sub": compute_target_split_stats(
-                dataset.train_sub,
-                target,
-                counts=train_counts,
-                ranks=train_ranks,
-                include_position_distribution=True,
-                expanded_label_count=False,
-            ),
-            "validation": compute_target_split_stats(
-                dataset.valid,
-                target,
-                include_position_distribution=False,
-                expanded_label_count=True,
-            ),
-        }
-        if bool(args.include_test_posthoc):
-            sparsity["test_posthoc"] = compute_target_split_stats(
-                dataset.test,
-                target,
-                include_position_distribution=False,
-                expanded_label_count=True,
-            )
-            sparsity["test_posthoc"]["test_posthoc_only"] = True
-
-        neighbors = compute_neighbor_stats(dataset.train_sub, target, top_k=top_k)
-        predecessor_by_item = {
-            int(row["predecessor_item"]): row for row in neighbors["predecessors"]
-        }
-        cooccur_by_item = {int(row["cooccur_item"]): row for row in neighbors["cooccurrence"]}
-        ranks = [int(value) for value in validation_scores[target]["ranks"]]
-        scores = [float(value) for value in validation_scores[target]["scores"]]
-        vulnerable = vulnerable_anchor_analysis(
-            valid_prefixes,
-            ranks,
-            scores,
-            rank_min=int(args.rank_min),
-            rank_max=int(args.rank_max),
+        print(f"[survey] Building target/item feature survey for target {target}")
+        popularity_group, popularity_flat = compute_target_popularity(
+            train_sessions=dataset.train_sub,
+            valid_sessions=dataset.valid,
             train_counts=train_counts,
             train_ranks=train_ranks,
-            train_predecessor_by_item=predecessor_by_item,
-            train_cooccur_by_item=cooccur_by_item,
+            train_label_counts=train_label_counts,
+            valid_label_counts=valid_label_counts,
+            target=target,
+        )
+        natural_group, natural_flat = compute_natural_transition_profile(
+            dataset.train_sub,
+            target,
             top_k=top_k,
         )
-        availability_anchors = set()
-        availability_anchors.update(
-            int(row["anchor_item"]) for row in vulnerable["last_item_anchors"][:top_k]
+        ranks = [int(value) for value in validation_scores[target]["ranks"]]
+        scores = [float(value) for value in validation_scores[target]["scores"]]
+        margins = validation_scores[target]["margin_to_top20"]
+        clean_group, clean_flat, near_indices = compute_clean_rank_susceptibility_profile(
+            ranks,
+            scores,
+            margins,
+            rank_min=near_top_rank_min,
+            rank_max=near_top_rank_max,
         )
-        availability_anchors.update(
-            int(row["predecessor_item"]) for row in neighbors["predecessors"][:top_k]
+        near_anchor_group, near_anchor_flat, top20_near_top_anchors = compute_near_top_anchor_concentration(
+            valid_prefixes,
+            near_indices,
+            natural_group["predecessor_counts"],
+            top_k=top_k,
         )
-        availability_anchors.update(
-            int(row["cooccur_item"]) for row in neighbors["cooccurrence"][:top_k]
+        top20_train_predecessors = _item_list(natural_group["predecessors"]["top20_items"])
+        fake_group, fake_flat = compute_fake_session_availability(
+            fake_sessions,
+            fake_sessions_path=fake_sessions_path,
+            top20_near_top_anchors=top20_near_top_anchors,
+            top20_train_predecessors=top20_train_predecessors,
         )
-        fake_availability = (
-            fake_session_anchor_availability(fake_sessions, availability_anchors)
-            if fake_sessions is not None
-            else {}
-        )
-        fake_payload = {
-            "available": fake_sessions is not None,
-            "fake_sessions_path": None if fake_sessions_path is None else str(fake_sessions_path),
-            "total_fake_sessions": 0 if fake_sessions is None else int(len(fake_sessions)),
-            "anchors": list(fake_availability.values()),
-        }
 
-        p5 = compute_p5_survey(
-            config=config,
-            target=target,
-            metadata_path=p5_paths.get(target),
-            fake_sessions=fake_sessions,
-            vulnerable_last_items=vulnerable["last_item_anchors"],
-            vulnerable_pairs=vulnerable["last_2_pair_anchors"],
-            train_predecessors=neighbors["predecessors"],
-            train_successors=neighbors["successors"],
-            train_cooccurrence=neighbors["cooccurrence"],
-            top_k=top_k,
-        )
-        rows = candidate_rows(
-            target=target,
-            train_predecessors=neighbors["predecessors"],
-            vulnerable_last_items=vulnerable["last_item_anchors"],
-            cooccurrence=neighbors["cooccurrence"],
-            fake_availability=fake_availability,
-            p5=p5,
+        insertion_metadata = _load_exposure_metadata(insertion_paths.get(target))
+        if insertion_metadata is None:
+            insertion_group, insertion_flat = simulate_insertion_exposure(
+                fake_sessions,
+                top20_near_top_anchors=top20_near_top_anchors,
+            )
+        else:
+            insertion_group, insertion_flat = parse_insertion_exposure_metadata(
+                insertion_metadata,
+                top20_near_top_anchors=top20_near_top_anchors,
+            )
+            insertion_group["metadata_path"] = str(insertion_paths[target])
+
+        replacement_metadata = _load_exposure_metadata(replacement_paths.get(target))
+        if replacement_metadata is None:
+            replacement_group, replacement_flat = simulate_replacement_exposure(
+                fake_sessions,
+                top20_near_top_anchors=top20_near_top_anchors,
+            )
+        else:
+            replacement_group, replacement_flat = parse_replacement_exposure_metadata(
+                replacement_metadata,
+                top20_near_top_anchors=top20_near_top_anchors,
+            )
+            replacement_group["metadata_path"] = str(replacement_paths[target])
+
+        notes = [
+            "Clean-rank scoring uses validation prefixes and the clean SR-GNN poison-model checkpoint trained on train_sub before poisoning.",
+            "Test data is not used in the main survey.",
+        ]
+        if insertion_metadata is None and fake_sessions is not None:
+            notes.append("Insertion exposure compatibility was simulated from shared fake-session candidate spaces because metadata was not provided.")
+        if replacement_metadata is None and fake_sessions is not None:
+            notes.append("Replacement exposure compatibility was simulated from shared fake-session candidate spaces because metadata was not provided.")
+        if fake_sessions is None:
+            notes.append("Shared fake sessions were unavailable; fake-session and simulated exposure fields are null.")
+
+        row = build_summary_row(
+            popularity_flat,
+            natural_flat,
+            clean_flat,
+            near_anchor_flat,
+            fake_flat,
+            insertion_flat,
+            replacement_flat,
         )
         payload = {
             "target_item": int(target),
             "metadata": {
                 "config_path": str(config_path),
-                "config_experiment_name": config.experiment.name,
-                "checkpoint_path": str(checkpoint_path),
-                "checkpoint_role": "validation-best SR-GNN poison-model checkpoint used for fake-session generation",
-                "fake_sessions_path": None if fake_sessions_path is None else str(fake_sessions_path),
+                "dataset_name": config.data.dataset_name,
+                "split_protocol": config.data.split_protocol,
+                "clean_checkpoint_path": str(checkpoint_path),
                 "rank_convention": RANK_CONVENTION,
-                "rank_min": int(args.rank_min),
-                "rank_max": int(args.rank_max),
-                "top_k": int(top_k),
-                "test_used_for_anchor_selection": False,
+                "near_top_rank_min": near_top_rank_min,
+                "near_top_rank_max": near_top_rank_max,
+                "test_used_in_main_summary": False,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
             },
-            "target_sparsity": sparsity,
-            "historical_neighbors_train_sub": neighbors,
-            "vulnerable_validation_prefixes": vulnerable,
-            "fake_session_anchor_availability": fake_payload,
-            "p5_internal_random_insertion_local_pair_survey": p5,
+            "target_popularity": popularity_group,
+            "natural_transition_profile": natural_group,
+            "clean_rank_susceptibility_profile": clean_group,
+            "near_top_anchor_concentration": near_anchor_group,
+            "fake_session_availability": fake_group,
+            "insertion_exposure_compatibility": insertion_group,
+            "replacement_exposure_compatibility": replacement_group,
+            "notes": notes,
         }
-        _write_json(output_dir / f"target_anchor_survey_{target}.json", payload)
-        candidate_fields = [
-            "target_item",
-            "anchor_item",
-            "is_train_predecessor",
-            "is_vulnerable_last_item",
-            "is_cooccur_item",
-            "is_p5_left_item",
-            "train_predecessor_count_to_target",
-            "train_predecessor_confidence",
-            "train_predecessor_lift",
-            "vulnerable_count",
-            "vulnerable_coverage",
-            "avg_vulnerable_target_rank",
-            "avg_vulnerable_target_score",
-            "cooccur_count",
-            "fake_session_count_with_anchor",
-            "fake_session_coverage",
-            "internal_insertion_feasible_count",
-            "internal_insertion_feasible_ratio",
-            "p5_left_count",
-            "p5_right_count",
-            "p5_overlap_flags",
-            "anchor_score",
-        ]
-        _write_csv(
-            output_dir / f"target_anchor_candidates_{target}.csv",
-            rows,
-            candidate_fields,
-        )
+        _write_json(output_dir / f"target_action_feature_survey_{target}.json", payload)
         write_target_markdown(
-            output_dir / f"target_anchor_survey_{target}.md",
+            output_dir / f"target_action_feature_survey_{target}.md",
             payload,
-            rows,
+            row,
         )
+        rows.append(row)
         target_payloads.append(payload)
-        all_candidate_rows[target] = rows
-        summary_rows.append(
-            summarize_target(
-                target_payload=payload,
-                candidates=rows,
-                fake_sessions=fake_sessions,
-            )
-        )
 
-    for row in summary_rows:
-        row["recommendation"] = recommend_next_experiment(row)
     summary_payload = {
-        "metadata": {
-            "config_path": str(config_path),
-            "config_experiment_name": config.experiment.name,
-            "targets": targets,
+        "config_path": str(config_path),
+        "dataset_name": config.data.dataset_name,
+        "split_protocol": config.data.split_protocol,
+        "target_list": targets,
+        "near_top_rank_definition": {
+            "rank_min": near_top_rank_min,
+            "rank_max": near_top_rank_max,
             "rank_convention": RANK_CONVENTION,
-            "rank_min": int(args.rank_min),
-            "rank_max": int(args.rank_max),
-            "checkpoint_path": str(checkpoint_path),
-            "fake_sessions_path": None if fake_sessions_path is None else str(fake_sessions_path),
-            "test_used_for_anchor_selection": False,
+            "description": (
+                "validation prefixes where the target is not in top-20 but is "
+                "within top-200 under the clean model when defaults are used"
+            ),
         },
+        "clean_checkpoint_path": str(checkpoint_path),
+        "fake_sessions_path": None if fake_sessions_path is None else str(fake_sessions_path),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "rows": rows,
         "targets": target_payloads,
-        "summary_rows": summary_rows,
     }
-    _write_json(output_dir / "target_anchor_survey_summary.json", summary_payload)
-    _write_csv(
-        output_dir / "target_anchor_survey_summary.csv",
-        summary_rows,
-        [
-            "target",
-            "train_occurrence_count",
-            "vulnerable_prefix_count",
-            "top_vulnerable_anchor_coverage",
-            "top_train_predecessor_count",
-            "fake_session_coverage_top20_vulnerable_anchors",
-            "p5_available",
-            "p5_raw_lowk",
-            "recommendation",
-            "existing_anchor_insertion_feasible",
-            "top5_vulnerable_anchors",
-            "top5_train_predecessors",
-            "top5_candidate_anchors",
-        ],
-    )
-    write_summary_markdown(
-        output_dir / "target_anchor_survey_summary.md",
-        summary_rows,
-        target_payloads,
-    )
+    _write_json(output_dir / "target_action_feature_survey_summary.json", summary_payload)
+    _write_csv(output_dir / "target_action_feature_survey_summary.csv", rows, SUMMARY_COLUMNS)
+    write_summary_markdown(output_dir / "target_action_feature_survey_summary.md", rows)
     return summary_payload
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Target anchor dataset survey.")
+    parser = argparse.ArgumentParser(
+        description="Outcome-free target/item feature survey for SBR robustness analysis."
+    )
     parser.add_argument("--config", default=DEFAULT_CONFIG)
     parser.add_argument("--targets", nargs="+", type=int, required=True)
-    parser.add_argument("--rank-min", type=int, default=20)
-    parser.add_argument("--rank-max", type=int, default=200)
+    parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--top-k", type=int, default=50)
-    parser.add_argument("--output-dir", default="outputs/analysis/target_anchor_survey")
     parser.add_argument("--fake-sessions-path", default=None)
-    parser.add_argument("--p5-metadata-paths", nargs="*", default=[])
+    parser.add_argument("--near-top-rank-min", type=int, default=21)
+    parser.add_argument("--near-top-rank-max", type=int, default=200)
+    parser.add_argument("--rank-min", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--rank-max", type=int, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--internal-insertion-metadata-dir", default=None)
+    parser.add_argument("--internal-replacement-metadata-dir", default=None)
+    parser.add_argument("--internal-insertion-metadata-paths", nargs="*", default=[])
+    parser.add_argument("--internal-replacement-metadata-paths", nargs="*", default=[])
     parser.add_argument(
         "--include-test-posthoc",
         action="store_true",
-        help="Include test statistics as a clearly marked post-hoc section.",
+        help="Reserved for explicitly enabled post-hoc diagnostics; test fields are not included in the main summary.",
     )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.rank_min is not None:
+        args.near_top_rank_min = int(args.rank_min)
+    if args.rank_max is not None:
+        args.near_top_rank_max = int(args.rank_max)
     payload = run_survey(args)
-    output_dir = Path(args.output_dir)
-    print(f"[survey] Wrote summary to {output_dir / 'target_anchor_survey_summary.md'}")
-    print(
-        "[survey] Recommendations: "
-        + "; ".join(
-            f"{row['target']}={row['recommendation']}"
-            for row in payload["summary_rows"]
-        )
-    )
+    output_dir = _repo_path(args.output_dir)
+    print(f"[survey] Wrote summary to {output_dir / 'target_action_feature_survey_summary.md'}")
+    print(f"[survey] Surveyed {len(payload['rows'])} targets without reading attack outcome metrics.")
 
 
 if __name__ == "__main__":

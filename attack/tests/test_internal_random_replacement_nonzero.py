@@ -33,7 +33,7 @@ INTERNAL_REPLACEMENT_PARTIAL4_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_internal_random_replacement_nonzero_when_possible_ratio1_srgnn_partial4.yaml"
+    / "diginetica_valbest_attack_internal_random_replacement_nonzero_when_possible_ratio1_srgnn_sampled_partial4.yaml"
 )
 
 
