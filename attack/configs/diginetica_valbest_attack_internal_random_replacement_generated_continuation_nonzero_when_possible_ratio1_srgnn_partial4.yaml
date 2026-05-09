@@ -42,9 +42,9 @@ attack:
 
 targets:
   mode: explicit_list
-  explicit_list: [1440, 39588, 5334]
+  explicit_list: [1440, 39588, 5334, 11103, 8637]
   bucket: popular
-  count: 3
+  count: 5
   reuse_saved_targets: false
 
 victims:
