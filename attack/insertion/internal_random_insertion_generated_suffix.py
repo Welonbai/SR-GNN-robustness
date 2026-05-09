@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import random
-from collections import Counter
 from dataclasses import dataclass
-from typing import Callable, Literal, Mapping, Sequence
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -17,7 +16,6 @@ from attack.insertion.internal_random_insertion_nonzero_when_possible import (
 
 
 PURE_GENERATED_MODE_RNG_TAG = "generated_continuation_base"
-SEEDED_REMAINDER_RNG_TAG = "successor_seeded_generated_continuation_remainder"
 
 
 @dataclass(frozen=True)
@@ -40,20 +38,6 @@ class InternalRandomInsertionGeneratedContinuationResult:
     target_occurrence_count_final: int
     generated_suffix_contains_target_count: int
     generated_suffix_unique_item_count: int
-
-
-@dataclass(frozen=True)
-class InternalRandomInsertionSuccessorSeededGeneratedContinuationResult(
-    InternalRandomInsertionGeneratedContinuationResult
-):
-    successor_seed_attempted: bool
-    successor_seed_applied: bool
-    successor_seed_item: int | None
-    successor_pool_empty: bool
-    successor_pool: list[int]
-    generated_suffix_after_seed: list[int]
-    self_successor_seed: bool
-    repair_generation_mode: Literal["successor_seeded", "pure_generated"]
 
 
 def deterministic_session_rng(
@@ -164,229 +148,6 @@ class InternalRandomInsertionGeneratedContinuationPolicy:
         )
 
 
-class InternalRandomInsertionSuccessorSeededGeneratedContinuationPolicy:
-    def __init__(
-        self,
-        topk_ratio: float,
-        poison_runner,
-        generation_topk: int,
-        successor_counts: Counter[int] | Mapping[int, int],
-        successor_pool_top_k: int = 10,
-        successor_seed_ratio: float = 0.25,
-        successor_smoothing_alpha: float = 0.5,
-        insertion_rng: random.Random | None = None,
-        generation_rng: random.Random | None = None,
-        successor_seed_rng: random.Random | None = None,
-        successor_item_rng: random.Random | None = None,
-        generation_rng_base_seed: int = 0,
-        pure_generated_mode_rng_tag: str = PURE_GENERATED_MODE_RNG_TAG,
-        seeded_remainder_rng_tag: str = SEEDED_REMAINDER_RNG_TAG,
-    ) -> None:
-        if successor_pool_top_k < 1:
-            raise ValueError("successor_pool_top_k must be >= 1.")
-        if not 0.0 <= successor_seed_ratio <= 1.0:
-            raise ValueError("successor_seed_ratio must be within [0, 1].")
-        if successor_smoothing_alpha <= 0.0:
-            raise ValueError("successor_smoothing_alpha must be positive.")
-        self.insertion_policy = InternalRandomInsertionNonzeroWhenPossiblePolicy(
-            topk_ratio=topk_ratio,
-            rng=insertion_rng,
-        )
-        self.poison_runner = poison_runner
-        self.generation_topk = int(generation_topk)
-        self.successor_counts: Counter[int] = Counter(
-            {int(item): int(count) for item, count in successor_counts.items()}
-        )
-        self.successor_pool_top_k = int(successor_pool_top_k)
-        self.successor_seed_ratio = float(successor_seed_ratio)
-        self.successor_smoothing_alpha = float(successor_smoothing_alpha)
-        self.generation_rng = generation_rng
-        self.successor_seed_rng = successor_seed_rng or random.Random()
-        self.successor_item_rng = successor_item_rng or random.Random()
-        self.generation_rng_base_seed = int(generation_rng_base_seed)
-        self.pure_generated_mode_rng_tag = str(pure_generated_mode_rng_tag)
-        self.seeded_remainder_rng_tag = str(seeded_remainder_rng_tag)
-
-    def apply(self, session: Sequence[int], target_item: int) -> list[int]:
-        return self.apply_with_metadata(session, target_item).session
-
-    def apply_with_metadata(
-        self,
-        session: Sequence[int],
-        target_item: int,
-        fake_session_index: int = 0,
-    ) -> InternalRandomInsertionSuccessorSeededGeneratedContinuationResult:
-        insertion_result = self.insertion_policy.apply_with_metadata(
-            session,
-            target_item,
-        )
-        target = int(target_item)
-        slot = int(insertion_result.insertion_slot)
-        inserted = [int(item) for item in insertion_result.session]
-        prefix_through_target = inserted[: slot + 1]
-        original_suffix = inserted[slot + 1 :]
-        suffix_length = int(len(original_suffix))
-        successor_pool = successor_topk_items(
-            self.successor_counts,
-            self.successor_pool_top_k,
-        )
-        successor_pool_empty = not successor_pool
-        eligible = suffix_length > 0 and not successor_pool_empty
-        attempted = bool(
-            eligible and self.successor_seed_rng.random() < self.successor_seed_ratio
-        )
-
-        if attempted:
-            seed_item = sample_successor_from_pool(
-                successor_counts=self.successor_counts,
-                successor_pool=successor_pool,
-                alpha=self.successor_smoothing_alpha,
-                rng=self.successor_item_rng,
-            )
-            remainder_rng = self.generation_rng or deterministic_session_rng(
-                base_seed=self.generation_rng_base_seed,
-                target_item=target,
-                fake_session_index=int(fake_session_index),
-                tag=self.seeded_remainder_rng_tag,
-            )
-            generated_after_seed = generate_poison_model_suffix(
-                runner=self.poison_runner,
-                prefix=prefix_through_target + [int(seed_item)],
-                suffix_length=suffix_length - 1,
-                topk=self.generation_topk,
-                rng=remainder_rng,
-            )
-            generated_suffix = [int(seed_item)] + generated_after_seed
-            mode: Literal["successor_seeded", "pure_generated"] = "successor_seeded"
-            applied = True
-        else:
-            generation_rng = self.generation_rng or deterministic_session_rng(
-                base_seed=self.generation_rng_base_seed,
-                target_item=target,
-                fake_session_index=int(fake_session_index),
-                tag=self.pure_generated_mode_rng_tag,
-            )
-            generated_suffix = generate_poison_model_suffix(
-                runner=self.poison_runner,
-                prefix=prefix_through_target,
-                suffix_length=suffix_length,
-                topk=self.generation_topk,
-                rng=generation_rng,
-            )
-            seed_item = None
-            generated_after_seed = []
-            mode = "pure_generated"
-            applied = False
-
-        final = prefix_through_target + generated_suffix
-        base = _result_payload(
-            insertion_result=insertion_result,
-            target_item=target,
-            generated_suffix=generated_suffix,
-            final=final,
-        )
-        return InternalRandomInsertionSuccessorSeededGeneratedContinuationResult(
-            **base,
-            successor_seed_attempted=attempted,
-            successor_seed_applied=applied,
-            successor_seed_item=seed_item,
-            successor_pool_empty=successor_pool_empty,
-            successor_pool=successor_pool,
-            generated_suffix_after_seed=generated_after_seed,
-            self_successor_seed=bool(seed_item == target) if seed_item is not None else False,
-            repair_generation_mode=mode,
-        )
-
-
-def successor_topk_items(
-    successor_counts: Counter[int] | Mapping[int, int],
-    top_k: int,
-) -> list[int]:
-    ordered = sorted(
-        (
-            (int(item), int(count))
-            for item, count in successor_counts.items()
-            if int(count) > 0
-        ),
-        key=lambda pair: (-pair[1], pair[0]),
-    )
-    return [item for item, _ in ordered[: int(top_k)]]
-
-
-def successor_smoothed_payload(
-    successor_counts: Counter[int] | Mapping[int, int],
-    top_k: int,
-    alpha: float,
-) -> dict[str, object]:
-    ordered = sorted(
-        (
-            (int(item), int(count))
-            for item, count in successor_counts.items()
-            if int(count) > 0
-        ),
-        key=lambda pair: (-pair[1], pair[0]),
-    )
-    top = ordered[: int(top_k)]
-    weights = [float(count) ** float(alpha) for _, count in top]
-    weight_total = float(sum(weights))
-    probabilities = [
-        float(weight) / weight_total if weight_total else 0.0 for weight in weights
-    ]
-    total_count = int(sum(count for _, count in ordered))
-    pool_total = int(sum(count for _, count in top))
-    top1_count = int(top[0][1]) if top else 0
-    return {
-        "successor_total_count": total_count,
-        "successor_pool_total_count": pool_total,
-        "successor_pool_size": int(len(top)),
-        "top_successor_items": [int(item) for item, _ in top],
-        "top_successor_counts": [int(count) for _, count in top],
-        "top_successor_smoothed_weights": weights,
-        "top_successor_smoothed_probabilities": probabilities,
-        "top1_successor_share": (
-            float(top1_count) / float(total_count) if total_count else 0.0
-        ),
-        "top10_successor_share": (
-            float(pool_total) / float(total_count) if total_count else 0.0
-        ),
-    }
-
-
-def successor_rank(
-    successor_counts: Counter[int] | Mapping[int, int],
-    target_item: int,
-) -> int | None:
-    ordered = sorted(
-        (
-            (int(item), int(count))
-            for item, count in successor_counts.items()
-            if int(count) > 0
-        ),
-        key=lambda pair: (-pair[1], pair[0]),
-    )
-    target = int(target_item)
-    for rank, (item, _) in enumerate(ordered, start=1):
-        if item == target:
-            return int(rank)
-    return None
-
-
-def sample_successor_from_pool(
-    *,
-    successor_counts: Counter[int] | Mapping[int, int],
-    successor_pool: Sequence[int],
-    alpha: float,
-    rng: random.Random,
-) -> int:
-    if not successor_pool:
-        raise ValueError("successor_pool must not be empty.")
-    weights = [
-        float(successor_counts[int(item)]) ** float(alpha)
-        for item in successor_pool
-    ]
-    return _weighted_choice([int(item) for item in successor_pool], weights, rng)
-
-
 def _build_generated_result(
     *,
     insertion_result: InternalRandomInsertionResult,
@@ -482,14 +243,7 @@ def _weighted_choice(
 __all__ = [
     "InternalRandomInsertionGeneratedContinuationPolicy",
     "InternalRandomInsertionGeneratedContinuationResult",
-    "InternalRandomInsertionSuccessorSeededGeneratedContinuationPolicy",
-    "InternalRandomInsertionSuccessorSeededGeneratedContinuationResult",
     "PURE_GENERATED_MODE_RNG_TAG",
-    "SEEDED_REMAINDER_RNG_TAG",
     "deterministic_session_rng",
     "generate_poison_model_suffix",
-    "sample_successor_from_pool",
-    "successor_rank",
-    "successor_smoothed_payload",
-    "successor_topk_items",
 ]
