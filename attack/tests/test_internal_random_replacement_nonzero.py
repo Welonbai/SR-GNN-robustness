@@ -345,15 +345,18 @@ def test_len2_fallback_is_grouped_only_as_tail_position() -> None:
 def test_new_config_parses_successfully() -> None:
     config = load_config(INTERNAL_REPLACEMENT_PARTIAL4_CONFIG_PATH)
 
-    assert (
-        config.experiment.name
-        == "valbest_attack_internal_random_replacement_nonzero_when_possible_ratio1_srgnn_partial4"
+    assert config.experiment.name == (
+        "valbest_attack_internal_random_replacement_nonzero_when_possible_"
+        "ratio1_srgnn_sampled_partial4"
     )
     assert config.targets.mode == "sampled"
     assert config.targets.explicit_list == ()
-    assert config.targets.count == 6
+    assert config.targets.count == 12
+    assert config.targets.reuse_saved_targets is True
     assert config.attack.replacement_topk_ratio == pytest.approx(1.0)
     assert config.victims.params["srgnn"]["train"]["epochs"] == 4
+    assert "target" not in config.experiment.name
+    assert "11103" not in config.experiment.name
 
 
 def test_internal_replacement_shares_generation_key_but_has_distinct_attack_key() -> None:

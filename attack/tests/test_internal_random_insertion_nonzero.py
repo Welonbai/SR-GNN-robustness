@@ -35,7 +35,7 @@ RANDOM_NZ_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sample3.yaml"
+    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sampled.yaml"
 )
 RANDOM_INSERTION_PARTIAL4_CONFIG_PATH = (
     REPO_ROOT
@@ -298,6 +298,12 @@ def test_new_configs_and_existing_basis_configs_parse() -> None:
         == "validation_best"
     )
     assert random_nz.attack.replacement_topk_ratio == pytest.approx(1.0)
+    assert random_nz.targets.mode == "sampled"
+    assert random_nz.targets.explicit_list == ()
+    assert random_nz.targets.count == 12
+    assert random_nz.targets.reuse_saved_targets is True
+    assert random_nz.data.poison_train_only is True
+    assert random_nz.victims.params["srgnn"]["train"]["checkpoint_protocol"] == "validation_best"
     assert random_insertion.attack.replacement_topk_ratio == pytest.approx(1.0)
     assert tail_replacement.attack.replacement_topk_ratio == pytest.approx(1.0)
     assert tail_insertion.attack.replacement_topk_ratio == pytest.approx(1.0)
