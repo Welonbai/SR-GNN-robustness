@@ -17,6 +17,7 @@ POSITION_OPT_RUN_TYPE = "position_opt_mvp"
 POSITION_OPT_SHARED_POLICY_RUN_TYPE = "position_opt_shared_policy"
 POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE = "rank_bucket_cem"
 POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE = "rank_bucket_cem_candidate_replay"
+PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE = "pts_construction_grouped_cem"
 TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE = "target_aware_carrier_selection_nz"
 TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE = "target_aware_carrier_local_position"
 TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE = "target_aware_coverage_local_position"
@@ -386,6 +387,23 @@ def attack_key_payload(
         payload["attack_runtime_identity"] = _normalize_identity_value(
             attack_identity_context
         )
+    if run_type == PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE:
+        if config.attack.pts_construction is None:
+            raise ValueError(
+                "pts_construction_grouped_cem final attack identity requires "
+                "attack.pts_construction."
+            )
+        payload["attack"]["pts_construction"] = _normalize_identity_value(
+            config.to_primitive()["attack"]["pts_construction"]
+        )
+        payload["pts_runtime_seeds"] = {
+            "position_opt_seed": int(config.seeds.position_opt_seed),
+            "surrogate_train_seed": int(config.seeds.surrogate_train_seed),
+        }
+        if attack_identity_context is not None:
+            payload["attack_runtime_identity"] = _normalize_identity_value(
+                attack_identity_context
+            )
     return payload
 
 
@@ -881,6 +899,7 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE",
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
+    "PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_TRUNCATE_SUFFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE",

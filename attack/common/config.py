@@ -102,6 +102,22 @@ _ALLOWED_ANCHOR_CONSTRUCTION_SOURCES = {
 _ALLOWED_ANCHOR_ASSIGNMENT_STRATEGIES = {
     ANCHOR_CONSTRUCTION_STRATEGY_ROUND_ROBIN,
 }
+PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1 = "grouped_cem_v1"
+PTS_PREFIX_RANGE_INTERNAL = "internal"
+PTS_PREFIX_SAMPLER_UNIFORM = "uniform"
+PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH = "residual_suffix_length"
+PTS_GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX = "same_as_residual_suffix"
+PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20 = "raw_lowk_mrr_recall_10_20"
+PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE = "global_best_candidate"
+PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED = "position_opt_seed"
+PTS_CEM_SAMPLER_DIRICHLET = "dirichlet"
+PTS_CEM_INIT_UNIFORM = "uniform"
+_ALLOWED_PTS_V1_ACTIONS = {
+    "keep_residual_suffix",
+    "regenerate_residual_suffix",
+    "consume_one_keep_rest",
+    "consume_all_stop",
+}
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -722,6 +738,552 @@ class RankBucketCEMConfig:
 
 
 @dataclass(frozen=True)
+class PTSPrefixSelectorConfig:
+    range: str = PTS_PREFIX_RANGE_INTERNAL
+    sampler: str = PTS_PREFIX_SAMPLER_UNIFORM
+
+    def __post_init__(self) -> None:
+        range_name = _as_str(self.range, "attack.pts_construction.prefix_selector.range").strip().lower()
+        sampler = _as_str(self.sampler, "attack.pts_construction.prefix_selector.sampler").strip().lower()
+        if range_name != PTS_PREFIX_RANGE_INTERNAL or sampler != PTS_PREFIX_SAMPLER_UNIFORM:
+            raise ValueError(
+                "attack.pts_construction.prefix_selector supports only "
+                "range='internal' and sampler='uniform' in Phase 3."
+            )
+        object.__setattr__(self, "range", range_name)
+        object.__setattr__(self, "sampler", sampler)
+
+
+@dataclass(frozen=True)
+class PTSSuffixLengthBucketConfig:
+    name: str
+    min: int
+    max: int | None = None
+
+    def __post_init__(self) -> None:
+        name = _as_str(self.name, "attack.pts_construction.grouping.buckets[].name").strip()
+        if not name:
+            raise ValueError("attack.pts_construction.grouping.buckets[].name must be non-empty.")
+        min_len = _as_int(self.min, "attack.pts_construction.grouping.buckets[].min")
+        if min_len < 1:
+            raise ValueError("attack.pts_construction.grouping.buckets[].min must be >= 1.")
+        max_len = self.max
+        if max_len is not None:
+            max_len = _as_int(max_len, "attack.pts_construction.grouping.buckets[].max")
+            if max_len < min_len:
+                raise ValueError(
+                    "attack.pts_construction.grouping.buckets[].max must be >= min."
+                )
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "min", min_len)
+        object.__setattr__(self, "max", max_len)
+
+
+def _default_pts_suffix_buckets() -> tuple[PTSSuffixLengthBucketConfig, ...]:
+    return (
+        PTSSuffixLengthBucketConfig(name="suffix_1", min=1, max=1),
+        PTSSuffixLengthBucketConfig(name="suffix_2", min=2, max=2),
+        PTSSuffixLengthBucketConfig(name="suffix_3plus", min=3, max=None),
+    )
+
+
+@dataclass(frozen=True)
+class PTSGroupingConfig:
+    mode: str = PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH
+    buckets: tuple[PTSSuffixLengthBucketConfig, ...] = field(
+        default_factory=_default_pts_suffix_buckets
+    )
+
+    def __post_init__(self) -> None:
+        mode = _as_str(self.mode, "attack.pts_construction.grouping.mode").strip().lower()
+        if mode != PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH:
+            raise ValueError(
+                "attack.pts_construction.grouping.mode must be "
+                "'residual_suffix_length' in Phase 3."
+            )
+        buckets = _coerce_pts_bucket_configs(
+            self.buckets,
+            "attack.pts_construction.grouping.buckets",
+        )
+        if not buckets:
+            raise ValueError("attack.pts_construction.grouping.buckets must not be empty.")
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "buckets", buckets)
+
+
+@dataclass(frozen=True)
+class PTSActionsDynamicMasksConfig:
+    disable_consume_one_when_suffix_len_leq_1: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "disable_consume_one_when_suffix_len_leq_1",
+            _as_bool(
+                self.disable_consume_one_when_suffix_len_leq_1,
+                "attack.pts_construction.actions.dynamic_masks."
+                "disable_consume_one_when_suffix_len_leq_1",
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class PTSActionsConfig:
+    enabled: tuple[str, ...] = (
+        "keep_residual_suffix",
+        "regenerate_residual_suffix",
+        "consume_one_keep_rest",
+        "consume_all_stop",
+    )
+    dynamic_masks: PTSActionsDynamicMasksConfig = field(
+        default_factory=PTSActionsDynamicMasksConfig
+    )
+
+    def __post_init__(self) -> None:
+        enabled = tuple(
+            str(action).strip()
+            for action in _as_str_list(
+                self.enabled,
+                "attack.pts_construction.actions.enabled",
+            )
+        )
+        if not enabled:
+            raise ValueError("attack.pts_construction.actions.enabled must not be empty.")
+        unknown = set(enabled) - _ALLOWED_PTS_V1_ACTIONS
+        if unknown:
+            raise ValueError(
+                "attack.pts_construction.actions.enabled contains unsupported "
+                "Phase 3 actions: "
+                + ", ".join(sorted(unknown))
+            )
+        if len(set(enabled)) != len(enabled):
+            raise ValueError("attack.pts_construction.actions.enabled must not contain duplicates.")
+
+        dynamic_masks = self.dynamic_masks
+        if isinstance(dynamic_masks, PTSActionsDynamicMasksConfig):
+            resolved_dynamic_masks = dynamic_masks
+        elif isinstance(dynamic_masks, Mapping):
+            resolved_dynamic_masks = PTSActionsDynamicMasksConfig(**dict(dynamic_masks))
+        else:
+            raise TypeError(
+                "attack.pts_construction.actions.dynamic_masks must be a mapping "
+                "or PTSActionsDynamicMasksConfig."
+            )
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "dynamic_masks", resolved_dynamic_masks)
+
+
+@dataclass(frozen=True)
+class PTSGenerationConfig:
+    topk: int = 100
+    length_policy: str = PTS_GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX
+
+    def __post_init__(self) -> None:
+        topk = _as_int(self.topk, "attack.pts_construction.generation.topk")
+        if topk <= 0:
+            raise ValueError("attack.pts_construction.generation.topk must be positive.")
+        length_policy = _as_str(
+            self.length_policy,
+            "attack.pts_construction.generation.length_policy",
+        ).strip().lower()
+        if length_policy != PTS_GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX:
+            raise ValueError(
+                "attack.pts_construction.generation.length_policy must be "
+                "'same_as_residual_suffix' in Phase 3."
+            )
+        object.__setattr__(self, "topk", topk)
+        object.__setattr__(self, "length_policy", length_policy)
+
+
+@dataclass(frozen=True)
+class PTSCEMSamplerRuntimeConfig:
+    type: str = PTS_CEM_SAMPLER_DIRICHLET
+    concentration_scale: float = 20.0
+
+    def __post_init__(self) -> None:
+        sampler_type = _as_str(self.type, "attack.pts_construction.cem.sampler.type").strip().lower()
+        if sampler_type != PTS_CEM_SAMPLER_DIRICHLET:
+            raise ValueError("attack.pts_construction.cem.sampler.type must be 'dirichlet'.")
+        concentration_scale = _as_float(
+            self.concentration_scale,
+            "attack.pts_construction.cem.sampler.concentration_scale",
+        )
+        if concentration_scale <= 0.0:
+            raise ValueError(
+                "attack.pts_construction.cem.sampler.concentration_scale must be positive."
+            )
+        object.__setattr__(self, "type", sampler_type)
+        object.__setattr__(self, "concentration_scale", concentration_scale)
+
+
+@dataclass(frozen=True)
+class PTSCEMUpdateRuntimeConfig:
+    smoothing: float = 0.3
+    min_probability: float = 0.03
+    max_probability: float = 0.90
+
+    def __post_init__(self) -> None:
+        smoothing = _as_float(self.smoothing, "attack.pts_construction.cem.update.smoothing")
+        if not 0.0 <= smoothing <= 1.0:
+            raise ValueError("attack.pts_construction.cem.update.smoothing must be in [0, 1].")
+        min_probability = _as_float(
+            self.min_probability,
+            "attack.pts_construction.cem.update.min_probability",
+        )
+        max_probability = _as_float(
+            self.max_probability,
+            "attack.pts_construction.cem.update.max_probability",
+        )
+        if not 0.0 <= min_probability < max_probability <= 1.0:
+            raise ValueError(
+                "attack.pts_construction.cem.update min/max probabilities must satisfy "
+                "0 <= min < max <= 1."
+            )
+        object.__setattr__(self, "smoothing", smoothing)
+        object.__setattr__(self, "min_probability", min_probability)
+        object.__setattr__(self, "max_probability", max_probability)
+
+
+@dataclass(frozen=True)
+class PTSCEMInitRuntimeConfig:
+    mode: str = PTS_CEM_INIT_UNIFORM
+
+    def __post_init__(self) -> None:
+        mode = _as_str(self.mode, "attack.pts_construction.cem.init.mode").strip().lower()
+        if mode != PTS_CEM_INIT_UNIFORM:
+            raise ValueError("attack.pts_construction.cem.init.mode must be 'uniform'.")
+        object.__setattr__(self, "mode", mode)
+
+
+@dataclass(frozen=True)
+class PTSCEMRuntimeConfig:
+    iterations: int = 3
+    population_schedule: tuple[int, ...] | None = (16, 8, 8)
+    population_size: int | None = None
+    elite_ratio: float = 0.25
+    sampler: PTSCEMSamplerRuntimeConfig = field(default_factory=PTSCEMSamplerRuntimeConfig)
+    update: PTSCEMUpdateRuntimeConfig = field(default_factory=PTSCEMUpdateRuntimeConfig)
+    init: PTSCEMInitRuntimeConfig = field(default_factory=PTSCEMInitRuntimeConfig)
+    seed_source: str = PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED
+    candidate_seed_stride: int = 1000
+    save_top_k_candidates: int = 3
+
+    def __post_init__(self) -> None:
+        iterations = _as_int(self.iterations, "attack.pts_construction.cem.iterations")
+        if iterations <= 0:
+            raise ValueError("attack.pts_construction.cem.iterations must be positive.")
+        population_schedule = self.population_schedule
+        if population_schedule is not None:
+            population_schedule = tuple(
+                _as_int_list(
+                    population_schedule,
+                    "attack.pts_construction.cem.population_schedule",
+                )
+            )
+            if len(population_schedule) != iterations:
+                raise ValueError(
+                    "attack.pts_construction.cem.population_schedule length must "
+                    "equal iterations."
+                )
+            if any(value <= 0 for value in population_schedule):
+                raise ValueError(
+                    "attack.pts_construction.cem.population_schedule values must be positive."
+                )
+        population_size = self.population_size
+        if population_size is not None:
+            population_size = _as_int(
+                population_size,
+                "attack.pts_construction.cem.population_size",
+            )
+            if population_size <= 0:
+                raise ValueError("attack.pts_construction.cem.population_size must be positive.")
+        if population_schedule is None and population_size is None:
+            raise ValueError(
+                "attack.pts_construction.cem requires population_schedule or population_size."
+            )
+        elite_ratio = _as_float(self.elite_ratio, "attack.pts_construction.cem.elite_ratio")
+        if not 0.0 < elite_ratio <= 1.0:
+            raise ValueError("attack.pts_construction.cem.elite_ratio must be in (0, 1].")
+        sampler = _coerce_pts_dataclass(
+            self.sampler,
+            PTSCEMSamplerRuntimeConfig,
+            "attack.pts_construction.cem.sampler",
+        )
+        update = _coerce_pts_dataclass(
+            self.update,
+            PTSCEMUpdateRuntimeConfig,
+            "attack.pts_construction.cem.update",
+        )
+        init = _coerce_pts_dataclass(
+            self.init,
+            PTSCEMInitRuntimeConfig,
+            "attack.pts_construction.cem.init",
+        )
+        seed_source = _as_str(
+            self.seed_source,
+            "attack.pts_construction.cem.seed_source",
+        ).strip().lower()
+        if seed_source != PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED:
+            raise ValueError(
+                "attack.pts_construction.cem.seed_source currently supports only "
+                "'position_opt_seed'."
+            )
+        candidate_seed_stride = _as_int(
+            self.candidate_seed_stride,
+            "attack.pts_construction.cem.candidate_seed_stride",
+        )
+        if candidate_seed_stride <= 0:
+            raise ValueError(
+                "attack.pts_construction.cem.candidate_seed_stride must be positive."
+            )
+        save_top_k_candidates = _as_int(
+            self.save_top_k_candidates,
+            "attack.pts_construction.cem.save_top_k_candidates",
+        )
+        if save_top_k_candidates < 0:
+            raise ValueError(
+                "attack.pts_construction.cem.save_top_k_candidates must be >= 0."
+            )
+        object.__setattr__(self, "iterations", iterations)
+        object.__setattr__(self, "population_schedule", population_schedule)
+        object.__setattr__(self, "population_size", population_size)
+        object.__setattr__(self, "elite_ratio", elite_ratio)
+        object.__setattr__(self, "sampler", sampler)
+        object.__setattr__(self, "update", update)
+        object.__setattr__(self, "init", init)
+        object.__setattr__(self, "seed_source", seed_source)
+        object.__setattr__(self, "candidate_seed_stride", candidate_seed_stride)
+        object.__setattr__(self, "save_top_k_candidates", save_top_k_candidates)
+
+
+@dataclass(frozen=True)
+class PTSRewardConfig:
+    target_summary: str = PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20
+    enable_gt_penalty: bool = False
+    gt_penalty_weight: float = 0.0
+    enable_length_penalty: bool = False
+    length_penalty_weight: float = 0.0
+
+    def __post_init__(self) -> None:
+        target_summary = _as_str(
+            self.target_summary,
+            "attack.pts_construction.reward.target_summary",
+        ).strip().lower()
+        if target_summary != PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20:
+            raise ValueError(
+                "attack.pts_construction.reward.target_summary currently supports "
+                "only 'raw_lowk_mrr_recall_10_20'."
+            )
+        enable_gt_penalty = _as_bool(
+            self.enable_gt_penalty,
+            "attack.pts_construction.reward.enable_gt_penalty",
+        )
+        gt_penalty_weight = _as_float(
+            self.gt_penalty_weight,
+            "attack.pts_construction.reward.gt_penalty_weight",
+        )
+        enable_length_penalty = _as_bool(
+            self.enable_length_penalty,
+            "attack.pts_construction.reward.enable_length_penalty",
+        )
+        length_penalty_weight = _as_float(
+            self.length_penalty_weight,
+            "attack.pts_construction.reward.length_penalty_weight",
+        )
+        if enable_gt_penalty:
+            raise NotImplementedError(
+                "attack.pts_construction.reward.enable_gt_penalty is a Phase 3 "
+                "placeholder and is not implemented."
+            )
+        if enable_length_penalty:
+            raise NotImplementedError(
+                "attack.pts_construction.reward.enable_length_penalty is a Phase 3 "
+                "placeholder and is not implemented."
+            )
+        if gt_penalty_weight < 0.0 or length_penalty_weight < 0.0:
+            raise ValueError("PTS reward penalty weights must be non-negative.")
+        object.__setattr__(self, "target_summary", target_summary)
+        object.__setattr__(self, "enable_gt_penalty", enable_gt_penalty)
+        object.__setattr__(self, "gt_penalty_weight", gt_penalty_weight)
+        object.__setattr__(self, "enable_length_penalty", enable_length_penalty)
+        object.__setattr__(self, "length_penalty_weight", length_penalty_weight)
+
+
+@dataclass(frozen=True)
+class PTSArtifactsConfig:
+    save_cem_trace: bool = True
+    save_best_policy: bool = True
+    save_final_policy: bool = True
+    save_per_session_records: bool = True
+    save_candidate_sessions: bool = False
+    save_best_sessions: bool = True
+    save_top_candidate_sessions: bool = True
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "save_cem_trace",
+            "save_best_policy",
+            "save_final_policy",
+            "save_per_session_records",
+            "save_candidate_sessions",
+            "save_best_sessions",
+            "save_top_candidate_sessions",
+        ):
+            object.__setattr__(
+                self,
+                field_name,
+                _as_bool(
+                    getattr(self, field_name),
+                    f"attack.pts_construction.artifacts.{field_name}",
+                ),
+            )
+        if bool(self.save_candidate_sessions):
+            raise ValueError(
+                "attack.pts_construction.artifacts.save_candidate_sessions is not "
+                "supported in Phase 3 and must be false."
+            )
+
+
+@dataclass(frozen=True)
+class PTSFinalSelectionConfig:
+    mode: str = PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE
+
+    def __post_init__(self) -> None:
+        mode = _as_str(
+            self.mode,
+            "attack.pts_construction.final_selection.mode",
+        ).strip().lower()
+        if mode != PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE:
+            raise ValueError(
+                "attack.pts_construction.final_selection.mode currently supports "
+                "only 'global_best_candidate'."
+            )
+        object.__setattr__(self, "mode", mode)
+
+
+@dataclass(frozen=True)
+class PTSConstructionConfig:
+    enabled: bool = False
+    method: str = PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1
+    prefix_selector: PTSPrefixSelectorConfig = field(default_factory=PTSPrefixSelectorConfig)
+    grouping: PTSGroupingConfig = field(default_factory=PTSGroupingConfig)
+    actions: PTSActionsConfig = field(default_factory=PTSActionsConfig)
+    generation: PTSGenerationConfig = field(default_factory=PTSGenerationConfig)
+    cem: PTSCEMRuntimeConfig = field(default_factory=PTSCEMRuntimeConfig)
+    reward: PTSRewardConfig = field(default_factory=PTSRewardConfig)
+    artifacts: PTSArtifactsConfig = field(default_factory=PTSArtifactsConfig)
+    final_selection: PTSFinalSelectionConfig = field(default_factory=PTSFinalSelectionConfig)
+
+    def __post_init__(self) -> None:
+        enabled = _as_bool(self.enabled, "attack.pts_construction.enabled")
+        method = _as_str(self.method, "attack.pts_construction.method").strip().lower()
+        if method != PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1:
+            raise ValueError(
+                "attack.pts_construction.method currently supports only 'grouped_cem_v1'."
+            )
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "method", method)
+        object.__setattr__(
+            self,
+            "prefix_selector",
+            _coerce_pts_dataclass(
+                self.prefix_selector,
+                PTSPrefixSelectorConfig,
+                "attack.pts_construction.prefix_selector",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "grouping",
+            _coerce_pts_dataclass(
+                self.grouping,
+                PTSGroupingConfig,
+                "attack.pts_construction.grouping",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "actions",
+            _coerce_pts_dataclass(
+                self.actions,
+                PTSActionsConfig,
+                "attack.pts_construction.actions",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "generation",
+            _coerce_pts_dataclass(
+                self.generation,
+                PTSGenerationConfig,
+                "attack.pts_construction.generation",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "cem",
+            _coerce_pts_dataclass(
+                self.cem,
+                PTSCEMRuntimeConfig,
+                "attack.pts_construction.cem",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "reward",
+            _coerce_pts_dataclass(
+                self.reward,
+                PTSRewardConfig,
+                "attack.pts_construction.reward",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "artifacts",
+            _coerce_pts_dataclass(
+                self.artifacts,
+                PTSArtifactsConfig,
+                "attack.pts_construction.artifacts",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "final_selection",
+            _coerce_pts_dataclass(
+                self.final_selection,
+                PTSFinalSelectionConfig,
+                "attack.pts_construction.final_selection",
+            ),
+        )
+
+
+def _coerce_pts_dataclass(value: Any, cls: type[Any], context: str) -> Any:
+    if isinstance(value, cls):
+        return value
+    if isinstance(value, Mapping):
+        return cls(**dict(value))
+    raise TypeError(f"{context} must be a mapping or {cls.__name__}.")
+
+
+def _coerce_pts_bucket_configs(
+    value: Any,
+    context: str,
+) -> tuple[PTSSuffixLengthBucketConfig, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise TypeError(f"{context} must be a list of suffix-length buckets.")
+    buckets: list[PTSSuffixLengthBucketConfig] = []
+    for index, item in enumerate(value):
+        item_context = f"{context}[{index}]"
+        if isinstance(item, PTSSuffixLengthBucketConfig):
+            buckets.append(item)
+        elif isinstance(item, Mapping):
+            buckets.append(PTSSuffixLengthBucketConfig(**dict(item)))
+        else:
+            raise TypeError(f"{item_context} must be a mapping or PTSSuffixLengthBucketConfig.")
+    return tuple(buckets)
+
+
+@dataclass(frozen=True)
 class CarrierSelectionConfig:
     enabled: bool = False
     candidate_pool_size: float = 0.03
@@ -1053,6 +1615,7 @@ class AttackConfig:
     position_opt: PositionOptConfig | None = None
     rank_bucket_cem: RankBucketCEMConfig | None = None
     carrier_selection: CarrierSelectionConfig | None = None
+    pts_construction: PTSConstructionConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -1519,6 +2082,14 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
             if "carrier_selection" in attack and attack["carrier_selection"] is not None
             else None
         ),
+        "pts_construction": (
+            _normalize_pts_construction_config(
+                attack["pts_construction"],
+                "attack.pts_construction",
+            )
+            if "pts_construction" in attack and attack["pts_construction"] is not None
+            else None
+        ),
     }
 
     if not 0.0 < normalized["size"] <= 1.0:
@@ -1536,6 +2107,18 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
                 "for TACS-NZ v1."
             )
     return normalized
+
+
+def _normalize_pts_construction_config(value: Any, context: str) -> dict[str, Any]:
+    mapping = _as_mapping(value, context)
+    allowed_fields = {field.name for field in fields(PTSConstructionConfig)}
+    unknown = set(mapping) - allowed_fields
+    if unknown:
+        raise ValueError(
+            "Unknown PTS construction config keys: "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+    return _primitive_from_obj(PTSConstructionConfig(**dict(mapping)))
 
 
 def _normalize_anchor_construction_config(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -2505,6 +3088,18 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
                 if attack.get("carrier_selection") is not None
                 else None
             ),
+            pts_construction=(
+                PTSConstructionConfig(
+                    **dict(
+                        _as_mapping(
+                            attack["pts_construction"],
+                            "attack.pts_construction",
+                        )
+                    )
+                )
+                if attack.get("pts_construction") is not None
+                else None
+            ),
         ),
         anchor_construction=AnchorConstructionConfig(
             **dict(anchor_construction)
@@ -2573,6 +3168,30 @@ __all__ = [
     "CarrierSelectionConfig",
     "Config",
     "PositionOptConfig",
+    "PTSArtifactsConfig",
+    "PTSActionsConfig",
+    "PTSActionsDynamicMasksConfig",
+    "PTSCEMInitRuntimeConfig",
+    "PTSCEMRuntimeConfig",
+    "PTSCEMSamplerRuntimeConfig",
+    "PTSCEMUpdateRuntimeConfig",
+    "PTSConstructionConfig",
+    "PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1",
+    "PTS_CEM_INIT_UNIFORM",
+    "PTS_CEM_SAMPLER_DIRICHLET",
+    "PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED",
+    "PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE",
+    "PTS_GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX",
+    "PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH",
+    "PTS_PREFIX_RANGE_INTERNAL",
+    "PTS_PREFIX_SAMPLER_UNIFORM",
+    "PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20",
+    "PTSFinalSelectionConfig",
+    "PTSGenerationConfig",
+    "PTSGroupingConfig",
+    "PTSPrefixSelectorConfig",
+    "PTSRewardConfig",
+    "PTSSuffixLengthBucketConfig",
     "RankBucketCEMConfig",
     "RankBucketCEMSurrogateEvaluatorConfig",
     "COVERAGE_AWARE_LOCAL_POSITION_SCORER",
