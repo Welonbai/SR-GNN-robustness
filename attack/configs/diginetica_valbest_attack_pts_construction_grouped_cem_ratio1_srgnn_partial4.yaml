@@ -1,5 +1,5 @@
 experiment:
-  name: valbest_attack_pts_construction_grouped_cem_ratio1_srgnn_partial4
+  name: valbest_attack_pts_construction_grouped_cem_ratio1_srgnn_partial4_target5334
 
 data:
   dataset_name: diginetica
@@ -113,7 +113,7 @@ attack:
 
 targets:
   mode: explicit_list
-  explicit_list: [39588]
+  explicit_list: [5334]
   bucket: popular
   count: 1
   reuse_saved_targets: false

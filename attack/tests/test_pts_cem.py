@@ -17,6 +17,7 @@ from attack.pts.cem import (
     PTSCEMUpdateConfig,
     PTSGroupedCEMTrainer,
 )
+from attack.pts.policy import CONSUME_ONE_ACTION_NAME
 from attack.pts.specs import get_default_pts_v1_specs
 
 
@@ -201,6 +202,29 @@ def test_pts_cem_updated_policies_are_normalized_and_bounded(monkeypatch) -> Non
         for probabilities in policy_payload["group_probabilities"].values():
             assert sum(probabilities.values()) == pytest.approx(1.0)
             assert all(0.03 - 1e-8 <= value <= 0.90 + 1e-8 for value in probabilities.values())
+        assert (
+            CONSUME_ONE_ACTION_NAME
+            not in policy_payload["group_probabilities"]["suffix_1"]
+        )
+        assert (
+            CONSUME_ONE_ACTION_NAME
+            in policy_payload["group_probabilities"]["suffix_2"]
+        )
+        assert (
+            CONSUME_ONE_ACTION_NAME
+            in policy_payload["group_probabilities"]["suffix_3plus"]
+        )
+
+
+def test_pts_cem_candidate_policies_are_ragged(monkeypatch) -> None:
+    result = _train_small_result(monkeypatch, iterations=1, population_size=6)
+
+    for candidate in result.iteration_results[0].candidates:
+        assert CONSUME_ONE_ACTION_NAME not in candidate.policy.group_probabilities["suffix_1"]
+        assert CONSUME_ONE_ACTION_NAME in candidate.policy.group_probabilities["suffix_2"]
+        assert CONSUME_ONE_ACTION_NAME in candidate.policy.group_probabilities["suffix_3plus"]
+        for probabilities in candidate.policy.group_probabilities.values():
+            assert sum(probabilities.values()) == pytest.approx(1.0)
 
 
 def test_pts_cem_global_best_and_top_k_are_consistent(monkeypatch) -> None:
@@ -221,7 +245,7 @@ def test_pts_cem_global_best_and_top_k_are_consistent(monkeypatch) -> None:
     assert result.best_candidate.selected_as_global_best is True
 
 
-def test_pts_cem_dynamic_masks_remain_executor_time_only(monkeypatch) -> None:
+def test_pts_cem_suffix_1_policies_do_not_sample_duplicate_action(monkeypatch) -> None:
     _patch_generated_suffix(monkeypatch)
     trainer = PTSGroupedCEMTrainer(
         cem_config=PTSCEMConfig(
@@ -242,8 +266,10 @@ def test_pts_cem_dynamic_masks_remain_executor_time_only(monkeypatch) -> None:
 
     for iteration in result.iteration_results:
         for candidate in iteration.candidates:
-            assert "consume_one_keep_rest" in candidate.policy.group_probabilities["suffix_1"]
+            assert (
+                CONSUME_ONE_ACTION_NAME
+                not in candidate.policy.group_probabilities["suffix_1"]
+            )
             for record in candidate.per_session_records:
                 assert record["suffix_len_group"] == "suffix_1"
-                assert record["dynamic_mask_disable_consume_one"] is True
-                assert record["action"] != "consume_one_keep_rest"
+                assert record["action"] != CONSUME_ONE_ACTION_NAME

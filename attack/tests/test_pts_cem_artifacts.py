@@ -17,6 +17,7 @@ from attack.pts.cem import (
     PTSCEMEvaluationResult,
     PTSGroupedCEMTrainer,
 )
+from attack.pts.policy import CONSUME_ONE_ACTION_NAME
 from attack.pts.specs import get_default_pts_v1_specs
 
 
@@ -50,6 +51,14 @@ def _read_json(path: Path):
 def _read_jsonl(path: Path) -> list[dict[str, object]]:
     with path.open("r", encoding="utf-8") as handle:
         return [json.loads(line) for line in handle if line.strip()]
+
+
+def _assert_ragged_policy_payload(policy_payload: dict[str, object]) -> None:
+    group_probabilities = policy_payload["group_probabilities"]
+    assert isinstance(group_probabilities, dict)
+    assert CONSUME_ONE_ACTION_NAME not in group_probabilities["suffix_1"]
+    assert CONSUME_ONE_ACTION_NAME in group_probabilities["suffix_2"]
+    assert CONSUME_ONE_ACTION_NAME in group_probabilities["suffix_3plus"]
 
 
 def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None:
@@ -97,12 +106,18 @@ def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None
         assert all("per_session_records" not in row for row in trace_rows)
 
         best_policy = _read_json(Path(paths["pts_best_policy"]))
+        final_policy = _read_json(Path(paths["pts_final_policy"]))
         top_candidates = _read_json(Path(paths["pts_top_candidates"]))
         top_policies = _read_json(Path(paths["pts_top_candidate_policies"]))
+        rank1_policy = _read_json(Path(paths["top_candidate_rank_1_policy"]))
         rank1_metadata = _read_json(Path(paths["top_candidate_rank_1_metadata"]))
         rank1_sessions = _read_json(Path(paths["top_candidate_rank_1_sessions"]))
         rank1_records = _read_jsonl(Path(paths["top_candidate_rank_1_session_records"]))
 
+        _assert_ragged_policy_payload(best_policy["policy"])
+        _assert_ragged_policy_payload(final_policy)
+        _assert_ragged_policy_payload(trace_rows[0]["policy"])
+        _assert_ragged_policy_payload(rank1_policy)
         assert best_policy["selected_as_global_best"] is True
         best_key = best_policy["candidate_key"]
         assert sum(1 for row in trace_rows if row["selected_as_global_best"]) == 1

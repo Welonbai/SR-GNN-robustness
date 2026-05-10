@@ -20,7 +20,11 @@ from attack.pts.grouping import (
     assign_suffix_length_group,
     default_suffix_length_buckets,
 )
-from attack.pts.policy import GroupActionPolicy, PolicySampleResult
+from attack.pts.policy import (
+    GroupActionPolicy,
+    PolicySampleResult,
+    build_valid_actions_by_group,
+)
 from attack.pts.prefix_selector import (
     select_anchor_position,
     select_internal_uniform_anchor,
@@ -60,6 +64,7 @@ __all__ = [
     "apply_pts_construction_batch",
     "apply_suffix_construction",
     "assign_suffix_length_group",
+    "build_valid_actions_by_group",
     "candidate_key",
     "default_suffix_length_buckets",
     "get_default_pts_v1_specs",

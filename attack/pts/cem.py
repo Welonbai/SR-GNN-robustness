@@ -11,7 +11,7 @@ except ImportError:  # pragma: no cover - numpy is available in the main project
 
 from attack.pts.executor import apply_pts_construction_batch
 from attack.pts.grouping import SuffixLengthBucket, default_suffix_length_buckets
-from attack.pts.policy import GroupActionPolicy
+from attack.pts.policy import GroupActionPolicy, build_valid_actions_by_group
 from attack.pts.specs import PTSConstructionSpec
 
 
@@ -153,6 +153,13 @@ class PTSGroupedCEMTrainer:
         self.disable_consume_one_when_suffix_len_leq_1 = bool(
             disable_consume_one_when_suffix_len_leq_1
         )
+        self.valid_actions_by_group = build_valid_actions_by_group(
+            group_buckets=self.suffix_length_buckets,
+            enabled_actions=self._action_names(),
+            disable_consume_one_when_suffix_len_leq_1=(
+                self.disable_consume_one_when_suffix_len_leq_1
+            ),
+        )
         self.generation_topk = int(generation_topk)
         self.generation_rng_tag = str(generation_rng_tag)
         if int(self.generation_topk) <= 0:
@@ -161,11 +168,13 @@ class PTSGroupedCEMTrainer:
             raise ValueError("Phase 2 PTS-CEM supports only sampler.type='dirichlet'.")
         if self.cem_config.init.mode != "uniform":
             raise ValueError("Phase 2 PTS-CEM supports only init.mode='uniform'.")
-        _validate_probability_bounds(
-            group_count=len(self._action_names()),
-            min_probability=float(self.cem_config.update.min_probability),
-            max_probability=float(self.cem_config.update.max_probability),
-        )
+        for group_name, actions in self.valid_actions_by_group.items():
+            _validate_probability_bounds(
+                group_count=len(actions),
+                min_probability=float(self.cem_config.update.min_probability),
+                max_probability=float(self.cem_config.update.max_probability),
+                label=f"group {group_name!r}",
+            )
 
     def train(
         self,
@@ -301,6 +310,7 @@ class PTSGroupedCEMTrainer:
         return GroupActionPolicy.uniform(
             group_names=[bucket.name for bucket in self.suffix_length_buckets],
             action_names=self._action_names(),
+            valid_actions_by_group=self.valid_actions_by_group,
             disable_consume_one_when_suffix_len_leq_1=(
                 self.disable_consume_one_when_suffix_len_leq_1
             ),
@@ -347,6 +357,8 @@ def _sample_candidate_policy(
         }
     return GroupActionPolicy(
         sampled,
+        valid_actions_by_group=current_policy.valid_actions_by_group,
+        enabled_actions=current_policy.enabled_actions,
         disable_consume_one_when_suffix_len_leq_1=(
             disable_consume_one_when_suffix_len_leq_1
         ),
@@ -406,6 +418,8 @@ def _updated_policy_from_elites(
         )
     return GroupActionPolicy(
         updated,
+        valid_actions_by_group=old_policy.valid_actions_by_group,
+        enabled_actions=old_policy.enabled_actions,
         disable_consume_one_when_suffix_len_leq_1=(
             disable_consume_one_when_suffix_len_leq_1
         ),
@@ -424,6 +438,7 @@ def _bounded_probability_mapping(
         group_count=len(probabilities),
         min_probability=float(min_probability),
         max_probability=float(max_probability),
+        label="probability mapping",
     )
     values = {
         action: min(max(float(value), float(min_probability)), float(max_probability))
@@ -472,13 +487,18 @@ def _validate_probability_bounds(
     group_count: int,
     min_probability: float,
     max_probability: float,
+    label: str = "group",
 ) -> None:
     if int(group_count) <= 0:
-        raise ValueError("group_count must be positive.")
+        raise ValueError(f"{label} group_count must be positive.")
     if float(min_probability) * int(group_count) > 1.0 + 1e-12:
-        raise ValueError("min_probability is infeasible for the number of actions.")
+        raise ValueError(
+            f"min_probability is infeasible for the number of actions in {label}."
+        )
     if float(max_probability) * int(group_count) < 1.0 - 1e-12:
-        raise ValueError("max_probability is infeasible for the number of actions.")
+        raise ValueError(
+            f"max_probability is infeasible for the number of actions in {label}."
+        )
 
 
 def _elite_count(population_size: int, elite_ratio: float) -> int:
