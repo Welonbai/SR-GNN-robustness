@@ -18,6 +18,7 @@ POSITION_OPT_SHARED_POLICY_RUN_TYPE = "position_opt_shared_policy"
 POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE = "rank_bucket_cem"
 POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE = "rank_bucket_cem_candidate_replay"
 PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE = "pts_construction_grouped_cem"
+PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE = "pts_construction_candidate_replay"
 TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE = "target_aware_carrier_selection_nz"
 TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE = "target_aware_carrier_local_position"
 TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE = "target_aware_coverage_local_position"
@@ -404,6 +405,15 @@ def attack_key_payload(
             payload["attack_runtime_identity"] = _normalize_identity_value(
                 attack_identity_context
             )
+    if run_type == PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE:
+        if attack_identity_context is None:
+            raise ValueError(
+                "pts_construction_candidate_replay final attack identity requires "
+                "explicit attack_identity_context with source candidate identity."
+            )
+        payload["attack_runtime_identity"] = _normalize_identity_value(
+            attack_identity_context
+        )
     return payload
 
 
@@ -899,6 +909,7 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE",
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
+    "PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE",
     "PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
