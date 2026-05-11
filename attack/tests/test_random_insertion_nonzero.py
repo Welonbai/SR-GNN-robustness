@@ -31,19 +31,13 @@ RANDOM_NZ_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sample3.yaml"
+    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sampled.yaml"
 )
 RANDOM_INSERTION_PARTIAL4_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_random_insertion_nonzero_when_possible_ratio1_srgnn_target11103_partial4.yaml"
-)
-RANDOM_INSERTION_FULL_CONFIG_PATH = (
-    REPO_ROOT
-    / "attack"
-    / "configs"
-    / "diginetica_valbest_attack_random_insertion_nonzero_when_possible_ratio1_srgnn_target11103.yaml"
+    / "diginetica_valbest_attack_random_insertion_nonzero_when_possible_ratio1_srgnn_sampled_partial4.yaml"
 )
 
 
@@ -196,16 +190,18 @@ def test_metadata_records_lengths_comparability_and_target_occurrences() -> None
 
 def test_new_configs_and_existing_random_nz_config_parse() -> None:
     partial = load_config(RANDOM_INSERTION_PARTIAL4_CONFIG_PATH)
-    full = load_config(RANDOM_INSERTION_FULL_CONFIG_PATH)
     random_nz = load_config(RANDOM_NZ_CONFIG_PATH)
 
-    assert partial.experiment.name.endswith("partial4")
-    assert partial.targets.explicit_list == (11103,)
+    assert partial.experiment.name.endswith("sampled_partial4")
+    assert "_sample9" not in partial.experiment.name
+    assert partial.targets.mode == "sampled"
+    assert partial.targets.explicit_list == ()
+    assert partial.targets.bucket == "popular"
+    assert partial.targets.count == 9
+    assert partial.targets.reuse_saved_targets is True
     assert partial.victims.params["srgnn"]["train"]["epochs"] == 4
-    assert full.victims.params["srgnn"]["train"]["epochs"] == 30
-    assert full.victims.params["srgnn"]["train"]["patience"] == 10
     assert (
-        full.victims.params["srgnn"]["train"]["checkpoint_protocol"]
+        partial.victims.params["srgnn"]["train"]["checkpoint_protocol"]
         == "validation_best"
     )
     assert random_nz.attack.replacement_topk_ratio == pytest.approx(1.0)

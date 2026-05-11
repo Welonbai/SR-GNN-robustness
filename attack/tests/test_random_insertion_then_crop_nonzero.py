@@ -35,25 +35,25 @@ RANDOM_NZ_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sample3.yaml"
+    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sampled.yaml"
 )
 RANDOM_INSERTION_PARTIAL4_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_random_insertion_nonzero_when_possible_ratio1_srgnn_target11103_partial4.yaml"
+    / "diginetica_valbest_attack_random_insertion_nonzero_when_possible_ratio1_srgnn_sampled_partial4.yaml"
 )
-TAIL_REPLACEMENT_PARTIAL5_CONFIG_PATH = (
+TAIL_REPLACEMENT_SAMPLED_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_tail_replacement_nonzero_when_possible_ratio1_srgnn_target11103_partial5.yaml"
+    / "diginetica_valbest_attack_tail_replacement_nonzero_when_possible_ratio1_srgnn_sampled_partial4.yaml"
 )
-TAIL_INSERTION_PARTIAL5_CONFIG_PATH = (
+TAIL_INSERTION_SAMPLED_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_tail_insertion_nonzero_when_possible_ratio1_srgnn_target11103_partial5.yaml"
+    / "diginetica_valbest_attack_tail_insertion_nonzero_when_possible_ratio1_srgnn_sampled_partial4.yaml"
 )
 INSERTION_THEN_CROP_PARTIAL5_CONFIG_PATH = (
     REPO_ROOT
@@ -262,8 +262,8 @@ def test_new_configs_and_existing_basis_configs_parse() -> None:
     full = load_config(INSERTION_THEN_CROP_FULL_CONFIG_PATH)
     random_nz = load_config(RANDOM_NZ_CONFIG_PATH)
     random_insertion = load_config(RANDOM_INSERTION_PARTIAL4_CONFIG_PATH)
-    tail_replacement = load_config(TAIL_REPLACEMENT_PARTIAL5_CONFIG_PATH)
-    tail_insertion = load_config(TAIL_INSERTION_PARTIAL5_CONFIG_PATH)
+    tail_replacement = load_config(TAIL_REPLACEMENT_SAMPLED_CONFIG_PATH)
+    tail_insertion = load_config(TAIL_INSERTION_SAMPLED_CONFIG_PATH)
 
     assert partial.experiment.name.endswith("partial5")
     assert partial.targets.explicit_list == (11103,)

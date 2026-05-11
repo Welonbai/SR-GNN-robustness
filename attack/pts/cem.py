@@ -46,6 +46,25 @@ class PTSCEMInitConfig:
 
 
 @dataclass(frozen=True)
+class PTSCEMResamplingConfig:
+    mode: str = "standard"
+    local_concentration_scale: float = 30.0
+
+    def __post_init__(self) -> None:
+        mode = str(self.mode).strip().lower()
+        if mode not in {"standard", "elite_centered"}:
+            raise ValueError("resampling.mode must be 'standard' or 'elite_centered'.")
+        if float(self.local_concentration_scale) <= 0.0:
+            raise ValueError("resampling.local_concentration_scale must be positive.")
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(
+            self,
+            "local_concentration_scale",
+            float(self.local_concentration_scale),
+        )
+
+
+@dataclass(frozen=True)
 class PTSCEMConfig:
     iterations: int
     population_schedule: list[int] | None = None
@@ -54,6 +73,7 @@ class PTSCEMConfig:
     sampler: PTSCEMSamplerConfig = field(default_factory=PTSCEMSamplerConfig)
     update: PTSCEMUpdateConfig = field(default_factory=PTSCEMUpdateConfig)
     init: PTSCEMInitConfig = field(default_factory=PTSCEMInitConfig)
+    resampling: PTSCEMResamplingConfig = field(default_factory=PTSCEMResamplingConfig)
     base_seed: int = 0
     candidate_seed_stride: int = 1000
     save_top_k_candidates: int = 3
@@ -99,6 +119,12 @@ class PTSCEMCandidateResult:
     final_sessions: list[list[int]]
     selected_as_elite: bool = False
     selected_as_global_best: bool = False
+    sample_origin: str = "global_policy"
+    parent_iteration: int | None = None
+    parent_candidate_id: int | None = None
+    parent_candidate_key: str | None = None
+    parent_reward: float | None = None
+    parent_rank_among_elites: int | None = None
 
     @property
     def candidate_key(self) -> str:
@@ -191,20 +217,25 @@ class PTSGroupedCEMTrainer:
         policy_history = [current_policy.to_dict()]
         iteration_results: list[PTSCEMIterationResult] = []
         all_candidates: list[PTSCEMCandidateResult] = []
+        previous_elites: list[PTSCEMCandidateResult] = []
 
         for iteration in range(int(self.cem_config.iterations)):
             population_size = self._population_size(iteration)
             policy_before = current_policy.to_dict()
             candidates: list[PTSCEMCandidateResult] = []
+            sample_plan = self._candidate_sample_plan(
+                iteration=int(iteration),
+                population_size=int(population_size),
+                current_policy=current_policy,
+                previous_elites=previous_elites,
+            )
 
-            for candidate_id in range(population_size):
+            for candidate_id, sample_spec in enumerate(sample_plan):
                 seed = self._candidate_seed(iteration, candidate_id)
-                candidate_policy = _sample_candidate_policy(
-                    current_policy,
-                    seed=seed,
-                    concentration_scale=float(
-                        self.cem_config.sampler.concentration_scale
-                    ),
+                candidate_policy = _sample_candidate_policy_from_center(
+                    center_policy=sample_spec.center_policy,
+                    candidate_seed=seed,
+                    concentration_scale=sample_spec.concentration_scale,
                     disable_consume_one_when_suffix_len_leq_1=(
                         self.disable_consume_one_when_suffix_len_leq_1
                     ),
@@ -255,6 +286,12 @@ class PTSGroupedCEMTrainer:
                         [int(item) for item in session]
                         for session in construction_result.final_sessions
                     ],
+                    sample_origin=sample_spec.sample_origin,
+                    parent_iteration=sample_spec.parent_iteration,
+                    parent_candidate_id=sample_spec.parent_candidate_id,
+                    parent_candidate_key=sample_spec.parent_candidate_key,
+                    parent_reward=sample_spec.parent_reward,
+                    parent_rank_among_elites=sample_spec.parent_rank_among_elites,
                 )
                 candidates.append(candidate)
                 all_candidates.append(candidate)
@@ -264,6 +301,7 @@ class PTSGroupedCEMTrainer:
             elites = ranked[:elite_count]
             for candidate in elites:
                 candidate.selected_as_elite = True
+            previous_elites = list(elites)
 
             current_policy = _updated_policy_from_elites(
                 old_policy=current_policy,
@@ -331,20 +369,114 @@ class PTSGroupedCEMTrainer:
             self.cem_config.candidate_seed_stride
         ) + int(candidate_id)
 
+    def _candidate_sample_plan(
+        self,
+        *,
+        iteration: int,
+        population_size: int,
+        current_policy: GroupActionPolicy,
+        previous_elites: Sequence[PTSCEMCandidateResult],
+    ) -> list["_CandidateSampleSpec"]:
+        mode = self.cem_config.resampling.mode
+        if mode == "standard":
+            return [
+                _CandidateSampleSpec(
+                    center_policy=current_policy,
+                    concentration_scale=float(
+                        self.cem_config.sampler.concentration_scale
+                    ),
+                    sample_origin="global_policy",
+                )
+                for _ in range(int(population_size))
+            ]
+        if mode != "elite_centered":
+            raise ValueError(f"Unsupported resampling.mode {mode!r}.")
+        if int(iteration) == 0:
+            return [
+                _CandidateSampleSpec(
+                    center_policy=current_policy,
+                    concentration_scale=float(
+                        self.cem_config.sampler.concentration_scale
+                    ),
+                    sample_origin="initial_global_policy",
+                )
+                for _ in range(int(population_size))
+            ]
+        if not previous_elites:
+            raise RuntimeError(
+                "elite_centered resampling requires previous iteration elites."
+            )
+        allocation = _allocate_children_to_elites(
+            population_size=int(population_size),
+            elite_count=len(previous_elites),
+        )
+        sample_plan: list[_CandidateSampleSpec] = []
+        for elite_rank_index, (elite, child_count) in enumerate(
+            zip(previous_elites, allocation),
+            start=1,
+        ):
+            for _ in range(int(child_count)):
+                sample_plan.append(
+                    _CandidateSampleSpec(
+                        center_policy=elite.policy,
+                        concentration_scale=float(
+                            self.cem_config.resampling.local_concentration_scale
+                        ),
+                        sample_origin="elite_centered",
+                        parent_iteration=int(elite.iteration),
+                        parent_candidate_id=int(elite.candidate_id),
+                        parent_candidate_key=str(elite.candidate_key),
+                        parent_reward=float(elite.reward),
+                        parent_rank_among_elites=int(elite_rank_index),
+                    )
+                )
+        if len(sample_plan) != int(population_size):
+            raise RuntimeError("Elite-centered sample allocation size mismatch.")
+        return sample_plan
+
 
 def candidate_key(iteration: int, candidate_id: int) -> str:
     return f"iter{int(iteration)}_cand{int(candidate_id)}"
 
 
+@dataclass(frozen=True)
+class _CandidateSampleSpec:
+    center_policy: GroupActionPolicy
+    concentration_scale: float
+    sample_origin: str
+    parent_iteration: int | None = None
+    parent_candidate_id: int | None = None
+    parent_candidate_key: str | None = None
+    parent_reward: float | None = None
+    parent_rank_among_elites: int | None = None
+
+
+def _sample_candidate_policy_from_center(
+    *,
+    center_policy: GroupActionPolicy,
+    candidate_seed: int,
+    concentration_scale: float,
+    disable_consume_one_when_suffix_len_leq_1: bool,
+) -> GroupActionPolicy:
+    return _sample_candidate_policy(
+        center_policy,
+        seed=int(candidate_seed),
+        concentration_scale=float(concentration_scale),
+        disable_consume_one_when_suffix_len_leq_1=(
+            disable_consume_one_when_suffix_len_leq_1
+        ),
+    )
+
+
 def _sample_candidate_policy(
-    current_policy: GroupActionPolicy,
+    center_policy: GroupActionPolicy,
     *,
     seed: int,
     concentration_scale: float,
     disable_consume_one_when_suffix_len_leq_1: bool,
 ) -> GroupActionPolicy:
     sampled: dict[str, dict[str, float]] = {}
-    for group, probabilities in current_policy.group_probabilities.items():
+    for group, probabilities in center_policy.group_probabilities.items():
         action_names = list(probabilities.keys())
         alpha = [
             max(float(probabilities[action]), 1e-12) * float(concentration_scale)
@@ -357,12 +489,31 @@ def _sample_candidate_policy(
         }
     return GroupActionPolicy(
         sampled,
-        valid_actions_by_group=current_policy.valid_actions_by_group,
-        enabled_actions=current_policy.enabled_actions,
+        valid_actions_by_group=center_policy.valid_actions_by_group,
+        enabled_actions=center_policy.enabled_actions,
         disable_consume_one_when_suffix_len_leq_1=(
             disable_consume_one_when_suffix_len_leq_1
         ),
     )
+
+
+def _allocate_children_to_elites(
+    *,
+    population_size: int,
+    elite_count: int,
+) -> list[int]:
+    population = int(population_size)
+    elites = int(elite_count)
+    if population < 0:
+        raise ValueError("population_size must be non-negative.")
+    if elites <= 0:
+        raise ValueError("elite_count must be positive.")
+    base = population // elites
+    remainder = population % elites
+    return [
+        int(base + (1 if elite_index < remainder else 0))
+        for elite_index in range(elites)
+    ]
 
 
 def _sample_dirichlet(alpha: Sequence[float], *, seed: int) -> list[float]:
@@ -533,8 +684,10 @@ __all__ = [
     "PTSCEMInitConfig",
     "PTSCEMIterationResult",
     "PTSCEMResult",
+    "PTSCEMResamplingConfig",
     "PTSCEMSamplerConfig",
     "PTSCEMUpdateConfig",
     "PTSGroupedCEMTrainer",
+    "_allocate_children_to_elites",
     "candidate_key",
 ]

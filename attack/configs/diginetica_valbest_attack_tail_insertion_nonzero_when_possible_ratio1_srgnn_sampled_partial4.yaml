@@ -1,5 +1,5 @@
 experiment:
-  name: valbest_attack_random_insertion_nonzero_when_possible_ratio1_srgnn_target11103_partial4
+  name: valbest_attack_tail_insertion_nonzero_when_possible_ratio1_srgnn_sampled_partial4
 
 data:
   dataset_name: diginetica
@@ -41,10 +41,10 @@ attack:
         patience_metric: recall20_or_mrr20
 
 targets:
-  mode: explicit_list
-  explicit_list: [11103]
+  mode: sampled
+  explicit_list: []
   bucket: popular
-  count: 1
+  count: 9
   reuse_saved_targets: true
 
 victims:
@@ -75,3 +75,4 @@ artifacts:
   root: outputs
   shared_dir: shared
   runs_dir: runs
+

@@ -28,25 +28,19 @@ RANDOM_NZ_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sample3.yaml"
+    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sampled.yaml"
 )
 RANDOM_INSERTION_PARTIAL4_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_random_insertion_nonzero_when_possible_ratio1_srgnn_target11103_partial4.yaml"
+    / "diginetica_valbest_attack_random_insertion_nonzero_when_possible_ratio1_srgnn_sampled_partial4.yaml"
 )
-TAIL_REPLACEMENT_PARTIAL5_CONFIG_PATH = (
+TAIL_REPLACEMENT_SAMPLED_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_tail_replacement_nonzero_when_possible_ratio1_srgnn_target11103_partial5.yaml"
-)
-TAIL_REPLACEMENT_FULL_CONFIG_PATH = (
-    REPO_ROOT
-    / "attack"
-    / "configs"
-    / "diginetica_valbest_attack_tail_replacement_nonzero_when_possible_ratio1_srgnn_target11103.yaml"
+    / "diginetica_valbest_attack_tail_replacement_nonzero_when_possible_ratio1_srgnn_sampled_partial4.yaml"
 )
 
 
@@ -113,7 +107,7 @@ def test_validate_tail_replaced_sessions_checks_count_target_length_and_prefix()
 
 
 def test_metadata_records_tail_ratio_noop_topk_and_nullable_checkpoint() -> None:
-    config = load_config(TAIL_REPLACEMENT_PARTIAL5_CONFIG_PATH)
+    config = load_config(TAIL_REPLACEMENT_SAMPLED_CONFIG_PATH)
     template_sessions = [[99, 1, 2], [3, 4, 5, 6, 7, 99], [8, 9]]
     policy = TailReplacementPolicy()
     results = [
@@ -167,18 +161,21 @@ def test_metadata_records_tail_ratio_noop_topk_and_nullable_checkpoint() -> None
 
 
 def test_new_configs_and_existing_comparison_configs_parse() -> None:
-    partial = load_config(TAIL_REPLACEMENT_PARTIAL5_CONFIG_PATH)
-    full = load_config(TAIL_REPLACEMENT_FULL_CONFIG_PATH)
+    sampled = load_config(TAIL_REPLACEMENT_SAMPLED_CONFIG_PATH)
     random_nz = load_config(RANDOM_NZ_CONFIG_PATH)
     random_insertion = load_config(RANDOM_INSERTION_PARTIAL4_CONFIG_PATH)
 
-    assert partial.experiment.name.endswith("partial5")
-    assert partial.targets.explicit_list == (11103,)
-    assert partial.victims.params["srgnn"]["train"]["epochs"] == 5
-    assert full.victims.params["srgnn"]["train"]["epochs"] == 30
-    assert full.victims.params["srgnn"]["train"]["patience"] == 10
+    assert sampled.experiment.name.endswith("sampled_partial4")
+    assert "_sample9" not in sampled.experiment.name
+    assert sampled.targets.mode == "sampled"
+    assert sampled.targets.explicit_list == ()
+    assert sampled.targets.bucket == "popular"
+    assert sampled.targets.count == 9
+    assert sampled.targets.reuse_saved_targets is True
+    assert sampled.victims.params["srgnn"]["train"]["epochs"] == 4
+    assert sampled.victims.params["srgnn"]["train"]["patience"] == 10
     assert (
-        full.victims.params["srgnn"]["train"]["checkpoint_protocol"]
+        sampled.victims.params["srgnn"]["train"]["checkpoint_protocol"]
         == "validation_best"
     )
     assert random_nz.attack.replacement_topk_ratio == pytest.approx(1.0)
@@ -186,7 +183,7 @@ def test_new_configs_and_existing_comparison_configs_parse() -> None:
 
 
 def test_tail_replacement_shares_generation_key_but_has_distinct_attack_key() -> None:
-    config = load_config(TAIL_REPLACEMENT_PARTIAL5_CONFIG_PATH)
+    config = load_config(TAIL_REPLACEMENT_SAMPLED_CONFIG_PATH)
 
     shared_keys = {
         shared_attack_artifact_key(config, run_type=RANDOM_NZ_RUN_TYPE),

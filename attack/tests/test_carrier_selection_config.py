@@ -42,7 +42,7 @@ RANDOM_NZ_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sample3.yaml"
+    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sampled.yaml"
 )
 TACS_LOCAL_POSITION_CONFIG_PATH = (
     REPO_ROOT

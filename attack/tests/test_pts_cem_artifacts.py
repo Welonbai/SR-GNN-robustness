@@ -104,6 +104,8 @@ def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None
         assert len(trace_rows) == 8
         assert all("final_sessions" not in row for row in trace_rows)
         assert all("per_session_records" not in row for row in trace_rows)
+        assert all(row["sample_origin"] == "global_policy" for row in trace_rows)
+        assert all("parent_candidate_key" in row for row in trace_rows)
 
         best_policy = _read_json(Path(paths["pts_best_policy"]))
         final_policy = _read_json(Path(paths["pts_final_policy"]))
@@ -126,9 +128,13 @@ def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None
         ] == best_key
         assert top_candidates["candidates"][0]["candidate_key"] == best_key
         assert top_candidates["candidates"][0]["selected_as_global_best"] is True
+        assert "sample_origin" in top_candidates["candidates"][0]
+        assert "parent_candidate_key" in top_candidates["candidates"][0]
         assert top_policies["candidates"][0]["candidate_key"] == best_key
         assert rank1_metadata["candidate_key"] == best_key
         assert rank1_metadata["selected_as_global_best"] is True
+        assert "sample_origin" in rank1_metadata
+        assert "parent_candidate_key" in rank1_metadata
         assert isinstance(rank1_sessions, list)
         assert len(rank1_records) == len(rank1_sessions)
     finally:

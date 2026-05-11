@@ -956,6 +956,38 @@ class PTSCEMInitRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class PTSCEMResamplingRuntimeConfig:
+    mode: str = "standard"
+    local_concentration_scale: float = 30.0
+
+    def __post_init__(self) -> None:
+        mode = _as_str(
+            self.mode,
+            "attack.pts_construction.cem.resampling.mode",
+        ).strip().lower()
+        if mode not in {"standard", "elite_centered"}:
+            raise ValueError(
+                "attack.pts_construction.cem.resampling.mode must be "
+                "'standard' or 'elite_centered'."
+            )
+        local_concentration_scale = _as_float(
+            self.local_concentration_scale,
+            "attack.pts_construction.cem.resampling.local_concentration_scale",
+        )
+        if local_concentration_scale <= 0.0:
+            raise ValueError(
+                "attack.pts_construction.cem.resampling.local_concentration_scale "
+                "must be positive."
+            )
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(
+            self,
+            "local_concentration_scale",
+            local_concentration_scale,
+        )
+
+
+@dataclass(frozen=True)
 class PTSCEMRuntimeConfig:
     iterations: int = 3
     population_schedule: tuple[int, ...] | None = (16, 8, 8)
@@ -964,6 +996,9 @@ class PTSCEMRuntimeConfig:
     sampler: PTSCEMSamplerRuntimeConfig = field(default_factory=PTSCEMSamplerRuntimeConfig)
     update: PTSCEMUpdateRuntimeConfig = field(default_factory=PTSCEMUpdateRuntimeConfig)
     init: PTSCEMInitRuntimeConfig = field(default_factory=PTSCEMInitRuntimeConfig)
+    resampling: PTSCEMResamplingRuntimeConfig = field(
+        default_factory=PTSCEMResamplingRuntimeConfig
+    )
     seed_source: str = PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED
     candidate_seed_stride: int = 1000
     save_top_k_candidates: int = 3
@@ -1019,6 +1054,11 @@ class PTSCEMRuntimeConfig:
             PTSCEMInitRuntimeConfig,
             "attack.pts_construction.cem.init",
         )
+        resampling = _coerce_pts_dataclass(
+            self.resampling,
+            PTSCEMResamplingRuntimeConfig,
+            "attack.pts_construction.cem.resampling",
+        )
         seed_source = _as_str(
             self.seed_source,
             "attack.pts_construction.cem.seed_source",
@@ -1051,6 +1091,7 @@ class PTSCEMRuntimeConfig:
         object.__setattr__(self, "sampler", sampler)
         object.__setattr__(self, "update", update)
         object.__setattr__(self, "init", init)
+        object.__setattr__(self, "resampling", resampling)
         object.__setattr__(self, "seed_source", seed_source)
         object.__setattr__(self, "candidate_seed_stride", candidate_seed_stride)
         object.__setattr__(self, "save_top_k_candidates", save_top_k_candidates)
@@ -3173,6 +3214,7 @@ __all__ = [
     "PTSActionsDynamicMasksConfig",
     "PTSCEMInitRuntimeConfig",
     "PTSCEMRuntimeConfig",
+    "PTSCEMResamplingRuntimeConfig",
     "PTSCEMSamplerRuntimeConfig",
     "PTSCEMUpdateRuntimeConfig",
     "PTSConstructionConfig",

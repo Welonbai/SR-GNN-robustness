@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 from attack.common.config import (
     PTSFinalSelectionConfig,
     PTSRewardConfig,
+    PTSCEMRuntimeConfig,
     PTSSuffixLengthBucketConfig,
     load_config,
 )
@@ -65,6 +66,42 @@ def test_pts_cem_runtime_config_mapping() -> None:
     assert cem_config.population_schedule == [16, 8, 8]
     assert cem_config.base_seed == config.seeds.position_opt_seed
     assert cem_config.candidate_seed_stride == 1000
+    assert cem_config.resampling.mode == "standard"
+
+
+def test_pts_cem_resampling_runtime_config_mapping() -> None:
+    config = load_config(CONFIG_PATH)
+    pts = config.attack.pts_construction
+    assert pts is not None
+    resampling_config = _with_pts(
+        config,
+        replace(
+            pts,
+            cem=replace(
+                pts.cem,
+                resampling={
+                    "mode": "elite_centered",
+                    "local_concentration_scale": 30.0,
+                },
+            ),
+        ),
+    )
+
+    cem_config = _build_pts_cem_config_from_config(resampling_config)
+
+    assert cem_config.resampling.mode == "elite_centered"
+    assert cem_config.resampling.local_concentration_scale == 30.0
+
+
+def test_pts_cem_resampling_rejects_global_exploration_fields() -> None:
+    with pytest.raises(TypeError, match="global_exploration_fraction"):
+        PTSCEMRuntimeConfig(
+            resampling={
+                "mode": "elite_centered",
+                "local_concentration_scale": 30.0,
+                "global_exploration_fraction": 0.25,
+            }
+        )
 
 
 def test_invalid_final_selection_mode_raises() -> None:

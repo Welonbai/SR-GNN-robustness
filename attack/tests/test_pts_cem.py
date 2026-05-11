@@ -13,9 +13,11 @@ if str(REPO_ROOT) not in sys.path:
 from attack.pts.cem import (
     PTSCEMConfig,
     PTSCEMEvaluationResult,
+    PTSCEMResamplingConfig,
     PTSCEMSamplerConfig,
     PTSCEMUpdateConfig,
     PTSGroupedCEMTrainer,
+    _allocate_children_to_elites,
 )
 from attack.pts.policy import CONSUME_ONE_ACTION_NAME
 from attack.pts.specs import get_default_pts_v1_specs
@@ -88,6 +90,13 @@ def _train_small_result(monkeypatch, *, iterations: int = 3, population_size: in
 
 
 def test_pts_cem_config_validation() -> None:
+    assert (
+        PTSCEMConfig(iterations=1, population_size=2, base_seed=1)
+        .resampling
+        .mode
+        == "standard"
+    )
+
     with pytest.raises(ValueError, match="population_schedule length"):
         PTSCEMConfig(iterations=2, population_schedule=[8], base_seed=1)
 
@@ -118,6 +127,37 @@ def test_pts_cem_config_validation() -> None:
             base_seed=1,
             save_top_k_candidates=-1,
         )
+
+    with pytest.raises(ValueError, match="resampling.mode"):
+        PTSCEMResamplingConfig(mode="mixed")
+
+    with pytest.raises(ValueError, match="local_concentration_scale"):
+        PTSCEMResamplingConfig(local_concentration_scale=0.0)
+
+
+def test_pts_cem_elite_child_allocation() -> None:
+    assert _allocate_children_to_elites(population_size=8, elite_count=4) == [
+        2,
+        2,
+        2,
+        2,
+    ]
+    assert _allocate_children_to_elites(population_size=8, elite_count=2) == [4, 4]
+    assert _allocate_children_to_elites(population_size=10, elite_count=4) == [
+        3,
+        3,
+        2,
+        2,
+    ]
+    assert _allocate_children_to_elites(population_size=3, elite_count=4) == [
+        1,
+        1,
+        1,
+        0,
+    ]
+
+    with pytest.raises(ValueError, match="elite_count"):
+        _allocate_children_to_elites(population_size=3, elite_count=0)
 
 
 def test_pts_cem_population_schedule_evaluates_expected_candidate_count(monkeypatch) -> None:
@@ -151,6 +191,11 @@ def test_pts_cem_population_schedule_evaluates_expected_candidate_count(monkeypa
         8,
         8,
     ]
+    assert all(
+        candidate.sample_origin == "global_policy"
+        for iteration in result.iteration_results
+        for candidate in iteration.candidates
+    )
 
 
 def test_pts_cem_floor_style_elite_counts(monkeypatch) -> None:
@@ -225,6 +270,101 @@ def test_pts_cem_candidate_policies_are_ragged(monkeypatch) -> None:
         assert CONSUME_ONE_ACTION_NAME in candidate.policy.group_probabilities["suffix_3plus"]
         for probabilities in candidate.policy.group_probabilities.values():
             assert sum(probabilities.values()) == pytest.approx(1.0)
+
+
+def test_pts_cem_elite_centered_resampling_origins_and_parents(monkeypatch) -> None:
+    _patch_generated_suffix(monkeypatch)
+    trainer = PTSGroupedCEMTrainer(
+        cem_config=PTSCEMConfig(
+            iterations=3,
+            population_schedule=[16, 8, 8],
+            elite_ratio=0.25,
+            sampler=PTSCEMSamplerConfig(concentration_scale=5.0),
+            resampling=PTSCEMResamplingConfig(
+                mode="elite_centered",
+                local_concentration_scale=30.0,
+            ),
+            base_seed=19,
+            save_top_k_candidates=4,
+        ),
+        specs=get_default_pts_v1_specs(),
+    )
+
+    result = trainer.train(
+        template_sessions=[
+            [1, 2, 3, 4, 5],
+            [6, 7, 8, 9],
+            [10, 11, 12],
+            [13, 14],
+        ],
+        target_item=99,
+        poison_runner=object(),
+        evaluator_fn=_regen_suffix3_evaluator,
+    )
+
+    iter0, iter1, iter2 = result.iteration_results
+    assert all(
+        candidate.sample_origin == "initial_global_policy"
+        for candidate in iter0.candidates
+    )
+    assert all(candidate.sample_origin == "elite_centered" for candidate in iter1.candidates)
+    assert all(candidate.sample_origin == "elite_centered" for candidate in iter2.candidates)
+    assert not any(
+        candidate.sample_origin == "global_policy"
+        for iteration in (iter1, iter2)
+        for candidate in iteration.candidates
+    )
+
+    iter1_parent_counts = _parent_key_counts(iter1.candidates)
+    iter2_parent_counts = _parent_key_counts(iter2.candidates)
+    assert list(iter1_parent_counts.values()) == [2, 2, 2, 2]
+    assert list(iter2_parent_counts.values()) == [4, 4]
+
+    iter0_elite_keys = set(iter0.elite_candidate_keys)
+    iter1_elite_keys = set(iter1.elite_candidate_keys)
+    assert set(iter1_parent_counts) == iter0_elite_keys
+    assert set(iter2_parent_counts) == iter1_elite_keys
+
+    for iteration_index, iteration in enumerate((iter1, iter2), start=1):
+        for candidate in iteration.candidates:
+            assert candidate.parent_candidate_key
+            assert candidate.parent_iteration == iteration_index - 1
+            assert candidate.parent_candidate_id is not None
+            assert candidate.parent_reward is not None
+            assert candidate.parent_rank_among_elites is not None
+            assert candidate.parent_rank_among_elites >= 1
+            assert (
+                CONSUME_ONE_ACTION_NAME
+                not in candidate.policy.group_probabilities["suffix_1"]
+            )
+            assert (
+                CONSUME_ONE_ACTION_NAME
+                in candidate.policy.group_probabilities["suffix_2"]
+            )
+            assert (
+                CONSUME_ONE_ACTION_NAME
+                in candidate.policy.group_probabilities["suffix_3plus"]
+            )
+            for probabilities in candidate.policy.group_probabilities.values():
+                assert sum(probabilities.values()) == pytest.approx(1.0)
+
+    assert result.best_candidate is result.top_candidates[0]
+    all_candidates = [
+        candidate
+        for iteration in result.iteration_results
+        for candidate in iteration.candidates
+    ]
+    assert sum(1 for candidate in all_candidates if candidate.selected_as_global_best) == 1
+
+
+def _parent_key_counts(candidates):
+    counts: dict[str, int] = {}
+    for candidate in candidates:
+        assert candidate.parent_candidate_key is not None
+        counts[candidate.parent_candidate_key] = (
+            counts.get(candidate.parent_candidate_key, 0) + 1
+        )
+    return counts
 
 
 def test_pts_cem_global_best_and_top_k_are_consistent(monkeypatch) -> None:

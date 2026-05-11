@@ -34,7 +34,7 @@ from attack.pipeline.core.position_stats import save_position_stats
 DEFAULT_TAIL_REPLACEMENT_CONFIG_PATH = (
     "attack/configs/"
     "diginetica_valbest_attack_tail_replacement_nonzero_when_possible_ratio1_"
-    "srgnn_target11103_partial5.yaml"
+    "srgnn_sampled_partial4.yaml"
 )
 RANDOM_NZ_RUN_TYPE = "random_nonzero_when_possible"
 

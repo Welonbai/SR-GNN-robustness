@@ -123,6 +123,7 @@ def _candidate_trace_row(candidate: PTSCEMCandidateResult) -> dict[str, Any]:
             "construction_summary": dict(candidate.construction_summary),
             "selected_as_elite": bool(candidate.selected_as_elite),
             "selected_as_global_best": bool(candidate.selected_as_global_best),
+            **_candidate_sampling_payload(candidate),
         }
     )
 
@@ -137,6 +138,7 @@ def _best_policy_payload(candidate: PTSCEMCandidateResult) -> dict[str, Any]:
             "reward": float(candidate.reward),
             "reward_metrics": dict(candidate.reward_metrics),
             "selected_as_global_best": bool(candidate.selected_as_global_best),
+            **_candidate_sampling_payload(candidate),
             "policy": candidate.policy.to_dict(),
         }
     )
@@ -164,8 +166,20 @@ def _top_candidate_metadata(
             "construction_summary": dict(candidate.construction_summary),
             "selected_as_elite": bool(candidate.selected_as_elite),
             "selected_as_global_best": bool(candidate.selected_as_global_best),
+            **_candidate_sampling_payload(candidate),
         }
     )
+
+
+def _candidate_sampling_payload(candidate: PTSCEMCandidateResult) -> dict[str, Any]:
+    return {
+        "sample_origin": candidate.sample_origin,
+        "parent_iteration": candidate.parent_iteration,
+        "parent_candidate_id": candidate.parent_candidate_id,
+        "parent_candidate_key": candidate.parent_candidate_key,
+        "parent_reward": candidate.parent_reward,
+        "parent_rank_among_elites": candidate.parent_rank_among_elites,
+    }
 
 
 def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:

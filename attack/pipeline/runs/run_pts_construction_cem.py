@@ -55,6 +55,7 @@ from attack.pts.cem import (
     PTSCEMConfig,
     PTSCEMEvaluationResult,
     PTSCEMInitConfig,
+    PTSCEMResamplingConfig,
     PTSCEMSamplerConfig,
     PTSCEMUpdateConfig,
     PTSGroupedCEMTrainer,
@@ -362,6 +363,12 @@ def _build_pts_cem_config_from_config(config: Config) -> PTSCEMConfig:
             max_probability=float(cem.update.max_probability),
         ),
         init=PTSCEMInitConfig(mode=cem.init.mode),
+        resampling=PTSCEMResamplingConfig(
+            mode=cem.resampling.mode,
+            local_concentration_scale=float(
+                cem.resampling.local_concentration_scale
+            ),
+        ),
         base_seed=_resolve_pts_cem_base_seed(config),
         candidate_seed_stride=int(cem.candidate_seed_stride),
         save_top_k_candidates=int(cem.save_top_k_candidates),
