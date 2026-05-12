@@ -21,6 +21,18 @@ from attack.pts.policy import CONSUME_ONE_ACTION_NAMES
 from attack.pts.specs import get_default_pts_v1_specs
 
 
+EXPECTED_SEED_ALIGNMENT = {
+    "target_item": 99,
+    "pts_cem_surrogate_seed_alignment_mode": "victim_effective_seed",
+    "pts_cem_surrogate_seed_alignment_target_victim_name": "srgnn",
+    "configured_surrogate_train_seed": 20260405,
+    "configured_victim_train_seed": 20260405,
+    "resolved_surrogate_effective_seed": 1386226870,
+    "resolved_victim_effective_seed": 1386226870,
+    "surrogate_victim_seed_aligned": True,
+}
+
+
 def _patch_generated_suffix(monkeypatch) -> None:
     def fake_generate_poison_model_suffix(*, runner, prefix, suffix_length, topk, rng):
         return [200 + index for index in range(int(suffix_length))]
@@ -39,7 +51,10 @@ def _evaluator_fn(**kwargs) -> PTSCEMEvaluationResult:
     return PTSCEMEvaluationResult(
         reward=reward,
         reward_metrics={"reward": reward},
-        metadata={"candidate_seed": int(kwargs["candidate_seed"])},
+        metadata={
+            "candidate_seed": int(kwargs["candidate_seed"]),
+            **EXPECTED_SEED_ALIGNMENT,
+        },
     )
 
 
@@ -60,6 +75,11 @@ def _assert_ragged_policy_payload(policy_payload: dict[str, object]) -> None:
         assert action not in group_probabilities["suffix_1"]
         assert action in group_probabilities["suffix_2"]
         assert action in group_probabilities["suffix_3plus"]
+
+
+def _assert_seed_alignment_payload(payload: dict[str, object]) -> None:
+    for key, expected in EXPECTED_SEED_ALIGNMENT.items():
+        assert payload[key] == expected
 
 
 def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None:
@@ -111,6 +131,7 @@ def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None
         assert all(row["sampled_policy_min_probability"] == 0.03 for row in trace_rows)
         assert all(row["sampled_policy_max_probability"] == 0.90 for row in trace_rows)
         assert all("parent_candidate_key" in row for row in trace_rows)
+        _assert_seed_alignment_payload(trace_rows[0])
 
         best_policy = _read_json(Path(paths["pts_best_policy"]))
         final_policy = _read_json(Path(paths["pts_final_policy"]))
@@ -133,15 +154,19 @@ def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None
         ] == best_key
         assert top_candidates["candidates"][0]["candidate_key"] == best_key
         assert top_candidates["candidates"][0]["selected_as_global_best"] is True
+        _assert_seed_alignment_payload(top_candidates["candidates"][0])
         assert "sample_origin" in top_candidates["candidates"][0]
         assert "sample_metadata" in top_candidates["candidates"][0]
         assert "policy" in top_candidates["candidates"][0]
         assert "parent_candidate_key" in top_candidates["candidates"][0]
         assert top_policies["candidates"][0]["candidate_key"] == best_key
+        _assert_seed_alignment_payload(top_policies["candidates"][0])
         assert "sample_metadata" in top_policies["candidates"][0]
         assert "policy" in top_policies["candidates"][0]
         assert rank1_metadata["candidate_key"] == best_key
         assert rank1_metadata["selected_as_global_best"] is True
+        _assert_seed_alignment_payload(rank1_metadata)
+        _assert_seed_alignment_payload(best_policy)
         assert "sample_origin" in rank1_metadata
         assert "sample_metadata" in rank1_metadata
         assert "policy" in rank1_metadata

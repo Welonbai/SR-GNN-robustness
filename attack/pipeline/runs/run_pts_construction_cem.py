@@ -44,6 +44,7 @@ from attack.pipeline.core.pipeline_utils import (
     SharedAttackArtifacts,
     prepare_shared_attack_artifacts,
 )
+from attack.pipeline.core.victim_execution import victim_effective_train_seed
 from attack.position_opt.cem.trainer import (
     _candidate_checkpoint_metadata,
     _coerce_target_metrics,
@@ -77,6 +78,8 @@ DEFAULT_PTS_CONSTRUCTION_CEM_CONFIG_PATH = (
 _LOG_PREFIX = "[pts-construction-cem]"
 _PTS_CONSTRUCTION_ARTIFACT_DIR_NAME = "pts_construction_cem"
 _PTS_CONSTRUCTION_COMPLETE_MARKER = "pts_construction_complete.json"
+PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE = "victim_effective_seed"
+PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME = "srgnn"
 
 
 @dataclass(frozen=True)
@@ -132,6 +135,7 @@ def run_pts_construction_grouped_cem(
         cache_identity = _current_pts_construction_cache_identity(
             config,
             attack_identity_context=attack_identity_context,
+            target_item=int(target_item),
         )
         if force_recompute_pts_cem:
             if _has_pts_construction_cache_files(pts_artifact_dir):
@@ -160,6 +164,7 @@ def run_pts_construction_grouped_cem(
                     pts_config=pts_config,
                     cem_config=cem_config,
                     artifact_dir=pts_artifact_dir,
+                    target_item=int(target_item),
                     cached=cached,
                 )
                 return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
@@ -234,6 +239,7 @@ def run_pts_construction_grouped_cem(
             artifact_dir=pts_artifact_dir,
             artifact_paths=artifact_paths,
             best_candidate=result.best_candidate,
+            target_item=int(target_item),
             complete_marker_path=complete_marker_path,
         )
         print(
@@ -395,6 +401,66 @@ def _resolve_pts_cem_base_seed(config: Config) -> int:
     )
 
 
+def resolve_pts_cem_surrogate_effective_seed(
+    config: Config,
+    *,
+    target_item: int,
+) -> int:
+    return victim_effective_train_seed(
+        config,
+        victim_name=PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME,
+        run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        target_item=int(target_item),
+    )
+
+
+def pts_cem_surrogate_seed_alignment_metadata(
+    config: Config,
+    *,
+    target_item: int,
+) -> dict[str, object]:
+    resolved_seed = resolve_pts_cem_surrogate_effective_seed(
+        config,
+        target_item=int(target_item),
+    )
+    return {
+        "target_item": int(target_item),
+        "pts_cem_surrogate_seed_alignment_mode": (
+            PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE
+        ),
+        "pts_cem_surrogate_seed_alignment_target_victim_name": (
+            PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME
+        ),
+        "configured_surrogate_train_seed": int(config.seeds.surrogate_train_seed),
+        "configured_victim_train_seed": int(config.seeds.victim_train_seed),
+        "resolved_surrogate_effective_seed": int(resolved_seed),
+        "resolved_victim_effective_seed": int(resolved_seed),
+        "surrogate_victim_seed_aligned": True,
+    }
+
+
+def _pts_cem_seed_alignment_identity(config: Config) -> dict[str, object]:
+    identity: dict[str, object] = {
+        "pts_cem_surrogate_seed_alignment_mode": (
+            PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE
+        ),
+        "pts_cem_surrogate_seed_alignment_target_victim_name": (
+            PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME
+        ),
+        "configured_surrogate_train_seed": int(config.seeds.surrogate_train_seed),
+        "configured_victim_train_seed": int(config.seeds.victim_train_seed),
+    }
+    if config.targets.mode == "explicit_list" and len(config.targets.explicit_list) == 1:
+        target_item = int(config.targets.explicit_list[0])
+        identity.update(
+            pts_cem_surrogate_seed_alignment_metadata(
+                config,
+                target_item=target_item,
+            )
+        )
+    return identity
+
+
 def build_pts_construction_attack_identity_context(config: Config) -> dict[str, object]:
     pts_config = _require_pts_config(config)
     cem = pts_config.cem
@@ -478,7 +544,9 @@ def build_pts_construction_attack_identity_context(config: Config) -> dict[str, 
             "runtime_seeds": {
                 "position_opt_seed": int(config.seeds.position_opt_seed),
                 "surrogate_train_seed": int(config.seeds.surrogate_train_seed),
+                "victim_train_seed": int(config.seeds.victim_train_seed),
                 "resolved_cem_base_seed": int(resolved_cem_base_seed),
+                "surrogate_seed_alignment": _pts_cem_seed_alignment_identity(config),
             },
         }
     }
@@ -505,8 +573,9 @@ def _current_pts_construction_cache_identity(
     config: Config,
     *,
     attack_identity_context: Mapping[str, Any] | None,
+    target_item: int | None = None,
 ) -> dict[str, object]:
-    return {
+    payload = {
         "attack_key": attack_key(
             config,
             run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
@@ -521,6 +590,14 @@ def _current_pts_construction_cache_identity(
         "dataset_name": config.data.dataset_name,
         "split_protocol": config.data.split_protocol,
     }
+    if target_item is not None:
+        payload.update(
+            pts_cem_surrogate_seed_alignment_metadata(
+                config,
+                target_item=int(target_item),
+            )
+        )
+    return payload
 
 
 def _load_json_sessions(path: Path) -> list[list[int]]:
@@ -844,15 +921,21 @@ def _write_pts_construction_complete_marker(
         "top_candidate_rank_1_policy",
     )
     marker_path = root / _PTS_CONSTRUCTION_COMPLETE_MARKER
+    seed_alignment = pts_cem_surrogate_seed_alignment_metadata(
+        config,
+        target_item=int(target_item),
+    )
     payload = {
         "schema_version": "pts_construction_cache_v1",
         "status": "completed",
         "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
         "target_item": int(target_item),
         "cache_mode": "fresh_cem",
+        **seed_alignment,
         "identity": _current_pts_construction_cache_identity(
             config,
             attack_identity_context=attack_identity_context,
+            target_item=int(target_item),
         ),
         "best_candidate": {
             "rank": 1,
@@ -965,6 +1048,11 @@ def _evaluate_candidate_retrain_validation_reward(
     if not isinstance(inner_trainer, SRGNNFullRetrainValidationBestInnerTrainer):
         raise TypeError("PTS-CEM evaluator context has invalid inner trainer.")
 
+    seed_alignment = pts_cem_surrogate_seed_alignment_metadata(
+        config,
+        target_item=int(target_item),
+    )
+    surrogate_effective_seed = int(seed_alignment["resolved_surrogate_effective_seed"])
     candidate_start = time.perf_counter()
     poisoned_train = build_poisoned_dataset(
         shared.clean_sessions,
@@ -978,7 +1066,7 @@ def _evaluate_candidate_retrain_validation_reward(
         poisoned_train,
         config=None,
         eval_data=validation_eval_data,
-        seed=int(config.seeds.surrogate_train_seed),
+        seed=surrogate_effective_seed,
     )
     retrain_seconds = time.perf_counter() - retrain_start
 
@@ -1006,7 +1094,8 @@ def _evaluate_candidate_retrain_validation_reward(
     metadata: dict[str, object] = {
         "reward_name": PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20,
         "candidate_retrain_validation_reward": reward,
-        "candidate_retrain_seed": int(config.seeds.surrogate_train_seed),
+        "candidate_retrain_seed": surrogate_effective_seed,
+        **seed_alignment,
         "candidate_seed": int(candidate_seed),
         "candidate_retrain_validation_prefix_count": int(len(validation_sessions)),
         "candidate_retrain_epochs": int(_srgnn_candidate_train_config(config)["epochs"]),
@@ -1042,10 +1131,15 @@ def _target_metadata(
     artifact_dir: Path,
     artifact_paths: Mapping[str, str],
     best_candidate,
+    target_item: int,
     complete_marker_path: Path,
 ) -> dict[str, object]:
     rank1_sessions = artifact_paths.get("top_candidate_rank_1_sessions")
     rank1_metadata = artifact_paths.get("top_candidate_rank_1_metadata")
+    seed_alignment = pts_cem_surrogate_seed_alignment_metadata(
+        config,
+        target_item=int(target_item),
+    )
     return {
         "pts_cem_trace_path": artifact_paths.get("pts_cem_trace"),
         "pts_policy_history_path": artifact_paths.get("pts_policy_history"),
@@ -1073,7 +1167,10 @@ def _target_metadata(
         "pts_population_size": cem_config.population_size,
         "pts_actions_enabled": list(pts_config.actions.enabled),
         "pts_grouping_mode": pts_config.grouping.mode,
-        "pts_candidate_retrain_seed": int(config.seeds.surrogate_train_seed),
+        "pts_candidate_retrain_seed": int(
+            seed_alignment["resolved_surrogate_effective_seed"]
+        ),
+        **seed_alignment,
         "pts_cem_reused": False,
         "pts_cem_cache_mode": "fresh_cem",
         "pts_cem_cache_marker_missing": False,
@@ -1087,9 +1184,14 @@ def _target_metadata_from_cache(
     pts_config: PTSConstructionConfig,
     cem_config: PTSCEMConfig,
     artifact_dir: Path,
+    target_item: int,
     cached: CachedPTSBestCandidate,
 ) -> dict[str, object]:
     artifact_paths = _existing_pts_artifact_paths(artifact_dir)
+    seed_alignment = pts_cem_surrogate_seed_alignment_metadata(
+        config,
+        target_item=int(target_item),
+    )
     payload: dict[str, object] = {
         "pts_cem_trace_path": artifact_paths.get("pts_cem_trace"),
         "pts_policy_history_path": artifact_paths.get("pts_policy_history"),
@@ -1112,7 +1214,10 @@ def _target_metadata_from_cache(
         "pts_population_size": cem_config.population_size,
         "pts_actions_enabled": list(pts_config.actions.enabled),
         "pts_grouping_mode": pts_config.grouping.mode,
-        "pts_candidate_retrain_seed": int(config.seeds.surrogate_train_seed),
+        "pts_candidate_retrain_seed": int(
+            seed_alignment["resolved_surrogate_effective_seed"]
+        ),
+        **seed_alignment,
         "pts_cem_reused": True,
         "pts_cem_cache_mode": cached.cache_mode,
         "pts_cem_cache_marker_missing": bool(cached.cache_marker_missing),
@@ -1180,8 +1285,12 @@ if __name__ == "__main__":
 
 __all__ = [
     "DEFAULT_PTS_CONSTRUCTION_CEM_CONFIG_PATH",
+    "PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE",
+    "PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME",
     "build_pts_construction_attack_identity_context",
     "main",
+    "pts_cem_surrogate_seed_alignment_metadata",
+    "resolve_pts_cem_surrogate_effective_seed",
     "run_pts_construction_grouped_cem",
     "_build_pts_cem_config_from_config",
     "_build_pts_specs_from_config",

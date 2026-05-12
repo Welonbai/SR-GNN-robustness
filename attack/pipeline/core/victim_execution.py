@@ -284,7 +284,7 @@ def execute_single_victim(
     raise ValueError(f"Unsupported victim model: {victim_name}")
 
 
-def _victim_stage_seed(
+def victim_effective_train_seed(
     config: Config,
     *,
     victim_name: str,
@@ -302,6 +302,21 @@ def _victim_stage_seed(
         "victim_train",
         victim_name,
         int(target_item),
+    )
+
+
+def _victim_stage_seed(
+    config: Config,
+    *,
+    victim_name: str,
+    run_type: str,
+    target_item: int,
+) -> int:
+    return victim_effective_train_seed(
+        config,
+        victim_name=victim_name,
+        run_type=run_type,
+        target_item=target_item,
     )
 
 
@@ -515,4 +530,4 @@ def _find_latest_metrics_csv(log_dir: Path) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-__all__ = ["VictimExecutionResult", "execute_single_victim"]
+__all__ = ["VictimExecutionResult", "execute_single_victim", "victim_effective_train_seed"]

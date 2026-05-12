@@ -78,6 +78,7 @@ def write_pts_cem_artifacts(
                 "reward": float(candidate.reward),
                 "selected_as_global_best": bool(candidate.selected_as_global_best),
                 "policy": candidate.policy.to_dict(),
+                **_candidate_seed_alignment_payload(candidate),
                 **_candidate_sampling_payload(candidate),
             }
         )
@@ -124,6 +125,7 @@ def _candidate_trace_row(candidate: PTSCEMCandidateResult) -> dict[str, Any]:
             "construction_summary": dict(candidate.construction_summary),
             "selected_as_elite": bool(candidate.selected_as_elite),
             "selected_as_global_best": bool(candidate.selected_as_global_best),
+            **_candidate_seed_alignment_payload(candidate),
             **_candidate_sampling_payload(candidate),
         }
     )
@@ -139,6 +141,7 @@ def _best_policy_payload(candidate: PTSCEMCandidateResult) -> dict[str, Any]:
             "reward": float(candidate.reward),
             "reward_metrics": dict(candidate.reward_metrics),
             "selected_as_global_best": bool(candidate.selected_as_global_best),
+            **_candidate_seed_alignment_payload(candidate),
             **_candidate_sampling_payload(candidate),
             "policy": candidate.policy.to_dict(),
         }
@@ -167,10 +170,34 @@ def _top_candidate_metadata(
             "construction_summary": dict(candidate.construction_summary),
             "selected_as_elite": bool(candidate.selected_as_elite),
             "selected_as_global_best": bool(candidate.selected_as_global_best),
+            **_candidate_seed_alignment_payload(candidate),
             **_candidate_sampling_payload(candidate),
             "policy": candidate.policy.to_dict(),
         }
     )
+
+
+_SEED_ALIGNMENT_METADATA_KEYS = (
+    "target_item",
+    "pts_cem_surrogate_seed_alignment_mode",
+    "pts_cem_surrogate_seed_alignment_target_victim_name",
+    "configured_surrogate_train_seed",
+    "configured_victim_train_seed",
+    "resolved_surrogate_effective_seed",
+    "resolved_victim_effective_seed",
+    "surrogate_victim_seed_aligned",
+)
+
+
+def _candidate_seed_alignment_payload(
+    candidate: PTSCEMCandidateResult,
+) -> dict[str, Any]:
+    metadata = dict(candidate.evaluator_metadata)
+    return {
+        key: metadata[key]
+        for key in _SEED_ALIGNMENT_METADATA_KEYS
+        if key in metadata
+    }
 
 
 def _candidate_sampling_payload(candidate: PTSCEMCandidateResult) -> dict[str, Any]:

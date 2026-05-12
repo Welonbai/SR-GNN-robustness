@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import fields, replace
 import json
 from pathlib import Path
 import shutil
@@ -139,6 +139,8 @@ def test_runner_validation_rejects_unsupported_seed_source() -> None:
     pts = config.attack.pts_construction
     assert pts is not None
     cem = object.__new__(PTSCEMRuntimeConfig)
+    for field in fields(PTSCEMRuntimeConfig):
+        object.__setattr__(cem, field.name, getattr(pts.cem, field.name))
     object.__setattr__(cem, "seed_source", "fake_session_seed")
     bad_config = _with_pts(config, replace(pts, cem=cem))
 
@@ -329,6 +331,30 @@ def test_pts_complete_marker_writer_creates_candidate_fields() -> None:
         assert marker["status"] == "completed"
         assert marker["run_type"] == PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE
         assert marker["target_item"] == 5334
+        assert (
+            marker["pts_cem_surrogate_seed_alignment_mode"]
+            == "victim_effective_seed"
+        )
+        assert (
+            marker["pts_cem_surrogate_seed_alignment_target_victim_name"]
+            == "srgnn"
+        )
+        assert marker["configured_surrogate_train_seed"] == 20260405
+        assert marker["configured_victim_train_seed"] == 20260405
+        assert marker["resolved_surrogate_effective_seed"] == 1386226870
+        assert marker["resolved_victim_effective_seed"] == 1386226870
+        assert marker["surrogate_victim_seed_aligned"] is True
+        assert marker["identity"]["target_item"] == 5334
+        assert (
+            marker["identity"]["pts_cem_surrogate_seed_alignment_mode"]
+            == "victim_effective_seed"
+        )
+        assert (
+            marker["identity"]["pts_cem_surrogate_seed_alignment_target_victim_name"]
+            == "srgnn"
+        )
+        assert marker["identity"]["resolved_surrogate_effective_seed"] == 1386226870
+        assert marker["identity"]["resolved_victim_effective_seed"] == 1386226870
         assert marker["best_candidate"]["rank"] == 1
         assert marker["best_candidate"]["candidate_id"] == 5
         assert marker["best_candidate"]["sessions_path"] == (
@@ -336,3 +362,80 @@ def test_pts_complete_marker_writer_creates_candidate_fields() -> None:
         )
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_pts_target_metadata_uses_aligned_surrogate_retrain_seed() -> None:
+    config = load_config(CONFIG_PATH)
+    pts_config = config.attack.pts_construction
+    assert pts_config is not None
+    cem_config = pts_config.cem
+    artifact_dir = Path("outputs/test_pts_metadata/pts_construction_cem")
+    artifact_paths = {
+        "pts_cem_trace": str(artifact_dir / "pts_cem_trace.jsonl"),
+        "pts_top_candidates": str(artifact_dir / "pts_top_candidates.json"),
+        "top_candidate_rank_1_sessions": str(
+            artifact_dir / "top_candidates" / "rank_1" / "sessions.json"
+        ),
+        "top_candidate_rank_1_metadata": str(
+            artifact_dir / "top_candidates" / "rank_1" / "metadata.json"
+        ),
+    }
+
+    class FakeBestCandidate:
+        iteration = 2
+        candidate_id = 5
+        candidate_seed = 20260405
+        reward = 0.75
+        reward_metrics = {"reward": 0.75}
+
+    metadata = run_pts_construction_cem._target_metadata(
+        config=config,
+        pts_config=pts_config,
+        cem_config=cem_config,
+        artifact_dir=artifact_dir,
+        artifact_paths=artifact_paths,
+        best_candidate=FakeBestCandidate(),
+        target_item=5334,
+        complete_marker_path=artifact_dir / "pts_construction_complete.json",
+    )
+    cached = run_pts_construction_cem.CachedPTSBestCandidate(
+        sessions=[[1, 2, 5334]],
+        metadata={
+            "iteration": 2,
+            "candidate_id": 5,
+            "candidate_seed": 20260405,
+            "reward": 0.75,
+            "reward_metrics": {"reward": 0.75},
+        },
+        sessions_path=Path(artifact_paths["top_candidate_rank_1_sessions"]),
+        metadata_path=Path(artifact_paths["top_candidate_rank_1_metadata"]),
+        top_candidates_path=Path(artifact_paths["pts_top_candidates"]),
+        complete_marker_path=None,
+        cache_mode="complete_marker",
+        cache_marker_missing=False,
+    )
+    cached_metadata = run_pts_construction_cem._target_metadata_from_cache(
+        config=config,
+        pts_config=pts_config,
+        cem_config=cem_config,
+        artifact_dir=artifact_dir,
+        target_item=5334,
+        cached=cached,
+    )
+
+    for payload in (metadata, cached_metadata):
+        assert payload["target_item"] == 5334
+        assert payload["pts_candidate_retrain_seed"] == 1386226870
+        assert (
+            payload["pts_cem_surrogate_seed_alignment_mode"]
+            == "victim_effective_seed"
+        )
+        assert (
+            payload["pts_cem_surrogate_seed_alignment_target_victim_name"]
+            == "srgnn"
+        )
+        assert payload["configured_surrogate_train_seed"] == 20260405
+        assert payload["configured_victim_train_seed"] == 20260405
+        assert payload["resolved_surrogate_effective_seed"] == 1386226870
+        assert payload["resolved_victim_effective_seed"] == 1386226870
+        assert payload["surrogate_victim_seed_aligned"] is True

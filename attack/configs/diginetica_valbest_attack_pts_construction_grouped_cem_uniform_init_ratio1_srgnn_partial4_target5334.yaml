@@ -1,5 +1,5 @@
 experiment:
-  name: valbest_attack_pts_construction_grouped_cem_ratio1_srgnn_partial4_target5334
+  name: valbest_attack_pts_construction_grouped_cem_uniform_init_ratio1_srgnn_partial4_target5334
 
 data:
   dataset_name: diginetica
@@ -67,6 +67,7 @@ attack:
         - keep_residual_suffix
         - regenerate_residual_suffix
         - consume_one_keep_rest
+        - consume_one_generate_continuation
         - consume_all_stop
       dynamic_masks:
         disable_consume_one_when_suffix_len_leq_1: true
@@ -88,6 +89,9 @@ attack:
         max_probability: 0.90
       init:
         mode: uniform
+      resampling:
+        mode: elite_centered
+        local_concentration_scale: 30.0
       seed_source: position_opt_seed
       candidate_seed_stride: 1000
       save_top_k_candidates: 3

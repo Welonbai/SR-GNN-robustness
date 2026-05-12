@@ -1,5 +1,5 @@
 experiment:
-  name: valbest_attack_pts_construction_grouped_cem_elite_centered_ratio1_srgnn_partial4_target5334
+  name: valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334
 
 data:
   dataset_name: diginetica
@@ -67,6 +67,7 @@ attack:
         - keep_residual_suffix
         - regenerate_residual_suffix
         - consume_one_keep_rest
+        - consume_one_generate_continuation
         - consume_all_stop
       dynamic_masks:
         disable_consume_one_when_suffix_len_leq_1: true
@@ -87,7 +88,16 @@ attack:
         min_probability: 0.03
         max_probability: 0.90
       init:
-        mode: uniform
+        mode: vertex_stratified_space_filling
+        mandatory_enabled: true
+        extreme_count: 7
+        moderate_count: 3
+        balanced_count: 1
+        extreme_pool_size: 1024
+        moderate_pool_size: 512
+        extreme_alpha: 0.3
+        moderate_alpha: 2.0
+        distance: l1
       resampling:
         mode: elite_centered
         local_concentration_scale: 30.0

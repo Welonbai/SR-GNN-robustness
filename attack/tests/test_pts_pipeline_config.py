@@ -19,16 +19,21 @@ from attack.common.config import (
     PTSSuffixLengthBucketConfig,
     load_config,
 )
+from attack.common.seed import derive_seed
 from attack.common.paths import (
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     attack_key,
     shared_attack_artifact_key,
 )
 from attack.pipeline.runs.run_pts_construction_cem import (
+    PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE,
+    PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME,
     _build_pts_cem_config_from_config,
     _build_pts_specs_from_config,
     _build_suffix_length_buckets_from_config,
     build_pts_construction_attack_identity_context,
+    pts_cem_surrogate_seed_alignment_metadata,
+    resolve_pts_cem_surrogate_effective_seed,
 )
 from attack.pts.policy import build_valid_actions_by_group
 
@@ -40,6 +45,10 @@ CONFIG_PATH = Path(
 NEW_VERTEX_CONFIG_PATH = Path(
     "attack/configs/"
     "diginetica_valbest_attack_pts_construction_grouped_cem_vertex_sf_a0a4_elite_centered_ratio1_srgnn_partial4_target5334.yaml"
+)
+ALIGNED_VERTEX_CONFIG_PATH = Path(
+    "attack/configs/"
+    "diginetica_valbest_attack_pts_construction_grouped_cem_vertex_sf_a0a4_elite_centered_surrogate_seed_aligned_ratio1_srgnn_partial4_target5334.yaml"
 )
 
 
@@ -192,6 +201,39 @@ def test_pts_cem_vertex_init_runtime_config_mapping() -> None:
     assert cem_config.init.distance == "l1"
 
 
+def test_pts_cem_surrogate_seed_aligns_to_srgnn_victim_effective_seed() -> None:
+    config = load_config(ALIGNED_VERTEX_CONFIG_PATH)
+    expected = derive_seed(20260405, "victim_train", "srgnn", 5334)
+
+    assert config.experiment.name == (
+        "valbest_attack_pts_construction_grouped_cem_vertex_sf_a0a4_elite_centered_surrogate_seed_aligned_ratio1_srgnn_partial4_target5334"
+    )
+    resolved = resolve_pts_cem_surrogate_effective_seed(config, target_item=5334)
+    metadata = pts_cem_surrogate_seed_alignment_metadata(config, target_item=5334)
+
+    assert expected == 1386226870
+    assert resolved == expected
+    assert metadata["target_item"] == 5334
+    assert (
+        metadata["pts_cem_surrogate_seed_alignment_mode"]
+        == PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE
+        == "victim_effective_seed"
+    )
+    assert (
+        metadata["pts_cem_surrogate_seed_alignment_target_victim_name"]
+        == PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME
+        == "srgnn"
+    )
+    assert metadata["configured_surrogate_train_seed"] == 20260405
+    assert metadata["configured_victim_train_seed"] == 20260405
+    assert metadata["resolved_surrogate_effective_seed"] == expected
+    assert metadata["resolved_victim_effective_seed"] == expected
+    assert metadata["surrogate_victim_seed_aligned"] is True
+    assert metadata["resolved_surrogate_effective_seed"] != (
+        metadata["configured_surrogate_train_seed"]
+    )
+
+
 def test_pts_cem_resampling_rejects_global_exploration_fields() -> None:
     with pytest.raises(TypeError, match="global_exploration_fraction"):
         PTSCEMRuntimeConfig(
@@ -284,6 +326,21 @@ def test_pts_attack_identity_context_includes_a0a4_vertex_init_fields() -> None:
     ]
     assert pts_identity["runtime_seeds"]["position_opt_seed"] == 20260405
     assert pts_identity["runtime_seeds"]["resolved_cem_base_seed"] == 20260405
+    seed_alignment = pts_identity["runtime_seeds"]["surrogate_seed_alignment"]
+    assert seed_alignment["target_item"] == 5334
+    assert (
+        seed_alignment["pts_cem_surrogate_seed_alignment_mode"]
+        == "victim_effective_seed"
+    )
+    assert (
+        seed_alignment["pts_cem_surrogate_seed_alignment_target_victim_name"]
+        == "srgnn"
+    )
+    assert seed_alignment["configured_surrogate_train_seed"] == 20260405
+    assert seed_alignment["configured_victim_train_seed"] == 20260405
+    assert seed_alignment["resolved_surrogate_effective_seed"] == 1386226870
+    assert seed_alignment["resolved_victim_effective_seed"] == 1386226870
+    assert seed_alignment["surrogate_victim_seed_aligned"] is True
     assert cem_identity["cem_base_seed"] == 20260405
     assert cem_identity["resolved_cem_base_seed"] == 20260405
     assert cem_identity["init"] == {
