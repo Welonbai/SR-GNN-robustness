@@ -10,7 +10,7 @@ from attack.pts.grouping import (
     default_suffix_length_buckets,
 )
 from attack.pts.metadata import build_pts_batch_summary
-from attack.pts.policy import GroupActionPolicy
+from attack.pts.policy import CONSUME_ONE_ACTION_NAMES, GroupActionPolicy
 from attack.pts.prefix_selector import select_anchor_position
 from attack.pts.specs import PTSConstructionSpec, lookup_spec_by_name
 from attack.pts.suffix_constructor import apply_suffix_construction
@@ -133,7 +133,10 @@ def apply_pts_construction_batch(
             "target_occurrence_count_final": target_occurrence_count_final,
             "dynamic_mask_disable_consume_one": bool(
                 sample_result.dynamic_mask_applied
-                and "consume_one_keep_rest" in sample_result.masked_actions
+                and any(
+                    action in set(sample_result.masked_actions)
+                    for action in CONSUME_ONE_ACTION_NAMES
+                )
             ),
             "dynamic_mask_applied": bool(sample_result.dynamic_mask_applied),
             "dynamic_mask_masked_actions": list(sample_result.masked_actions),

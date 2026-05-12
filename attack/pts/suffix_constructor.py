@@ -7,7 +7,11 @@ from attack.insertion.generated_continuation_suffix import (
     deterministic_session_rng,
     generate_poison_model_suffix,
 )
-from attack.pts.specs import PTSConstructionSpec
+from attack.pts.specs import (
+    GENERATION_LENGTH_POLICY_RESIDUAL_SUFFIX_MINUS_ONE,
+    GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX,
+    PTSConstructionSpec,
+)
 
 
 @dataclass(frozen=True)
@@ -55,15 +59,15 @@ def apply_suffix_construction(
         )
     if int(generation_topk) <= 0:
         raise ValueError("generation_topk must be positive.")
-    if suffix_spec.generation_length_policy != "same_as_residual_suffix":
-        raise ValueError(
-            "Generated PTS suffix construction requires "
-            "generation_length_policy='same_as_residual_suffix'."
-        )
+    suffix_length = _generated_suffix_length(
+        residual,
+        consume_policy=suffix_spec.consume_policy,
+        generation_length_policy=suffix_spec.generation_length_policy,
+    )
     generated_suffix = generate_poison_model_suffix(
         runner=poison_runner,
         prefix=prefix_through_target,
-        suffix_length=len(residual),
+        suffix_length=suffix_length,
         topk=int(generation_topk),
         rng=deterministic_session_rng(
             base_seed=int(generation_rng_base_seed),
@@ -73,10 +77,10 @@ def apply_suffix_construction(
         ),
     )
     generated = [int(item) for item in generated_suffix]
-    if len(generated) != len(residual):
+    if len(generated) != suffix_length:
         raise RuntimeError(
             "Generated PTS suffix length does not match residual suffix length: "
-            f"expected {len(residual)}, received {len(generated)}."
+            f"expected {suffix_length}, received {len(generated)}."
         )
     return PTSConstructionResult(
         final_session=prefix_through_target + generated,
@@ -103,6 +107,36 @@ def _kept_suffix_after_consumption(
     raise ValueError(f"Unsupported Phase 1 PTS consume_policy {consume_policy!r}.")
 
 
+def _generated_suffix_length(
+    residual_suffix: Sequence[int],
+    *,
+    consume_policy: str,
+    generation_length_policy: str | None,
+) -> int:
+    residual_length = int(len(residual_suffix))
+    if (
+        consume_policy == "zero"
+        and generation_length_policy
+        == GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX
+    ):
+        return residual_length
+    if (
+        consume_policy == "one"
+        and generation_length_policy
+        == GENERATION_LENGTH_POLICY_RESIDUAL_SUFFIX_MINUS_ONE
+    ):
+        if residual_length < 1:
+            raise ValueError(
+                "consume_policy='one' generated PTS suffix construction requires "
+                "a residual suffix item."
+            )
+        return residual_length - 1
+    raise ValueError(
+        "Unsupported generated PTS suffix length policy for consume_policy="
+        f"{consume_policy!r}: {generation_length_policy!r}."
+    )
+
+
 def _validate_phase1_suffix_spec(spec: PTSConstructionSpec) -> None:
     suffix_spec = spec.suffix_constructor
     consume_policy = suffix_spec.consume_policy
@@ -122,16 +156,19 @@ def _validate_phase1_suffix_spec(spec: PTSConstructionSpec) -> None:
         raise ValueError(
             "Phase 1 PTS keep actions require generation_length_policy=None."
         )
-    if continuation_source == "generate" and consume_policy != "zero":
+    if continuation_source != "generate":
+        return
+    valid_generate_specs = {
+        ("zero", GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX),
+        ("one", GENERATION_LENGTH_POLICY_RESIDUAL_SUFFIX_MINUS_ONE),
+    }
+    if (consume_policy, generation_length_policy) not in valid_generate_specs:
         raise ValueError(
-            "Phase 1 PTS generated suffix actions require consume_policy='zero'."
-        )
-    if continuation_source == "generate" and (
-        generation_length_policy != "same_as_residual_suffix"
-    ):
-        raise ValueError(
-            "Phase 1 PTS generated suffix actions require "
-            "generation_length_policy='same_as_residual_suffix'."
+            "Phase 1 PTS generated suffix actions support only "
+            "consume_policy='zero' with "
+            "generation_length_policy='same_as_residual_suffix' or "
+            "consume_policy='one' with "
+            "generation_length_policy='residual_suffix_minus_one'."
         )
 
 

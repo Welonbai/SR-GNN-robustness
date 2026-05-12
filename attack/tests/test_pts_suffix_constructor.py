@@ -92,6 +92,71 @@ def test_regenerate_residual_suffix_uses_monkeypatched_generator(monkeypatch) ->
     assert calls[0]["topk"] == 5
 
 
+def test_consume_one_generate_continuation_generates_residual_minus_one(monkeypatch) -> None:
+    calls = []
+
+    def fake_generate_poison_model_suffix(*, runner, prefix, suffix_length, topk, rng):
+        calls.append(
+            {
+                "runner": runner,
+                "prefix": list(prefix),
+                "suffix_length": suffix_length,
+                "topk": topk,
+            }
+        )
+        return [70 + index for index in range(int(suffix_length))]
+
+    monkeypatch.setattr(
+        "attack.pts.suffix_constructor.generate_poison_model_suffix",
+        fake_generate_poison_model_suffix,
+    )
+    poison_runner = object()
+
+    result = apply_suffix_construction(
+        prefix=[1, 2],
+        target_item=99,
+        residual_suffix=[3, 4, 5],
+        spec=_spec("consume_one_generate_continuation"),
+        poison_runner=poison_runner,
+        generation_topk=5,
+        generation_rng_base_seed=123,
+    )
+
+    assert result.final_session == [1, 2, 99, 70, 71]
+    assert result.prefix_through_target == [1, 2, 99]
+    assert result.constructed_suffix == [70, 71]
+    assert result.generated_suffix == [70, 71]
+    assert calls[0]["runner"] is poison_runner
+    assert calls[0]["prefix"] == [1, 2, 99]
+    assert calls[0]["suffix_length"] == 2
+    assert calls[0]["topk"] == 5
+
+
+def test_consume_one_generate_continuation_len_one_is_safe(monkeypatch) -> None:
+    calls = []
+
+    def fake_generate_poison_model_suffix(*, runner, prefix, suffix_length, topk, rng):
+        calls.append(int(suffix_length))
+        return []
+
+    monkeypatch.setattr(
+        "attack.pts.suffix_constructor.generate_poison_model_suffix",
+        fake_generate_poison_model_suffix,
+    )
+
+    result = apply_suffix_construction(
+        prefix=[1, 2],
+        target_item=99,
+        residual_suffix=[3],
+        spec=_spec("consume_one_generate_continuation"),
+        poison_runner=object(),
+    )
+
+    assert calls == [0]
+    assert result.final_session == [1, 2, 99]
+    assert result.generated_suffix == []
+
+
 def test_regenerate_residual_suffix_requires_poison_runner() -> None:
     with pytest.raises(ValueError, match="poison_runner is required"):
         apply_suffix_construction(

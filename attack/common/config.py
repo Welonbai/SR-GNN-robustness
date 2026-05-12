@@ -112,10 +112,12 @@ PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE = "global_best_candidate"
 PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED = "position_opt_seed"
 PTS_CEM_SAMPLER_DIRICHLET = "dirichlet"
 PTS_CEM_INIT_UNIFORM = "uniform"
+PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING = "vertex_stratified_space_filling"
 _ALLOWED_PTS_V1_ACTIONS = {
     "keep_residual_suffix",
     "regenerate_residual_suffix",
     "consume_one_keep_rest",
+    "consume_one_generate_continuation",
     "consume_all_stop",
 }
 _REQUIRED_SRGNN_TRAIN_KEYS = (
@@ -947,12 +949,94 @@ class PTSCEMUpdateRuntimeConfig:
 @dataclass(frozen=True)
 class PTSCEMInitRuntimeConfig:
     mode: str = PTS_CEM_INIT_UNIFORM
+    mandatory_enabled: bool = True
+    extreme_count: int = 7
+    moderate_count: int = 3
+    balanced_count: int = 1
+    extreme_pool_size: int = 1024
+    moderate_pool_size: int = 512
+    extreme_alpha: float = 0.3
+    moderate_alpha: float = 2.0
+    distance: str = "l1"
 
     def __post_init__(self) -> None:
         mode = _as_str(self.mode, "attack.pts_construction.cem.init.mode").strip().lower()
-        if mode != PTS_CEM_INIT_UNIFORM:
-            raise ValueError("attack.pts_construction.cem.init.mode must be 'uniform'.")
+        if mode not in {
+            PTS_CEM_INIT_UNIFORM,
+            PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING,
+        }:
+            raise ValueError(
+                "attack.pts_construction.cem.init.mode must be 'uniform' or "
+                "'vertex_stratified_space_filling'."
+            )
+        mandatory_enabled = _as_bool(
+            self.mandatory_enabled,
+            "attack.pts_construction.cem.init.mandatory_enabled",
+        )
+        extreme_count = _as_int(
+            self.extreme_count,
+            "attack.pts_construction.cem.init.extreme_count",
+        )
+        moderate_count = _as_int(
+            self.moderate_count,
+            "attack.pts_construction.cem.init.moderate_count",
+        )
+        balanced_count = _as_int(
+            self.balanced_count,
+            "attack.pts_construction.cem.init.balanced_count",
+        )
+        extreme_pool_size = _as_int(
+            self.extreme_pool_size,
+            "attack.pts_construction.cem.init.extreme_pool_size",
+        )
+        moderate_pool_size = _as_int(
+            self.moderate_pool_size,
+            "attack.pts_construction.cem.init.moderate_pool_size",
+        )
+        extreme_alpha = _as_float(
+            self.extreme_alpha,
+            "attack.pts_construction.cem.init.extreme_alpha",
+        )
+        moderate_alpha = _as_float(
+            self.moderate_alpha,
+            "attack.pts_construction.cem.init.moderate_alpha",
+        )
+        distance = _as_str(
+            self.distance,
+            "attack.pts_construction.cem.init.distance",
+        ).strip().lower()
+        if extreme_count < 0:
+            raise ValueError("attack.pts_construction.cem.init.extreme_count must be >= 0.")
+        if moderate_count < 0:
+            raise ValueError("attack.pts_construction.cem.init.moderate_count must be >= 0.")
+        if balanced_count not in {0, 1}:
+            raise ValueError("attack.pts_construction.cem.init.balanced_count must be 0 or 1.")
+        if extreme_pool_size < extreme_count:
+            raise ValueError(
+                "attack.pts_construction.cem.init.extreme_pool_size must be "
+                ">= extreme_count."
+            )
+        if moderate_pool_size < moderate_count:
+            raise ValueError(
+                "attack.pts_construction.cem.init.moderate_pool_size must be "
+                ">= moderate_count."
+            )
+        if extreme_alpha <= 0.0:
+            raise ValueError("attack.pts_construction.cem.init.extreme_alpha must be positive.")
+        if moderate_alpha <= 0.0:
+            raise ValueError("attack.pts_construction.cem.init.moderate_alpha must be positive.")
+        if distance != "l1":
+            raise ValueError("attack.pts_construction.cem.init.distance must be 'l1'.")
         object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "mandatory_enabled", mandatory_enabled)
+        object.__setattr__(self, "extreme_count", extreme_count)
+        object.__setattr__(self, "moderate_count", moderate_count)
+        object.__setattr__(self, "balanced_count", balanced_count)
+        object.__setattr__(self, "extreme_pool_size", extreme_pool_size)
+        object.__setattr__(self, "moderate_pool_size", moderate_pool_size)
+        object.__setattr__(self, "extreme_alpha", extreme_alpha)
+        object.__setattr__(self, "moderate_alpha", moderate_alpha)
+        object.__setattr__(self, "distance", distance)
 
 
 @dataclass(frozen=True)
@@ -1296,6 +1380,17 @@ class PTSConstructionConfig:
                 "attack.pts_construction.final_selection",
             ),
         )
+        if (
+            self.cem.init.mode == PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING
+            and bool(self.cem.init.mandatory_enabled)
+            and "consume_one_generate_continuation" not in set(self.actions.enabled)
+        ):
+            raise ValueError(
+                "vertex_stratified_space_filling with mandatory_enabled=true "
+                "requires consume_one_generate_continuation in actions.enabled, "
+                "because the c1_generate_where_valid mandatory vertex cannot be "
+                "constructed."
+            )
 
 
 def _coerce_pts_dataclass(value: Any, cls: type[Any], context: str) -> Any:
@@ -3220,6 +3315,7 @@ __all__ = [
     "PTSConstructionConfig",
     "PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1",
     "PTS_CEM_INIT_UNIFORM",
+    "PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING",
     "PTS_CEM_SAMPLER_DIRICHLET",
     "PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED",
     "PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE",

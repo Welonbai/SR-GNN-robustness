@@ -4,6 +4,15 @@ from dataclasses import dataclass
 from typing import Sequence
 
 
+KEEP_RESIDUAL_SUFFIX_ACTION_NAME = "keep_residual_suffix"
+REGENERATE_RESIDUAL_SUFFIX_ACTION_NAME = "regenerate_residual_suffix"
+CONSUME_ONE_KEEP_REST_ACTION_NAME = "consume_one_keep_rest"
+CONSUME_ONE_GENERATE_ACTION_NAME = "consume_one_generate_continuation"
+CONSUME_ALL_STOP_ACTION_NAME = "consume_all_stop"
+GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX = "same_as_residual_suffix"
+GENERATION_LENGTH_POLICY_RESIDUAL_SUFFIX_MINUS_ONE = "residual_suffix_minus_one"
+
+
 @dataclass(frozen=True)
 class PrefixSelectorSpec:
     range_name: str
@@ -31,7 +40,7 @@ _INTERNAL_UNIFORM_PREFIX_SELECTOR = PrefixSelectorSpec(
 
 DEFAULT_PTS_V1_SPECS: tuple[PTSConstructionSpec, ...] = (
     PTSConstructionSpec(
-        name="keep_residual_suffix",
+        name=KEEP_RESIDUAL_SUFFIX_ACTION_NAME,
         prefix_selector=_INTERNAL_UNIFORM_PREFIX_SELECTOR,
         suffix_constructor=SuffixConstructionSpec(
             consume_policy="zero",
@@ -40,16 +49,16 @@ DEFAULT_PTS_V1_SPECS: tuple[PTSConstructionSpec, ...] = (
         ),
     ),
     PTSConstructionSpec(
-        name="regenerate_residual_suffix",
+        name=REGENERATE_RESIDUAL_SUFFIX_ACTION_NAME,
         prefix_selector=_INTERNAL_UNIFORM_PREFIX_SELECTOR,
         suffix_constructor=SuffixConstructionSpec(
             consume_policy="zero",
             continuation_source="generate",
-            generation_length_policy="same_as_residual_suffix",
+            generation_length_policy=GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX,
         ),
     ),
     PTSConstructionSpec(
-        name="consume_one_keep_rest",
+        name=CONSUME_ONE_KEEP_REST_ACTION_NAME,
         prefix_selector=_INTERNAL_UNIFORM_PREFIX_SELECTOR,
         suffix_constructor=SuffixConstructionSpec(
             consume_policy="one",
@@ -58,7 +67,18 @@ DEFAULT_PTS_V1_SPECS: tuple[PTSConstructionSpec, ...] = (
         ),
     ),
     PTSConstructionSpec(
-        name="consume_all_stop",
+        name=CONSUME_ONE_GENERATE_ACTION_NAME,
+        prefix_selector=_INTERNAL_UNIFORM_PREFIX_SELECTOR,
+        suffix_constructor=SuffixConstructionSpec(
+            consume_policy="one",
+            continuation_source="generate",
+            generation_length_policy=(
+                GENERATION_LENGTH_POLICY_RESIDUAL_SUFFIX_MINUS_ONE
+            ),
+        ),
+    ),
+    PTSConstructionSpec(
+        name=CONSUME_ALL_STOP_ACTION_NAME,
         prefix_selector=_INTERNAL_UNIFORM_PREFIX_SELECTOR,
         suffix_constructor=SuffixConstructionSpec(
             consume_policy="all",
@@ -86,9 +106,16 @@ def lookup_spec_by_name(
 
 
 __all__ = [
+    "CONSUME_ALL_STOP_ACTION_NAME",
+    "CONSUME_ONE_GENERATE_ACTION_NAME",
+    "CONSUME_ONE_KEEP_REST_ACTION_NAME",
     "DEFAULT_PTS_V1_SPECS",
+    "GENERATION_LENGTH_POLICY_RESIDUAL_SUFFIX_MINUS_ONE",
+    "GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX",
+    "KEEP_RESIDUAL_SUFFIX_ACTION_NAME",
     "PTSConstructionSpec",
     "PrefixSelectorSpec",
+    "REGENERATE_RESIDUAL_SUFFIX_ACTION_NAME",
     "SuffixConstructionSpec",
     "get_default_pts_v1_specs",
     "lookup_spec_by_name",

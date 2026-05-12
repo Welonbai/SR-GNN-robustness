@@ -18,6 +18,10 @@ import numpy as np
 
 from attack.pts.grouping import default_suffix_length_buckets
 from attack.pts.policy import CONSUME_ONE_ACTION_NAME, build_valid_actions_by_group
+from attack.pts.space_filling import (
+    PTSSpaceFillingConfig as ProductionSpaceFillingConfig,
+    build_vertex_stratified_initial_population,
+)
 from attack.pts.specs import get_default_pts_v1_specs
 
 
@@ -288,61 +292,41 @@ def run_diagnostic(
     valid_actions = action_space.valid_actions_by_group
     validate_config(config, valid_actions)
     uniform_policy = build_uniform_policy(valid_actions)
-    mandatory_vertices = (
-        build_mandatory_vertices(
-            valid_actions_by_group=valid_actions,
-            min_probability=config.min_probability,
-            max_probability=config.max_probability,
-            c1_generate_available=action_space.c1_generate_available,
-        )
-        if config.mandatory_enabled
-        else []
-    )
-    extreme_pool = generate_policy_pool(
-        pool_size=config.extreme_pool_size,
-        source_sampler="extreme",
-        alpha=config.extreme_alpha,
-        seed=int(config.seed),
+    production_samples = build_vertex_stratified_initial_population(
+        config=ProductionSpaceFillingConfig(
+            seed=int(config.seed),
+            mandatory_enabled=bool(config.mandatory_enabled),
+            extreme_count=int(config.extreme_count),
+            moderate_count=int(config.moderate_count),
+            balanced_count=int(config.balanced_count),
+            extreme_pool_size=int(config.extreme_pool_size),
+            moderate_pool_size=int(config.moderate_pool_size),
+            extreme_alpha=float(config.extreme_alpha),
+            moderate_alpha=float(config.moderate_alpha),
+            min_probability=float(config.min_probability),
+            max_probability=float(config.max_probability),
+            distance=str(config.distance),
+        ),
         valid_actions_by_group=valid_actions,
-        min_probability=config.min_probability,
-        max_probability=config.max_probability,
+        enabled_actions=action_space.enabled_actions,
     )
-    moderate_pool = generate_policy_pool(
-        pool_size=config.moderate_pool_size,
-        source_sampler="moderate",
-        alpha=config.moderate_alpha,
-        seed=int(config.seed) + 1_000_003,
-        valid_actions_by_group=valid_actions,
-        min_probability=config.min_probability,
-        max_probability=config.max_probability,
-    )
-
-    selected_policies: list[PoolCandidate] = []
-    selected_policies.extend(mandatory_vertices)
-    selected_extreme = select_pool_candidates_greedy_maximin(
-        pool=extreme_pool,
-        count=config.extreme_count,
-        uniform_policy=uniform_policy,
-        reference_policies=[candidate.policy for candidate in mandatory_vertices],
-    )
-    selected_policies.extend(selected_extreme)
-    selected_moderate = select_pool_candidates_greedy_maximin(
-        pool=moderate_pool,
-        count=config.moderate_count,
-        uniform_policy=uniform_policy,
-        reference_policies=[candidate.policy for candidate in selected_policies],
-    )
-    selected_policies.extend(selected_moderate)
-    for _ in range(config.balanced_count):
-        selected_policies.append(
-            PoolCandidate(
-                pool_index=None,
-                source_sampler="balanced",
-                vertex_name=None,
-                policy=uniform_policy,
-            )
+    selected_policies = [
+        PoolCandidate(
+            pool_index=sample.pool_index,
+            source_sampler=sample.sample_origin,
+            vertex_name=sample.vertex_name,
+            policy={
+                group: dict(probabilities)
+                for group, probabilities in sample.policy.group_probabilities.items()
+            },
         )
-
+        for sample in production_samples
+    ]
+    mandatory_vertices = [
+        candidate
+        for candidate in selected_policies
+        if candidate.source_sampler == "mandatory_vertex"
+    ]
     selected = build_selected_candidates(selected_policies, uniform_policy)
     pairwise = build_pairwise_distance_matrix([candidate.policy for candidate in selected])
     metadata = build_diagnostic_metadata(

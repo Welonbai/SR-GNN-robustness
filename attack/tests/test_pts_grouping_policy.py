@@ -16,7 +16,9 @@ from attack.pts.grouping import (
     default_suffix_length_buckets,
 )
 from attack.pts.policy import (
+    CONSUME_ONE_ACTION_NAMES,
     CONSUME_ONE_ACTION_NAME,
+    CONSUME_ONE_GENERATE_ACTION_NAME,
     GroupActionPolicy,
     build_valid_actions_by_group,
 )
@@ -71,6 +73,33 @@ def test_valid_actions_by_group_removes_duplicate_suffix_1_action() -> None:
     assert CONSUME_ONE_ACTION_NAME not in valid_actions["suffix_1"]
     assert CONSUME_ONE_ACTION_NAME in valid_actions["suffix_2"]
     assert CONSUME_ONE_ACTION_NAME in valid_actions["suffix_3plus"]
+
+
+def test_valid_actions_by_group_removes_both_consume_one_actions_from_suffix_1() -> None:
+    valid_actions = build_valid_actions_by_group(
+        group_buckets=default_suffix_length_buckets(),
+        enabled_actions=[
+            "keep_residual_suffix",
+            "regenerate_residual_suffix",
+            "consume_one_keep_rest",
+            "consume_one_generate_continuation",
+            "consume_all_stop",
+        ],
+    )
+
+    assert valid_actions["suffix_1"] == [
+        "keep_residual_suffix",
+        "regenerate_residual_suffix",
+        "consume_all_stop",
+    ]
+    assert valid_actions["suffix_2"] == [
+        "keep_residual_suffix",
+        "regenerate_residual_suffix",
+        "consume_one_keep_rest",
+        "consume_one_generate_continuation",
+        "consume_all_stop",
+    ]
+    assert valid_actions["suffix_3plus"] == valid_actions["suffix_2"]
 
 
 def test_uniform_policy_supports_group_specific_valid_actions() -> None:
@@ -150,7 +179,8 @@ def test_dynamic_mask_disables_consume_one_and_keeps_consume_all_enabled() -> No
     policy = GroupActionPolicy(
         {
             "suffix_1": {
-                "consume_one_keep_rest": 0.9,
+                "consume_one_keep_rest": 0.45,
+                "consume_one_generate_continuation": 0.45,
                 "consume_all_stop": 0.1,
             }
         }
@@ -163,8 +193,9 @@ def test_dynamic_mask_disables_consume_one_and_keeps_consume_all_enabled() -> No
     )
 
     assert result.dynamic_mask_applied is True
-    assert result.masked_actions == ["consume_one_keep_rest"]
-    assert "consume_one_keep_rest" not in result.effective_probabilities
+    assert result.masked_actions == list(CONSUME_ONE_ACTION_NAMES)
+    assert CONSUME_ONE_ACTION_NAME not in result.effective_probabilities
+    assert CONSUME_ONE_GENERATE_ACTION_NAME not in result.effective_probabilities
     assert "consume_all_stop" in result.effective_probabilities
     assert sum(result.effective_probabilities.values()) == pytest.approx(1.0)
 
@@ -173,7 +204,8 @@ def test_dynamic_mask_falls_back_to_uniform_when_all_positive_mass_removed() -> 
     policy = GroupActionPolicy(
         {
             "suffix_1": {
-                "consume_one_keep_rest": 1.0,
+                "consume_one_keep_rest": 0.5,
+                "consume_one_generate_continuation": 0.5,
                 "keep_residual_suffix": 0.0,
                 "consume_all_stop": 0.0,
             }

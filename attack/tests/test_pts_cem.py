@@ -13,13 +13,19 @@ if str(REPO_ROOT) not in sys.path:
 from attack.pts.cem import (
     PTSCEMConfig,
     PTSCEMEvaluationResult,
+    PTSCEMInitConfig,
     PTSCEMResamplingConfig,
     PTSCEMSamplerConfig,
     PTSCEMUpdateConfig,
     PTSGroupedCEMTrainer,
     _allocate_children_to_elites,
 )
-from attack.pts.policy import CONSUME_ONE_ACTION_NAME
+from attack.pts.policy import CONSUME_ONE_ACTION_NAMES
+from attack.pts.space_filling import (
+    MANDATORY_VERTEX_NAMES,
+    PTSSpaceFillingConfig,
+    build_vertex_stratified_initial_population,
+)
 from attack.pts.specs import get_default_pts_v1_specs
 
 
@@ -89,6 +95,13 @@ def _train_small_result(monkeypatch, *, iterations: int = 3, population_size: in
     )
 
 
+def _assert_consume_one_actions_are_ragged(policy) -> None:
+    for action in CONSUME_ONE_ACTION_NAMES:
+        assert action not in policy.group_probabilities["suffix_1"]
+        assert action in policy.group_probabilities["suffix_2"]
+        assert action in policy.group_probabilities["suffix_3plus"]
+
+
 def test_pts_cem_config_validation() -> None:
     assert (
         PTSCEMConfig(iterations=1, population_size=2, base_seed=1)
@@ -133,6 +146,31 @@ def test_pts_cem_config_validation() -> None:
 
     with pytest.raises(ValueError, match="local_concentration_scale"):
         PTSCEMResamplingConfig(local_concentration_scale=0.0)
+
+
+def test_pts_cem_vertex_stratified_mandatory_requires_c1_generate_spec() -> None:
+    old_four_specs = tuple(
+        spec
+        for spec in get_default_pts_v1_specs()
+        if spec.name != "consume_one_generate_continuation"
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "vertex_stratified_space_filling with mandatory_enabled=true requires "
+            "consume_one_generate_continuation"
+        ),
+    ):
+        PTSGroupedCEMTrainer(
+            cem_config=PTSCEMConfig(
+                iterations=3,
+                population_schedule=[16, 8, 8],
+                init=PTSCEMInitConfig(mode="vertex_stratified_space_filling"),
+                base_seed=1,
+            ),
+            specs=old_four_specs,
+        )
 
 
 def test_pts_cem_elite_child_allocation() -> None:
@@ -235,7 +273,7 @@ def test_pts_cem_updates_policy_toward_fake_evaluator_reward(monkeypatch) -> Non
         "regenerate_residual_suffix"
     ]
 
-    assert initial_probability == pytest.approx(0.25)
+    assert initial_probability == pytest.approx(0.2)
     assert best_probability > initial_probability
     assert final_probability > initial_probability
 
@@ -247,29 +285,160 @@ def test_pts_cem_updated_policies_are_normalized_and_bounded(monkeypatch) -> Non
         for probabilities in policy_payload["group_probabilities"].values():
             assert sum(probabilities.values()) == pytest.approx(1.0)
             assert all(0.03 - 1e-8 <= value <= 0.90 + 1e-8 for value in probabilities.values())
-        assert (
-            CONSUME_ONE_ACTION_NAME
-            not in policy_payload["group_probabilities"]["suffix_1"]
-        )
-        assert (
-            CONSUME_ONE_ACTION_NAME
-            in policy_payload["group_probabilities"]["suffix_2"]
-        )
-        assert (
-            CONSUME_ONE_ACTION_NAME
-            in policy_payload["group_probabilities"]["suffix_3plus"]
-        )
+        for action in CONSUME_ONE_ACTION_NAMES:
+            assert action not in policy_payload["group_probabilities"]["suffix_1"]
+            assert action in policy_payload["group_probabilities"]["suffix_2"]
+            assert action in policy_payload["group_probabilities"]["suffix_3plus"]
 
 
 def test_pts_cem_candidate_policies_are_ragged(monkeypatch) -> None:
     result = _train_small_result(monkeypatch, iterations=1, population_size=6)
 
     for candidate in result.iteration_results[0].candidates:
-        assert CONSUME_ONE_ACTION_NAME not in candidate.policy.group_probabilities["suffix_1"]
-        assert CONSUME_ONE_ACTION_NAME in candidate.policy.group_probabilities["suffix_2"]
-        assert CONSUME_ONE_ACTION_NAME in candidate.policy.group_probabilities["suffix_3plus"]
+        _assert_consume_one_actions_are_ragged(candidate.policy)
         for probabilities in candidate.policy.group_probabilities.values():
             assert sum(probabilities.values()) == pytest.approx(1.0)
+
+
+def test_pts_cem_vertex_stratified_iteration0_uses_fixed_helper_policies(monkeypatch) -> None:
+    _patch_generated_suffix(monkeypatch)
+    specs = get_default_pts_v1_specs()
+    base_seed = 101
+    trainer = PTSGroupedCEMTrainer(
+        cem_config=PTSCEMConfig(
+            iterations=3,
+            population_schedule=[16, 8, 8],
+            elite_ratio=0.25,
+            init=PTSCEMInitConfig(mode="vertex_stratified_space_filling"),
+            resampling=PTSCEMResamplingConfig(mode="elite_centered"),
+            base_seed=base_seed,
+            save_top_k_candidates=4,
+        ),
+        specs=specs,
+    )
+    expected = build_vertex_stratified_initial_population(
+        config=PTSSpaceFillingConfig(
+            seed=base_seed,
+            min_probability=0.03,
+            max_probability=0.90,
+        ),
+        valid_actions_by_group=trainer.valid_actions_by_group,
+        enabled_actions=[spec.name for spec in specs],
+    )
+    initial_policy = trainer._initial_policy()
+    sample_plan = trainer._candidate_sample_plan(
+        iteration=0,
+        population_size=16,
+        current_policy=initial_policy,
+        previous_elites=[],
+    )
+
+    assert len(sample_plan) == 16
+    assert len(expected) == 16
+    assert [sample.sample_origin for sample in expected[:5]] == [
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "mandatory_vertex",
+    ]
+    assert [sample.vertex_name for sample in expected[:5]] == list(MANDATORY_VERTEX_NAMES)
+    for sample_spec, expected_sample in zip(sample_plan, expected):
+        assert sample_spec.fixed_policy is not None
+        assert sample_spec.fixed_policy.to_dict() == expected_sample.policy.to_dict()
+        assert sample_spec.sample_origin == expected_sample.sample_origin
+        assert sample_spec.sample_metadata["fixed_policy"] is True
+        assert sample_spec.sample_metadata["sampled_policy_projection_enabled"] is True
+        assert sample_spec.sample_metadata["sampled_policy_min_probability"] == pytest.approx(0.03)
+        assert sample_spec.sample_metadata["sampled_policy_max_probability"] == pytest.approx(0.90)
+
+    result = trainer.train(
+        template_sessions=[
+            [1, 2, 3, 4, 5],
+            [6, 7, 8, 9],
+            [10, 11, 12],
+            [13, 14],
+        ],
+        target_item=99,
+        poison_runner=object(),
+        evaluator_fn=_regen_suffix3_evaluator,
+    )
+    iter0 = result.iteration_results[0]
+
+    assert [candidate.sample_origin for candidate in iter0.candidates[:5]] == [
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "mandatory_vertex",
+    ]
+    assert [
+        candidate.sample_metadata["vertex_name"]
+        for candidate in iter0.candidates[:5]
+    ] == list(MANDATORY_VERTEX_NAMES)
+    assert [candidate.sample_origin for candidate in iter0.candidates[5:12]] == [
+        "extreme_maximin"
+    ] * 7
+    assert [candidate.sample_origin for candidate in iter0.candidates[12:15]] == [
+        "moderate_maximin"
+    ] * 3
+    assert iter0.candidates[15].sample_origin == "balanced"
+    for candidate, expected_sample in zip(iter0.candidates, expected):
+        assert candidate.policy.to_dict() == expected_sample.policy.to_dict()
+        assert candidate.sample_metadata["sampled_policy_projection_enabled"] is True
+        assert candidate.sample_metadata["sampled_policy_min_probability"] == pytest.approx(0.03)
+        assert candidate.sample_metadata["sampled_policy_max_probability"] == pytest.approx(0.90)
+        _assert_consume_one_actions_are_ragged(candidate.policy)
+        assert list(candidate.policy.group_probabilities["suffix_1"]) == [
+            "keep_residual_suffix",
+            "regenerate_residual_suffix",
+            "consume_all_stop",
+        ]
+        for probabilities in candidate.policy.group_probabilities.values():
+            assert sum(probabilities.values()) == pytest.approx(1.0)
+            assert all(0.03 - 1e-8 <= value <= 0.90 + 1e-8 for value in probabilities.values())
+
+
+def test_pts_cem_vertex_stratified_elite_centered_children_have_metadata(monkeypatch) -> None:
+    _patch_generated_suffix(monkeypatch)
+    trainer = PTSGroupedCEMTrainer(
+        cem_config=PTSCEMConfig(
+            iterations=3,
+            population_schedule=[16, 8, 8],
+            elite_ratio=0.25,
+            init=PTSCEMInitConfig(mode="vertex_stratified_space_filling"),
+            resampling=PTSCEMResamplingConfig(
+                mode="elite_centered",
+                local_concentration_scale=30.0,
+            ),
+            base_seed=103,
+            save_top_k_candidates=4,
+        ),
+        specs=get_default_pts_v1_specs(),
+    )
+
+    result = trainer.train(
+        template_sessions=[
+            [1, 2, 3, 4, 5],
+            [6, 7, 8, 9],
+            [10, 11, 12],
+            [13, 14],
+        ],
+        target_item=99,
+        poison_runner=object(),
+        evaluator_fn=_regen_suffix3_evaluator,
+    )
+
+    iter0, iter1, iter2 = result.iteration_results
+    assert len(iter0.candidates) == 16
+    assert all(candidate.sample_origin == "elite_centered" for candidate in iter1.candidates)
+    assert all(candidate.sample_origin == "elite_centered" for candidate in iter2.candidates)
+    assert all(candidate.parent_candidate_key for candidate in iter1.candidates)
+    assert all(
+        candidate.sample_metadata["local_concentration_scale"] == pytest.approx(30.0)
+        for candidate in iter1.candidates
+    )
+    assert set(_parent_key_counts(iter1.candidates)) == set(iter0.elite_candidate_keys)
 
 
 def test_pts_cem_elite_centered_resampling_origins_and_parents(monkeypatch) -> None:
@@ -333,17 +502,12 @@ def test_pts_cem_elite_centered_resampling_origins_and_parents(monkeypatch) -> N
             assert candidate.parent_reward is not None
             assert candidate.parent_rank_among_elites is not None
             assert candidate.parent_rank_among_elites >= 1
+            _assert_consume_one_actions_are_ragged(candidate.policy)
+            assert candidate.sample_metadata["sample_origin"] == "elite_centered"
+            assert candidate.sample_metadata["parent_candidate_key"]
             assert (
-                CONSUME_ONE_ACTION_NAME
-                not in candidate.policy.group_probabilities["suffix_1"]
-            )
-            assert (
-                CONSUME_ONE_ACTION_NAME
-                in candidate.policy.group_probabilities["suffix_2"]
-            )
-            assert (
-                CONSUME_ONE_ACTION_NAME
-                in candidate.policy.group_probabilities["suffix_3plus"]
+                candidate.sample_metadata["local_concentration_scale"]
+                == pytest.approx(30.0)
             )
             for probabilities in candidate.policy.group_probabilities.values():
                 assert sum(probabilities.values()) == pytest.approx(1.0)
@@ -406,10 +570,8 @@ def test_pts_cem_suffix_1_policies_do_not_sample_duplicate_action(monkeypatch) -
 
     for iteration in result.iteration_results:
         for candidate in iteration.candidates:
-            assert (
-                CONSUME_ONE_ACTION_NAME
-                not in candidate.policy.group_probabilities["suffix_1"]
-            )
+            for action in CONSUME_ONE_ACTION_NAMES:
+                assert action not in candidate.policy.group_probabilities["suffix_1"]
             for record in candidate.per_session_records:
                 assert record["suffix_len_group"] == "suffix_1"
-                assert record["action"] != CONSUME_ONE_ACTION_NAME
+                assert record["action"] not in set(CONSUME_ONE_ACTION_NAMES)

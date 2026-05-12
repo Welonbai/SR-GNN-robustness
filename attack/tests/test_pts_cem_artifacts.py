@@ -17,7 +17,7 @@ from attack.pts.cem import (
     PTSCEMEvaluationResult,
     PTSGroupedCEMTrainer,
 )
-from attack.pts.policy import CONSUME_ONE_ACTION_NAME
+from attack.pts.policy import CONSUME_ONE_ACTION_NAMES
 from attack.pts.specs import get_default_pts_v1_specs
 
 
@@ -56,9 +56,10 @@ def _read_jsonl(path: Path) -> list[dict[str, object]]:
 def _assert_ragged_policy_payload(policy_payload: dict[str, object]) -> None:
     group_probabilities = policy_payload["group_probabilities"]
     assert isinstance(group_probabilities, dict)
-    assert CONSUME_ONE_ACTION_NAME not in group_probabilities["suffix_1"]
-    assert CONSUME_ONE_ACTION_NAME in group_probabilities["suffix_2"]
-    assert CONSUME_ONE_ACTION_NAME in group_probabilities["suffix_3plus"]
+    for action in CONSUME_ONE_ACTION_NAMES:
+        assert action not in group_probabilities["suffix_1"]
+        assert action in group_probabilities["suffix_2"]
+        assert action in group_probabilities["suffix_3plus"]
 
 
 def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None:
@@ -105,6 +106,10 @@ def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None
         assert all("final_sessions" not in row for row in trace_rows)
         assert all("per_session_records" not in row for row in trace_rows)
         assert all(row["sample_origin"] == "global_policy" for row in trace_rows)
+        assert all("sample_metadata" in row for row in trace_rows)
+        assert all(row["sampled_policy_projection_enabled"] is True for row in trace_rows)
+        assert all(row["sampled_policy_min_probability"] == 0.03 for row in trace_rows)
+        assert all(row["sampled_policy_max_probability"] == 0.90 for row in trace_rows)
         assert all("parent_candidate_key" in row for row in trace_rows)
 
         best_policy = _read_json(Path(paths["pts_best_policy"]))
@@ -129,11 +134,17 @@ def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None
         assert top_candidates["candidates"][0]["candidate_key"] == best_key
         assert top_candidates["candidates"][0]["selected_as_global_best"] is True
         assert "sample_origin" in top_candidates["candidates"][0]
+        assert "sample_metadata" in top_candidates["candidates"][0]
+        assert "policy" in top_candidates["candidates"][0]
         assert "parent_candidate_key" in top_candidates["candidates"][0]
         assert top_policies["candidates"][0]["candidate_key"] == best_key
+        assert "sample_metadata" in top_policies["candidates"][0]
+        assert "policy" in top_policies["candidates"][0]
         assert rank1_metadata["candidate_key"] == best_key
         assert rank1_metadata["selected_as_global_best"] is True
         assert "sample_origin" in rank1_metadata
+        assert "sample_metadata" in rank1_metadata
+        assert "policy" in rank1_metadata
         assert "parent_candidate_key" in rank1_metadata
         assert isinstance(rank1_sessions, list)
         assert len(rank1_records) == len(rank1_sessions)

@@ -18,6 +18,7 @@ def test_default_pts_v1_specs_contain_expected_names() -> None:
         "keep_residual_suffix",
         "regenerate_residual_suffix",
         "consume_one_keep_rest",
+        "consume_one_generate_continuation",
         "consume_all_stop",
     ]
 
@@ -28,3 +29,19 @@ def test_lookup_spec_by_name_returns_single_match() -> None:
     spec = lookup_spec_by_name(specs, "consume_all_stop")
 
     assert spec.name == "consume_all_stop"
+
+
+def test_consume_one_generate_continuation_spec() -> None:
+    spec = lookup_spec_by_name(
+        get_default_pts_v1_specs(),
+        "consume_one_generate_continuation",
+    )
+
+    assert spec.prefix_selector.range_name == "internal"
+    assert spec.prefix_selector.sampler_name == "uniform"
+    assert spec.suffix_constructor.consume_policy == "one"
+    assert spec.suffix_constructor.continuation_source == "generate"
+    assert (
+        spec.suffix_constructor.generation_length_policy
+        == "residual_suffix_minus_one"
+    )

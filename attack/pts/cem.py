@@ -12,7 +12,12 @@ except ImportError:  # pragma: no cover - numpy is available in the main project
 from attack.pts.executor import apply_pts_construction_batch
 from attack.pts.grouping import SuffixLengthBucket, default_suffix_length_buckets
 from attack.pts.policy import GroupActionPolicy, build_valid_actions_by_group
-from attack.pts.specs import PTSConstructionSpec
+from attack.pts.space_filling import (
+    PTSSpaceFillingConfig,
+    PTSSpaceFillingSample,
+    build_vertex_stratified_initial_population,
+)
+from attack.pts.specs import CONSUME_ONE_GENERATE_ACTION_NAME, PTSConstructionSpec
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,50 @@ class PTSCEMUpdateConfig:
 @dataclass(frozen=True)
 class PTSCEMInitConfig:
     mode: str = "uniform"
+    mandatory_enabled: bool = True
+    extreme_count: int = 7
+    moderate_count: int = 3
+    balanced_count: int = 1
+    extreme_pool_size: int = 1024
+    moderate_pool_size: int = 512
+    extreme_alpha: float = 0.3
+    moderate_alpha: float = 2.0
+    distance: str = "l1"
+
+    def __post_init__(self) -> None:
+        mode = str(self.mode).strip().lower()
+        if mode not in {"uniform", "vertex_stratified_space_filling"}:
+            raise ValueError(
+                "init.mode must be 'uniform' or "
+                "'vertex_stratified_space_filling'."
+            )
+        if int(self.extreme_count) < 0:
+            raise ValueError("init.extreme_count must be >= 0.")
+        if int(self.moderate_count) < 0:
+            raise ValueError("init.moderate_count must be >= 0.")
+        if int(self.balanced_count) not in {0, 1}:
+            raise ValueError("init.balanced_count must be 0 or 1.")
+        if int(self.extreme_pool_size) < int(self.extreme_count):
+            raise ValueError("init.extreme_pool_size must be >= extreme_count.")
+        if int(self.moderate_pool_size) < int(self.moderate_count):
+            raise ValueError("init.moderate_pool_size must be >= moderate_count.")
+        if float(self.extreme_alpha) <= 0.0:
+            raise ValueError("init.extreme_alpha must be positive.")
+        if float(self.moderate_alpha) <= 0.0:
+            raise ValueError("init.moderate_alpha must be positive.")
+        distance = str(self.distance).strip().lower()
+        if distance != "l1":
+            raise ValueError("init.distance currently supports only 'l1'.")
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(self, "mandatory_enabled", bool(self.mandatory_enabled))
+        object.__setattr__(self, "extreme_count", int(self.extreme_count))
+        object.__setattr__(self, "moderate_count", int(self.moderate_count))
+        object.__setattr__(self, "balanced_count", int(self.balanced_count))
+        object.__setattr__(self, "extreme_pool_size", int(self.extreme_pool_size))
+        object.__setattr__(self, "moderate_pool_size", int(self.moderate_pool_size))
+        object.__setattr__(self, "extreme_alpha", float(self.extreme_alpha))
+        object.__setattr__(self, "moderate_alpha", float(self.moderate_alpha))
+        object.__setattr__(self, "distance", distance)
 
 
 @dataclass(frozen=True)
@@ -120,6 +169,7 @@ class PTSCEMCandidateResult:
     selected_as_elite: bool = False
     selected_as_global_best: bool = False
     sample_origin: str = "global_policy"
+    sample_metadata: dict[str, object] = field(default_factory=dict)
     parent_iteration: int | None = None
     parent_candidate_id: int | None = None
     parent_candidate_key: str | None = None
@@ -192,8 +242,17 @@ class PTSGroupedCEMTrainer:
             raise ValueError("generation_topk must be positive.")
         if self.cem_config.sampler.type != "dirichlet":
             raise ValueError("Phase 2 PTS-CEM supports only sampler.type='dirichlet'.")
-        if self.cem_config.init.mode != "uniform":
-            raise ValueError("Phase 2 PTS-CEM supports only init.mode='uniform'.")
+        if (
+            self.cem_config.init.mode == "vertex_stratified_space_filling"
+            and bool(self.cem_config.init.mandatory_enabled)
+            and CONSUME_ONE_GENERATE_ACTION_NAME not in set(self._action_names())
+        ):
+            raise ValueError(
+                "vertex_stratified_space_filling with mandatory_enabled=true "
+                "requires consume_one_generate_continuation in actions.enabled, "
+                "because the c1_generate_where_valid mandatory vertex cannot be "
+                "constructed."
+            )
         for group_name, actions in self.valid_actions_by_group.items():
             _validate_probability_bounds(
                 group_count=len(actions),
@@ -201,6 +260,18 @@ class PTSGroupedCEMTrainer:
                 max_probability=float(self.cem_config.update.max_probability),
                 label=f"group {group_name!r}",
             )
+        self._initial_space_filling_samples: list[PTSSpaceFillingSample] = []
+        if self.cem_config.init.mode == "vertex_stratified_space_filling":
+            self._initial_space_filling_samples = self._build_initial_space_filling_samples()
+            initial_population_size = len(self._initial_space_filling_samples)
+            configured_population_size = self._population_size(0)
+            if int(configured_population_size) != int(initial_population_size):
+                raise ValueError(
+                    "vertex_stratified_space_filling requires "
+                    "population_schedule[0] or population_size to equal the "
+                    f"computed initial population size {initial_population_size}; "
+                    f"received {configured_population_size}."
+                )
 
     def train(
         self,
@@ -232,14 +303,19 @@ class PTSGroupedCEMTrainer:
 
             for candidate_id, sample_spec in enumerate(sample_plan):
                 seed = self._candidate_seed(iteration, candidate_id)
-                candidate_policy = _sample_candidate_policy_from_center(
-                    center_policy=sample_spec.center_policy,
-                    candidate_seed=seed,
-                    concentration_scale=sample_spec.concentration_scale,
-                    disable_consume_one_when_suffix_len_leq_1=(
-                        self.disable_consume_one_when_suffix_len_leq_1
-                    ),
-                )
+                if sample_spec.fixed_policy is not None:
+                    candidate_policy = sample_spec.fixed_policy
+                else:
+                    candidate_policy = _sample_candidate_policy_from_center(
+                        center_policy=sample_spec.center_policy,
+                        candidate_seed=seed,
+                        concentration_scale=sample_spec.concentration_scale,
+                        min_probability=float(self.cem_config.update.min_probability),
+                        max_probability=float(self.cem_config.update.max_probability),
+                        disable_consume_one_when_suffix_len_leq_1=(
+                            self.disable_consume_one_when_suffix_len_leq_1
+                        ),
+                    )
                 construction_result = apply_pts_construction_batch(
                     template_sessions=template_sessions,
                     target_item=int(target_item),
@@ -287,6 +363,7 @@ class PTSGroupedCEMTrainer:
                         for session in construction_result.final_sessions
                     ],
                     sample_origin=sample_spec.sample_origin,
+                    sample_metadata=dict(sample_spec.sample_metadata),
                     parent_iteration=sample_spec.parent_iteration,
                     parent_candidate_id=sample_spec.parent_candidate_id,
                     parent_candidate_key=sample_spec.parent_candidate_key,
@@ -364,10 +441,45 @@ class PTSGroupedCEMTrainer:
             raise ValueError("population_size is required when population_schedule is absent.")
         return int(self.cem_config.population_size)
 
+    def _build_initial_space_filling_samples(self) -> list[PTSSpaceFillingSample]:
+        init = self.cem_config.init
+        return build_vertex_stratified_initial_population(
+            config=PTSSpaceFillingConfig(
+                seed=int(self.cem_config.base_seed),
+                mandatory_enabled=bool(init.mandatory_enabled),
+                extreme_count=int(init.extreme_count),
+                moderate_count=int(init.moderate_count),
+                balanced_count=int(init.balanced_count),
+                extreme_pool_size=int(init.extreme_pool_size),
+                moderate_pool_size=int(init.moderate_pool_size),
+                extreme_alpha=float(init.extreme_alpha),
+                moderate_alpha=float(init.moderate_alpha),
+                min_probability=float(self.cem_config.update.min_probability),
+                max_probability=float(self.cem_config.update.max_probability),
+                distance=str(init.distance),
+            ),
+            valid_actions_by_group=self.valid_actions_by_group,
+            enabled_actions=self._action_names(),
+            disable_consume_one_when_suffix_len_leq_1=(
+                self.disable_consume_one_when_suffix_len_leq_1
+            ),
+        )
+
     def _candidate_seed(self, iteration: int, candidate_id: int) -> int:
         return int(self.cem_config.base_seed) + int(iteration) * int(
             self.cem_config.candidate_seed_stride
         ) + int(candidate_id)
+
+    def _sample_projection_metadata(self) -> dict[str, object]:
+        return {
+            "sampled_policy_projection_enabled": True,
+            "sampled_policy_min_probability": float(
+                self.cem_config.update.min_probability
+            ),
+            "sampled_policy_max_probability": float(
+                self.cem_config.update.max_probability
+            ),
+        }
 
     def _candidate_sample_plan(
         self,
@@ -378,6 +490,30 @@ class PTSGroupedCEMTrainer:
         previous_elites: Sequence[PTSCEMCandidateResult],
     ) -> list["_CandidateSampleSpec"]:
         mode = self.cem_config.resampling.mode
+        init_mode = self.cem_config.init.mode
+        if init_mode == "vertex_stratified_space_filling" and int(iteration) == 0:
+            if len(self._initial_space_filling_samples) != int(population_size):
+                raise ValueError(
+                    "vertex_stratified_space_filling initial population size "
+                    "does not match iteration-0 population_size."
+                )
+            return [
+                _CandidateSampleSpec(
+                    center_policy=current_policy,
+                    concentration_scale=float(
+                        self.cem_config.sampler.concentration_scale
+                    ),
+                    sample_origin=sample.sample_origin,
+                    fixed_policy=sample.policy,
+                    sample_metadata={
+                        **sample.sample_metadata(init_mode=init_mode),
+                        "fixed_policy": True,
+                        "concentration_scale": None,
+                        **self._sample_projection_metadata(),
+                    },
+                )
+                for sample in self._initial_space_filling_samples
+            ]
         if mode == "standard":
             return [
                 _CandidateSampleSpec(
@@ -386,6 +522,15 @@ class PTSGroupedCEMTrainer:
                         self.cem_config.sampler.concentration_scale
                     ),
                     sample_origin="global_policy",
+                    sample_metadata={
+                        "init_mode": init_mode,
+                        "sample_origin": "global_policy",
+                        "fixed_policy": False,
+                        "concentration_scale": float(
+                            self.cem_config.sampler.concentration_scale
+                        ),
+                        **self._sample_projection_metadata(),
+                    },
                 )
                 for _ in range(int(population_size))
             ]
@@ -399,6 +544,15 @@ class PTSGroupedCEMTrainer:
                         self.cem_config.sampler.concentration_scale
                     ),
                     sample_origin="initial_global_policy",
+                    sample_metadata={
+                        "init_mode": init_mode,
+                        "sample_origin": "initial_global_policy",
+                        "fixed_policy": False,
+                        "concentration_scale": float(
+                            self.cem_config.sampler.concentration_scale
+                        ),
+                        **self._sample_projection_metadata(),
+                    },
                 )
                 for _ in range(int(population_size))
             ]
@@ -428,6 +582,23 @@ class PTSGroupedCEMTrainer:
                         parent_candidate_key=str(elite.candidate_key),
                         parent_reward=float(elite.reward),
                         parent_rank_among_elites=int(elite_rank_index),
+                        sample_metadata={
+                            "init_mode": init_mode,
+                            "sample_origin": "elite_centered",
+                            "fixed_policy": False,
+                            "concentration_scale": float(
+                                self.cem_config.resampling.local_concentration_scale
+                            ),
+                            "local_concentration_scale": float(
+                                self.cem_config.resampling.local_concentration_scale
+                            ),
+                            "parent_iteration": int(elite.iteration),
+                            "parent_candidate_id": int(elite.candidate_id),
+                            "parent_candidate_key": str(elite.candidate_key),
+                            "parent_reward": float(elite.reward),
+                            "parent_rank_among_elites": int(elite_rank_index),
+                            **self._sample_projection_metadata(),
+                        },
                     )
                 )
         if len(sample_plan) != int(population_size):
@@ -444,6 +615,8 @@ class _CandidateSampleSpec:
     center_policy: GroupActionPolicy
     concentration_scale: float
     sample_origin: str
+    fixed_policy: GroupActionPolicy | None = None
+    sample_metadata: dict[str, object] = field(default_factory=dict)
     parent_iteration: int | None = None
     parent_candidate_id: int | None = None
     parent_candidate_key: str | None = None
@@ -456,12 +629,16 @@ def _sample_candidate_policy_from_center(
     center_policy: GroupActionPolicy,
     candidate_seed: int,
     concentration_scale: float,
+    min_probability: float,
+    max_probability: float,
     disable_consume_one_when_suffix_len_leq_1: bool,
 ) -> GroupActionPolicy:
     return _sample_candidate_policy(
         center_policy,
         seed=int(candidate_seed),
         concentration_scale=float(concentration_scale),
+        min_probability=float(min_probability),
+        max_probability=float(max_probability),
         disable_consume_one_when_suffix_len_leq_1=(
             disable_consume_one_when_suffix_len_leq_1
         ),
@@ -473,6 +650,8 @@ def _sample_candidate_policy(
     *,
     seed: int,
     concentration_scale: float,
+    min_probability: float,
+    max_probability: float,
     disable_consume_one_when_suffix_len_leq_1: bool,
 ) -> GroupActionPolicy:
     sampled: dict[str, dict[str, float]] = {}
@@ -483,10 +662,14 @@ def _sample_candidate_policy(
             for action in action_names
         ]
         sampled_values = _sample_dirichlet(alpha, seed=_group_seed(seed, group))
-        sampled[group] = {
-            action: float(value)
-            for action, value in zip(action_names, sampled_values)
-        }
+        sampled[group] = _bounded_probability_mapping(
+            {
+                action: float(value)
+                for action, value in zip(action_names, sampled_values)
+            },
+            min_probability=float(min_probability),
+            max_probability=float(max_probability),
+        )
     return GroupActionPolicy(
         sampled,
         valid_actions_by_group=center_policy.valid_actions_by_group,
@@ -683,8 +866,8 @@ __all__ = [
     "PTSCEMEvaluationResult",
     "PTSCEMInitConfig",
     "PTSCEMIterationResult",
-    "PTSCEMResult",
     "PTSCEMResamplingConfig",
+    "PTSCEMResult",
     "PTSCEMSamplerConfig",
     "PTSCEMUpdateConfig",
     "PTSGroupedCEMTrainer",

@@ -6,6 +6,11 @@ from typing import Any, Mapping, Sequence
 
 
 CONSUME_ONE_ACTION_NAME = "consume_one_keep_rest"
+CONSUME_ONE_GENERATE_ACTION_NAME = "consume_one_generate_continuation"
+CONSUME_ONE_ACTION_NAMES = (
+    CONSUME_ONE_ACTION_NAME,
+    CONSUME_ONE_GENERATE_ACTION_NAME,
+)
 
 
 @dataclass(frozen=True)
@@ -275,7 +280,9 @@ def build_valid_actions_by_group(
             and int(max_len) <= 1
         ):
             group_actions = [
-                action for action in group_actions if action != CONSUME_ONE_ACTION_NAME
+                action
+                for action in group_actions
+                if action not in set(CONSUME_ONE_ACTION_NAMES)
             ]
         if not group_actions:
             raise ValueError(
@@ -473,9 +480,10 @@ def _apply_dynamic_mask(
     if (
         disable_consume_one_when_suffix_len_leq_1
         and int(residual_suffix_len) <= 1
-        and CONSUME_ONE_ACTION_NAME in probabilities
     ):
-        masked_actions.append(CONSUME_ONE_ACTION_NAME)
+        for action in CONSUME_ONE_ACTION_NAMES:
+            if action in probabilities:
+                masked_actions.append(action)
 
     valid_actions = {
         action: float(probability)
@@ -527,6 +535,8 @@ def _sample_categorical(
 
 __all__ = [
     "CONSUME_ONE_ACTION_NAME",
+    "CONSUME_ONE_ACTION_NAMES",
+    "CONSUME_ONE_GENERATE_ACTION_NAME",
     "GroupActionPolicy",
     "PolicySampleResult",
     "build_valid_actions_by_group",

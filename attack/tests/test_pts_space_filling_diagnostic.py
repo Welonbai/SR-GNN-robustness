@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from attack.pts.policy import CONSUME_ONE_ACTION_NAME
+from attack.pts.policy import CONSUME_ONE_ACTION_NAME, CONSUME_ONE_GENERATE_ACTION_NAME
 from attack.tools.inspect_pts_space_filling_initial_population import (
     FLOAT_TOLERANCE,
     GROUP_ORDER,
@@ -42,26 +42,40 @@ def _small_config(**overrides: object) -> SpaceFillingConfig:
 def test_stratified_space_filling_selects_requested_counts() -> None:
     selected, summary, pairwise = run_diagnostic(_small_config())
 
-    assert len(selected) == 7
-    assert len(pairwise) == 7
+    assert len(selected) == 12
+    assert len(pairwise) == 12
     assert Counter(candidate.source_sampler for candidate in selected) == {
-        "extreme": 4,
-        "moderate": 2,
+        "mandatory_vertex": 5,
+        "extreme_maximin": 4,
+        "moderate_maximin": 2,
         "balanced": 1,
     }
     assert summary["selected_count_by_source_sampler"] == {
-        "extreme": 4,
-        "moderate": 2,
+        "mandatory_vertex": 5,
+        "extreme_maximin": 4,
+        "moderate_maximin": 2,
         "balanced": 1,
     }
     assert [candidate.source_sampler for candidate in selected] == [
-        "extreme",
-        "extreme",
-        "extreme",
-        "extreme",
-        "moderate",
-        "moderate",
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "mandatory_vertex",
+        "extreme_maximin",
+        "extreme_maximin",
+        "extreme_maximin",
+        "extreme_maximin",
+        "moderate_maximin",
+        "moderate_maximin",
         "balanced",
+    ]
+    assert [candidate.vertex_name for candidate in selected[:5]] == [
+        "c0_preserve",
+        "c0_generate",
+        "c1_preserve_where_valid",
+        "c1_generate_where_valid",
+        "stop",
     ]
 
 
@@ -70,8 +84,11 @@ def test_space_filling_respects_ragged_suffix_1_actions() -> None:
 
     for candidate in selected:
         assert CONSUME_ONE_ACTION_NAME not in candidate.policy["suffix_1"]
+        assert CONSUME_ONE_GENERATE_ACTION_NAME not in candidate.policy["suffix_1"]
         assert CONSUME_ONE_ACTION_NAME in candidate.policy["suffix_2"]
+        assert CONSUME_ONE_GENERATE_ACTION_NAME in candidate.policy["suffix_2"]
         assert CONSUME_ONE_ACTION_NAME in candidate.policy["suffix_3plus"]
+        assert CONSUME_ONE_GENERATE_ACTION_NAME in candidate.policy["suffix_3plus"]
 
 
 def test_space_filling_probabilities_satisfy_bounds_and_sum_to_one() -> None:
@@ -142,7 +159,7 @@ def test_space_filling_writes_json_and_csv_outputs() -> None:
 
     selected_payload = json.loads(selected_path.read_text(encoding="utf-8"))
     summary_payload = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert len(selected_payload) == 7
+    assert len(selected_payload) == 12
     assert summary_payload["valid_actions_by_group"]["suffix_1"] == [
         "keep_residual_suffix",
         "regenerate_residual_suffix",
@@ -151,13 +168,13 @@ def test_space_filling_writes_json_and_csv_outputs() -> None:
 
     with selected_csv_path.open("r", encoding="utf-8", newline="") as file_obj:
         rows = list(csv.DictReader(file_obj))
-    assert len(rows) == 7
+    assert len(rows) == 12
     assert "suffix_1_dominant_action" in rows[0]
     assert "suffix_3plus_dominant_prob" in rows[0]
 
     with pairwise_path.open("r", encoding="utf-8", newline="") as file_obj:
         pairwise_rows = list(csv.DictReader(file_obj))
-    assert len(pairwise_rows) == 7
+    assert len(pairwise_rows) == 12
 
     shutil.rmtree(output_dir, ignore_errors=True)
 

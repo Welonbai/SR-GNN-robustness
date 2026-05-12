@@ -78,6 +78,7 @@ def write_pts_cem_artifacts(
                 "reward": float(candidate.reward),
                 "selected_as_global_best": bool(candidate.selected_as_global_best),
                 "policy": candidate.policy.to_dict(),
+                **_candidate_sampling_payload(candidate),
             }
         )
         artifact_paths[f"top_candidate_rank_{rank}_policy"] = str(policy_path)
@@ -167,19 +168,38 @@ def _top_candidate_metadata(
             "selected_as_elite": bool(candidate.selected_as_elite),
             "selected_as_global_best": bool(candidate.selected_as_global_best),
             **_candidate_sampling_payload(candidate),
+            "policy": candidate.policy.to_dict(),
         }
     )
 
 
 def _candidate_sampling_payload(candidate: PTSCEMCandidateResult) -> dict[str, Any]:
-    return {
+    sample_metadata = dict(candidate.sample_metadata)
+    payload = {
         "sample_origin": candidate.sample_origin,
+        "sample_metadata": sample_metadata,
         "parent_iteration": candidate.parent_iteration,
         "parent_candidate_id": candidate.parent_candidate_id,
         "parent_candidate_key": candidate.parent_candidate_key,
         "parent_reward": candidate.parent_reward,
         "parent_rank_among_elites": candidate.parent_rank_among_elites,
     }
+    for key in (
+        "init_mode",
+        "vertex_name",
+        "pool_index",
+        "distance_to_uniform",
+        "min_distance_to_previous_selected",
+        "fixed_policy",
+        "concentration_scale",
+        "local_concentration_scale",
+        "sampled_policy_projection_enabled",
+        "sampled_policy_min_probability",
+        "sampled_policy_max_probability",
+    ):
+        if key in sample_metadata:
+            payload[key] = sample_metadata[key]
+    return payload
 
 
 def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:

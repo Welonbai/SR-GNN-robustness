@@ -362,7 +362,18 @@ def _build_pts_cem_config_from_config(config: Config) -> PTSCEMConfig:
             min_probability=float(cem.update.min_probability),
             max_probability=float(cem.update.max_probability),
         ),
-        init=PTSCEMInitConfig(mode=cem.init.mode),
+        init=PTSCEMInitConfig(
+            mode=cem.init.mode,
+            mandatory_enabled=bool(cem.init.mandatory_enabled),
+            extreme_count=int(cem.init.extreme_count),
+            moderate_count=int(cem.init.moderate_count),
+            balanced_count=int(cem.init.balanced_count),
+            extreme_pool_size=int(cem.init.extreme_pool_size),
+            moderate_pool_size=int(cem.init.moderate_pool_size),
+            extreme_alpha=float(cem.init.extreme_alpha),
+            moderate_alpha=float(cem.init.moderate_alpha),
+            distance=cem.init.distance,
+        ),
         resampling=PTSCEMResamplingConfig(
             mode=cem.resampling.mode,
             local_concentration_scale=float(
@@ -386,12 +397,88 @@ def _resolve_pts_cem_base_seed(config: Config) -> int:
 
 def build_pts_construction_attack_identity_context(config: Config) -> dict[str, object]:
     pts_config = _require_pts_config(config)
+    cem = pts_config.cem
+    resolved_cem_base_seed = _resolve_pts_cem_base_seed(config)
     return {
         "pts_construction": {
             "method": pts_config.method,
+            "prefix_selector": {
+                "range": pts_config.prefix_selector.range,
+                "sampler": pts_config.prefix_selector.sampler,
+            },
+            "grouping": {
+                "mode": pts_config.grouping.mode,
+                "buckets": [
+                    {
+                        "name": bucket.name,
+                        "min": int(bucket.min),
+                        "max": None if bucket.max is None else int(bucket.max),
+                    }
+                    for bucket in pts_config.grouping.buckets
+                ],
+            },
+            "actions": {
+                "enabled": list(pts_config.actions.enabled),
+                "dynamic_masks": {
+                    "disable_consume_one_when_suffix_len_leq_1": bool(
+                        pts_config.actions.dynamic_masks.disable_consume_one_when_suffix_len_leq_1
+                    ),
+                },
+            },
+            "generation": {
+                "topk": int(pts_config.generation.topk),
+                "length_policy": pts_config.generation.length_policy,
+            },
+            "cem": {
+                "iterations": int(cem.iterations),
+                "population_schedule": (
+                    None
+                    if cem.population_schedule is None
+                    else [int(value) for value in cem.population_schedule]
+                ),
+                "population_size": (
+                    None if cem.population_size is None else int(cem.population_size)
+                ),
+                "elite_ratio": float(cem.elite_ratio),
+                "sampler": {
+                    "type": cem.sampler.type,
+                    "concentration_scale": float(cem.sampler.concentration_scale),
+                },
+                "update": {
+                    "smoothing": float(cem.update.smoothing),
+                    "min_probability": float(cem.update.min_probability),
+                    "max_probability": float(cem.update.max_probability),
+                },
+                "init": {
+                    "mode": cem.init.mode,
+                    "mandatory_enabled": bool(cem.init.mandatory_enabled),
+                    "extreme_count": int(cem.init.extreme_count),
+                    "moderate_count": int(cem.init.moderate_count),
+                    "balanced_count": int(cem.init.balanced_count),
+                    "extreme_pool_size": int(cem.init.extreme_pool_size),
+                    "moderate_pool_size": int(cem.init.moderate_pool_size),
+                    "extreme_alpha": float(cem.init.extreme_alpha),
+                    "moderate_alpha": float(cem.init.moderate_alpha),
+                    "distance": cem.init.distance,
+                },
+                "resampling": {
+                    "mode": cem.resampling.mode,
+                    "local_concentration_scale": float(
+                        cem.resampling.local_concentration_scale
+                    ),
+                },
+                "seed_source": cem.seed_source,
+                "cem_base_seed": int(resolved_cem_base_seed),
+                "resolved_cem_base_seed": int(resolved_cem_base_seed),
+                "candidate_seed_stride": int(cem.candidate_seed_stride),
+            },
+            "final_selection": {
+                "mode": pts_config.final_selection.mode,
+            },
             "runtime_seeds": {
                 "position_opt_seed": int(config.seeds.position_opt_seed),
                 "surrogate_train_seed": int(config.seeds.surrogate_train_seed),
+                "resolved_cem_base_seed": int(resolved_cem_base_seed),
             },
         }
     }
