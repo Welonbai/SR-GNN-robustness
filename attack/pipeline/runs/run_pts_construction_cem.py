@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
+import shutil
 import time
 from typing import Any, Mapping, Sequence
 
@@ -28,8 +31,12 @@ from attack.common.artifact_io import load_json, save_json
 from attack.common.paths import (
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     attack_key,
+    poison_model_key_payload,
     run_group_key,
+    shared_attack_artifact_key_payload,
+    shared_root,
     target_dir,
+    target_cohort_key,
 )
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.inner_train.srgnn_full_retrain_validation_best import (
@@ -73,11 +80,14 @@ from pytorch_code.utils import Data
 
 DEFAULT_PTS_CONSTRUCTION_CEM_CONFIG_PATH = (
     "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_ratio1_srgnn_partial4.yaml"
+    "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
 )
 _LOG_PREFIX = "[pts-construction-cem]"
 _PTS_CONSTRUCTION_ARTIFACT_DIR_NAME = "pts_construction_cem"
 _PTS_CONSTRUCTION_COMPLETE_MARKER = "pts_construction_complete.json"
+_PTS_CONSTRUCTION_SHARED_COMPLETE_MARKER = "pts_cem_shared_complete.json"
+PTS_CEM_SHARED_CACHE_SCHEMA_VERSION = "pts_cem_shared_construction_cache_v1"
+PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION = "pts_cem_local_artifact_v2"
 PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE = "victim_effective_seed"
 PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME = "srgnn"
 
@@ -92,6 +102,10 @@ class CachedPTSBestCandidate:
     complete_marker_path: Path | None
     cache_mode: str
     cache_marker_missing: bool
+    shared_pts_cem_cache_key: str | None = None
+    shared_cache_path: Path | None = None
+    reused_shared_pts_cem: bool = False
+    local_materialized_from_shared: bool = False
 
 
 def run_pts_construction_grouped_cem(
@@ -132,22 +146,37 @@ def run_pts_construction_grouped_cem(
             int(target_item),
             attack_identity_context=attack_identity_context,
         )
+        shared_cache_identity = build_pts_cem_shared_cache_identity(
+            config,
+            target_item=int(target_item),
+            fake_sessions_path=shared.shared_paths["fake_sessions"],
+            poison_model_path=shared.shared_paths.get("poison_model"),
+        )
+        shared_cache_key = pts_cem_shared_cache_key(shared_cache_identity)
+        shared_cache_dir = pts_cem_shared_cache_dir(config, shared_cache_key)
         cache_identity = _current_pts_construction_cache_identity(
             config,
             attack_identity_context=attack_identity_context,
             target_item=int(target_item),
         )
         if force_recompute_pts_cem:
-            if _has_pts_construction_cache_files(pts_artifact_dir):
+            if pts_artifact_dir.exists():
                 print(
-                    f"{_LOG_PREFIX} Existing cache ignored because force recompute "
-                    "was requested."
+                    f"{_LOG_PREFIX} Existing PTS-CEM artifact folder ignored "
+                    "because force recompute was requested."
+                )
+                _reset_pts_artifact_dir_for_force(
+                    artifact_dir=pts_artifact_dir,
+                    config=config,
+                    target_item=int(target_item),
+                    attack_identity_context=attack_identity_context,
                 )
         else:
             cached = _try_load_cached_pts_best_candidate(
                 artifact_dir=pts_artifact_dir,
                 target_item=int(target_item),
                 current_identity=cache_identity,
+                current_shared_cache_key=shared_cache_key,
             )
             if cached is not None:
                 print(
@@ -168,6 +197,51 @@ def run_pts_construction_grouped_cem(
                     cached=cached,
                 )
                 return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+            shared_cached = _try_load_shared_pts_cem_cache(
+                shared_cache_dir=shared_cache_dir,
+                target_item=int(target_item),
+                shared_cache_key=shared_cache_key,
+                shared_cache_identity=shared_cache_identity,
+            )
+            if shared_cached is not None:
+                print(
+                    f"{_LOG_PREFIX} Reusing shared PTS-CEM construction cache "
+                    f"for target {int(target_item)}"
+                )
+                print(f"{_LOG_PREFIX} shared_pts_cem_cache_key = {shared_cache_key}")
+                print(f"{_LOG_PREFIX} shared_cache_path = {shared_cache_dir}")
+                cached = _materialize_shared_pts_cem_cache(
+                    config=config,
+                    target_item=int(target_item),
+                    local_artifact_dir=pts_artifact_dir,
+                    shared_cache_dir=shared_cache_dir,
+                    shared_cached=shared_cached,
+                    shared_cache_key=shared_cache_key,
+                    attack_identity_context=attack_identity_context,
+                    current_identity=cache_identity,
+                )
+                print(
+                    f"{_LOG_PREFIX} Materialized shared PTS-CEM cache into "
+                    "local run_group target folder."
+                )
+                poisoned = build_poisoned_dataset(
+                    shared.clean_sessions,
+                    shared.clean_labels,
+                    cached.sessions,
+                )
+                metadata = _target_metadata_from_cache(
+                    config=config,
+                    pts_config=pts_config,
+                    cem_config=cem_config,
+                    artifact_dir=pts_artifact_dir,
+                    target_item=int(target_item),
+                    cached=cached,
+                )
+                return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+            print(
+                f"{_LOG_PREFIX} No compatible shared PTS-CEM construction cache "
+                f"found for target {int(target_item)}; running CEM."
+            )
 
         evaluator_context = _build_candidate_evaluator_context(config, shared)
         trainer = PTSGroupedCEMTrainer(
@@ -217,6 +291,20 @@ def run_pts_construction_grouped_cem(
             ),
             save_per_session_records=bool(pts_config.artifacts.save_per_session_records),
         )
+        _write_shared_pts_cem_cache(
+            config=config,
+            target_item=int(target_item),
+            local_artifact_dir=pts_artifact_dir,
+            artifact_paths=artifact_paths,
+            best_candidate=result.best_candidate,
+            shared_cache_dir=shared_cache_dir,
+            shared_cache_key=shared_cache_key,
+            shared_cache_identity=shared_cache_identity,
+            attack_identity_context=attack_identity_context,
+        )
+        print(f"{_LOG_PREFIX} Wrote shared PTS-CEM construction cache:")
+        print(f"{_LOG_PREFIX} shared_pts_cem_cache_key = {shared_cache_key}")
+        print(f"{_LOG_PREFIX} shared_cache_path = {shared_cache_dir}")
         complete_marker_path = _write_pts_construction_complete_marker(
             config=config,
             target_item=int(target_item),
@@ -224,6 +312,10 @@ def run_pts_construction_grouped_cem(
             artifact_paths=artifact_paths,
             best_candidate=result.best_candidate,
             attack_identity_context=attack_identity_context,
+            shared_cache_key=shared_cache_key,
+            shared_cache_path=shared_cache_dir,
+            reused_shared_pts_cem=False,
+            local_materialized_from_shared=False,
         )
 
         final_sessions = result.best_candidate.final_sessions
@@ -241,6 +333,10 @@ def run_pts_construction_grouped_cem(
             best_candidate=result.best_candidate,
             target_item=int(target_item),
             complete_marker_path=complete_marker_path,
+            shared_cache_key=shared_cache_key,
+            shared_cache_path=shared_cache_dir,
+            reused_shared_pts_cem=False,
+            local_materialized_from_shared=False,
         )
         print(
             f"{_LOG_PREFIX} target={int(target_item)} done "
@@ -569,6 +665,205 @@ def _pts_construction_artifact_dir(
     )
 
 
+def pts_cem_shared_cache_dir(config: Config, shared_pts_cem_cache_key: str) -> Path:
+    return (
+        shared_root(config)
+        / _PTS_CONSTRUCTION_ARTIFACT_DIR_NAME
+        / str(shared_pts_cem_cache_key)
+    )
+
+
+def pts_cem_shared_cache_key(identity_payload: Mapping[str, object]) -> str:
+    return f"pts_cem_shared_{_hash_json_payload(identity_payload)}"
+
+
+def build_pts_cem_shared_cache_identity(
+    config: Config,
+    *,
+    target_item: int,
+    fake_sessions_path: Path,
+    poison_model_path: Path | None = None,
+) -> dict[str, object]:
+    pts_config = _require_pts_config(config)
+    split_config = config.data.canonical_split
+    poison_checkpoint_identity = (
+        _file_sha1_identity(poison_model_path)
+        if poison_model_path is not None and Path(poison_model_path).exists()
+        else None
+    )
+    return {
+        "schema_version": PTS_CEM_SHARED_CACHE_SCHEMA_VERSION,
+        "artifact_schema_version": PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION,
+        "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        "dataset": {
+            "dataset_name": config.data.dataset_name,
+            "split_protocol": config.data.split_protocol,
+            "poison_train_only": bool(config.data.poison_train_only),
+            "canonical_split": {
+                "min_item_count": int(split_config.min_item_count),
+                "min_session_len": int(split_config.min_session_len),
+                "valid_ratio": float(split_config.valid_ratio),
+                "test_days": int(split_config.test_days),
+            },
+        },
+        "target_item": int(target_item),
+        "fake_sessions": {
+            "artifact_identity": _file_sha1_identity(fake_sessions_path),
+            "generation_identity": shared_attack_artifact_key_payload(
+                config,
+                run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            ),
+        },
+        "poison_model": {
+            "key_payload": poison_model_key_payload(config),
+            "checkpoint_identity": poison_checkpoint_identity,
+        },
+        "pts_construction": _pts_construction_shared_identity_payload(
+            config,
+            target_item=int(target_item),
+        ),
+        "surrogate_reward": {
+            "surrogate_model": "srgnn",
+            "surrogate_train_params": _srgnn_candidate_train_config(config),
+            "reward": {
+                "target_summary": pts_config.reward.target_summary,
+                "enable_gt_penalty": bool(pts_config.reward.enable_gt_penalty),
+                "gt_penalty_weight": float(pts_config.reward.gt_penalty_weight),
+                "enable_length_penalty": bool(pts_config.reward.enable_length_penalty),
+                "length_penalty_weight": float(
+                    pts_config.reward.length_penalty_weight
+                ),
+            },
+            "evaluation": {
+                "topk": [int(value) for value in config.evaluation.topk],
+                "targeted_metrics": list(config.evaluation.targeted_metrics),
+                "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
+            },
+        },
+        "seed_alignment": pts_cem_surrogate_seed_alignment_metadata(
+            config,
+            target_item=int(target_item),
+        ),
+    }
+
+
+def _pts_construction_shared_identity_payload(
+    config: Config,
+    *,
+    target_item: int,
+) -> dict[str, object]:
+    pts_config = _require_pts_config(config)
+    cem = pts_config.cem
+    return {
+        "target_item": int(target_item),
+        "method": pts_config.method,
+        "prefix_selector": {
+            "range": pts_config.prefix_selector.range,
+            "sampler": pts_config.prefix_selector.sampler,
+        },
+        "grouping": {
+            "mode": pts_config.grouping.mode,
+            "buckets": [
+                {
+                    "name": bucket.name,
+                    "min": int(bucket.min),
+                    "max": None if bucket.max is None else int(bucket.max),
+                }
+                for bucket in pts_config.grouping.buckets
+            ],
+        },
+        "actions": {
+            "enabled": list(pts_config.actions.enabled),
+            "dynamic_masks": {
+                "disable_consume_one_when_suffix_len_leq_1": bool(
+                    pts_config.actions.dynamic_masks.disable_consume_one_when_suffix_len_leq_1
+                ),
+            },
+        },
+        "generation": {
+            "topk": int(pts_config.generation.topk),
+            "length_policy": pts_config.generation.length_policy,
+        },
+        "cem": {
+            "iterations": int(cem.iterations),
+            "population_schedule": (
+                None
+                if cem.population_schedule is None
+                else [int(value) for value in cem.population_schedule]
+            ),
+            "population_size": (
+                None if cem.population_size is None else int(cem.population_size)
+            ),
+            "elite_ratio": float(cem.elite_ratio),
+            "sampler": {
+                "type": cem.sampler.type,
+                "concentration_scale": float(cem.sampler.concentration_scale),
+            },
+            "update": {
+                "smoothing": float(cem.update.smoothing),
+                "min_probability": float(cem.update.min_probability),
+                "max_probability": float(cem.update.max_probability),
+            },
+            "init": {
+                "mode": cem.init.mode,
+                "mandatory_enabled": bool(cem.init.mandatory_enabled),
+                "extreme_count": int(cem.init.extreme_count),
+                "moderate_count": int(cem.init.moderate_count),
+                "balanced_count": int(cem.init.balanced_count),
+                "extreme_pool_size": int(cem.init.extreme_pool_size),
+                "moderate_pool_size": int(cem.init.moderate_pool_size),
+                "extreme_alpha": float(cem.init.extreme_alpha),
+                "moderate_alpha": float(cem.init.moderate_alpha),
+                "distance": cem.init.distance,
+            },
+            "resampling": {
+                "mode": cem.resampling.mode,
+                "local_concentration_scale": float(
+                    cem.resampling.local_concentration_scale
+                ),
+            },
+            "seed_source": cem.seed_source,
+            "resolved_cem_base_seed": int(_resolve_pts_cem_base_seed(config)),
+            "position_opt_seed": int(config.seeds.position_opt_seed),
+            "candidate_seed_stride": int(cem.candidate_seed_stride),
+        },
+        "final_selection": {
+            "mode": pts_config.final_selection.mode,
+        },
+    }
+
+
+def _file_sha1_identity(path: str | Path) -> dict[str, object]:
+    file_path = Path(path)
+    if not file_path.exists():
+        raise FileNotFoundError(f"Cannot hash missing PTS-CEM artifact: {file_path}")
+    digest = hashlib.sha1()
+    with file_path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return {
+        "type": "file_sha1",
+        "sha1": digest.hexdigest(),
+        "bytes": int(file_path.stat().st_size),
+    }
+
+
+def _stable_json_payload(payload: object) -> str:
+    return json.dumps(
+        _to_jsonable_cache_payload(payload),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def _hash_json_payload(payload: object) -> str:
+    return hashlib.sha1(_stable_json_payload(payload).encode("utf-8")).hexdigest()[:10]
+
+
 def _current_pts_construction_cache_identity(
     config: Config,
     *,
@@ -682,15 +977,28 @@ def _try_load_cached_pts_best_candidate(
     artifact_dir: Path,
     target_item: int,
     current_identity: Mapping[str, object] | None = None,
+    current_shared_cache_key: str | None = None,
 ) -> CachedPTSBestCandidate | None:
     root = Path(artifact_dir)
     marker_path = root / _PTS_CONSTRUCTION_COMPLETE_MARKER
     if marker_path.exists():
-        return _load_marker_cached_pts_best_candidate(
-            artifact_dir=root,
-            marker_path=marker_path,
-            target_item=int(target_item),
-            current_identity=current_identity,
+        try:
+            return _load_marker_cached_pts_best_candidate(
+                artifact_dir=root,
+                marker_path=marker_path,
+                target_item=int(target_item),
+                current_identity=current_identity,
+                current_shared_cache_key=current_shared_cache_key,
+            )
+        except ValueError as exc:
+            if current_shared_cache_key is not None:
+                _raise_incompatible_local_pts_cache(root, exc)
+            raise
+
+    if current_shared_cache_key is not None and root.exists() and any(root.iterdir()):
+        _raise_incompatible_local_pts_cache(
+            root,
+            ValueError("local marker is missing but the artifact folder is not empty"),
         )
 
     sessions_path = _rank1_sessions_path(root)
@@ -700,6 +1008,11 @@ def _try_load_cached_pts_best_candidate(
     existing_paths = [path for path in legacy_paths if path.exists()]
     if not existing_paths:
         return None
+    if current_shared_cache_key is not None:
+        _raise_incompatible_local_pts_cache(
+            root,
+            ValueError("local marker is missing but PTS-CEM artifact files exist"),
+        )
     if len(existing_paths) != len(legacy_paths):
         missing = [str(path) for path in legacy_paths if not path.exists()]
         raise ValueError(
@@ -733,6 +1046,7 @@ def _load_marker_cached_pts_best_candidate(
     marker_path: Path,
     target_item: int,
     current_identity: Mapping[str, object] | None,
+    current_shared_cache_key: str | None = None,
 ) -> CachedPTSBestCandidate:
     marker = _load_json_dict(marker_path)
     if marker.get("status") != "completed":
@@ -756,6 +1070,11 @@ def _load_marker_cached_pts_best_candidate(
     _validate_marker_identity(
         marker,
         current_identity=current_identity,
+        marker_path=marker_path,
+    )
+    _validate_local_marker_shared_cache(
+        marker,
+        current_shared_cache_key=current_shared_cache_key,
         marker_path=marker_path,
     )
 
@@ -804,7 +1123,54 @@ def _load_marker_cached_pts_best_candidate(
         complete_marker_path=marker_path,
         cache_mode="complete_marker",
         cache_marker_missing=False,
+        shared_pts_cem_cache_key=(
+            str(marker["shared_pts_cem_cache_key"])
+            if marker.get("shared_pts_cem_cache_key") is not None
+            else None
+        ),
+        shared_cache_path=(
+            Path(str(marker["shared_cache_path"]))
+            if marker.get("shared_cache_path") is not None
+            else None
+        ),
+        reused_shared_pts_cem=bool(marker.get("reused_shared_pts_cem", False)),
+        local_materialized_from_shared=bool(
+            marker.get("local_materialized_from_shared", False)
+        ),
     )
+
+
+def _validate_local_marker_shared_cache(
+    marker: Mapping[str, object],
+    *,
+    current_shared_cache_key: str | None,
+    marker_path: Path,
+) -> None:
+    if current_shared_cache_key is None:
+        return
+    schema = marker.get("local_artifact_schema_version")
+    if schema != PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION:
+        raise ValueError(
+            "PTS-CEM local marker schema mismatch: "
+            f"expected {PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION!r}, found {schema!r}."
+        )
+    saved_key = marker.get("shared_pts_cem_cache_key")
+    if str(saved_key) != str(current_shared_cache_key):
+        raise ValueError(
+            "PTS-CEM local marker shared cache key mismatch: "
+            f"expected {current_shared_cache_key!r}, found {saved_key!r}."
+        )
+
+
+def _raise_incompatible_local_pts_cache(
+    artifact_dir: Path,
+    reason: Exception,
+) -> None:
+    raise ValueError(
+        "Existing local PTS-CEM artifact folder is incompatible or incomplete: "
+        f"{artifact_dir}. Remove this pts_construction_cem folder or rerun with "
+        f"--force-recompute-pts-cem. Reason: {reason}"
+    ) from reason
 
 
 def _validate_marker_identity(
@@ -898,6 +1264,162 @@ def _has_pts_construction_cache_files(artifact_dir: Path) -> bool:
     )
 
 
+def _reset_pts_artifact_dir_for_force(
+    *,
+    artifact_dir: Path,
+    config: Config,
+    target_item: int,
+    attack_identity_context: Mapping[str, Any] | None,
+) -> None:
+    root = Path(artifact_dir)
+    expected = _pts_construction_artifact_dir(
+        config,
+        int(target_item),
+        attack_identity_context=attack_identity_context,
+    )
+    _remove_directory_inside(root, expected.parent)
+
+
+def _remove_directory_inside(path: Path, allowed_parent: Path) -> None:
+    target = Path(path).resolve()
+    parent = Path(allowed_parent).resolve()
+    try:
+        target.relative_to(parent)
+    except ValueError as exc:
+        raise ValueError(
+            f"Refusing to remove directory outside expected parent: {target}"
+        ) from exc
+    if target.exists():
+        shutil.rmtree(target)
+
+
+def _try_load_shared_pts_cem_cache(
+    *,
+    shared_cache_dir: Path,
+    target_item: int,
+    shared_cache_key: str,
+    shared_cache_identity: Mapping[str, object],
+) -> CachedPTSBestCandidate | None:
+    marker_path = Path(shared_cache_dir) / _PTS_CONSTRUCTION_SHARED_COMPLETE_MARKER
+    if not marker_path.exists():
+        return None
+    try:
+        marker = _load_json_dict(marker_path)
+        _validate_shared_pts_cem_marker(
+            marker,
+            shared_cache_dir=Path(shared_cache_dir),
+            target_item=int(target_item),
+            shared_cache_key=shared_cache_key,
+            shared_cache_identity=shared_cache_identity,
+        )
+        return _load_shared_marker_cached_pts_best_candidate(
+            artifact_dir=Path(shared_cache_dir),
+            marker_path=marker_path,
+            marker=marker,
+            target_item=int(target_item),
+            shared_cache_key=shared_cache_key,
+        )
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _validate_shared_pts_cem_marker(
+    marker: Mapping[str, object],
+    *,
+    shared_cache_dir: Path,
+    target_item: int,
+    shared_cache_key: str,
+    shared_cache_identity: Mapping[str, object],
+) -> None:
+    if marker.get("schema_version") != PTS_CEM_SHARED_CACHE_SCHEMA_VERSION:
+        raise ValueError("PTS-CEM shared cache marker schema mismatch.")
+    if marker.get("status") != "completed":
+        raise ValueError("PTS-CEM shared cache marker is not completed.")
+    if str(marker.get("shared_pts_cem_cache_key")) != str(shared_cache_key):
+        raise ValueError("PTS-CEM shared cache key mismatch.")
+    saved_target = _coerce_marker_int(
+        marker.get("target_item"),
+        label=f"{shared_cache_dir}: target_item",
+    )
+    if saved_target != int(target_item):
+        raise ValueError("PTS-CEM shared cache target_item mismatch.")
+    identity = marker.get("construction_identity")
+    if not isinstance(identity, Mapping):
+        raise ValueError("PTS-CEM shared cache marker is missing identity.")
+    if _stable_json_payload(identity) != _stable_json_payload(shared_cache_identity):
+        raise ValueError("PTS-CEM shared cache identity mismatch.")
+    required_files = marker.get("required_artifact_files")
+    if not isinstance(required_files, list):
+        raise ValueError("PTS-CEM shared cache marker missing required files.")
+    for rel_path in required_files:
+        if not isinstance(rel_path, str) or not rel_path.strip():
+            raise ValueError("PTS-CEM shared cache required path is invalid.")
+        if not (Path(shared_cache_dir) / rel_path).exists():
+            raise ValueError(
+                f"PTS-CEM shared cache required file is missing: {rel_path}"
+            )
+
+
+def _load_shared_marker_cached_pts_best_candidate(
+    *,
+    artifact_dir: Path,
+    marker_path: Path,
+    marker: Mapping[str, object],
+    target_item: int,
+    shared_cache_key: str,
+) -> CachedPTSBestCandidate:
+    best_candidate = marker.get("best_candidate")
+    if not isinstance(best_candidate, Mapping):
+        raise ValueError(
+            f"PTS-CEM shared cache marker is missing best_candidate: {marker_path}"
+        )
+    sessions_path = _resolve_artifact_relative_path(
+        artifact_dir,
+        best_candidate.get("sessions_path"),
+        label=f"{marker_path}: best_candidate.sessions_path",
+    )
+    metadata_path = _resolve_artifact_relative_path(
+        artifact_dir,
+        best_candidate.get("metadata_path"),
+        label=f"{marker_path}: best_candidate.metadata_path",
+    )
+    sessions = _load_json_sessions(sessions_path)
+    metadata = _load_json_dict(metadata_path)
+    _validate_cached_candidate_metadata_target(
+        metadata,
+        target_item=int(target_item),
+        label=str(metadata_path),
+    )
+    merged_metadata = dict(metadata)
+    for key in (
+        "rank",
+        "iteration",
+        "candidate_id",
+        "candidate_seed",
+        "reward",
+        "reward_metrics",
+    ):
+        if key not in merged_metadata and key in best_candidate:
+            merged_metadata[key] = best_candidate[key]
+    top_candidates_path = artifact_dir / "pts_top_candidates.json"
+    return CachedPTSBestCandidate(
+        sessions=sessions,
+        metadata=merged_metadata,
+        sessions_path=sessions_path,
+        metadata_path=metadata_path,
+        top_candidates_path=(
+            top_candidates_path if top_candidates_path.exists() else None
+        ),
+        complete_marker_path=marker_path,
+        cache_mode="shared_complete_marker",
+        cache_marker_missing=False,
+        shared_pts_cem_cache_key=str(shared_cache_key),
+        shared_cache_path=Path(artifact_dir),
+        reused_shared_pts_cem=True,
+        local_materialized_from_shared=False,
+    )
+
+
 def _write_pts_construction_complete_marker(
     *,
     config: Config,
@@ -906,6 +1428,10 @@ def _write_pts_construction_complete_marker(
     artifact_paths: Mapping[str, str],
     best_candidate,
     attack_identity_context: Mapping[str, Any] | None,
+    shared_cache_key: str | None = None,
+    shared_cache_path: Path | None = None,
+    reused_shared_pts_cem: bool = False,
+    local_materialized_from_shared: bool = False,
 ) -> Path:
     root = Path(artifact_dir)
     sessions_path = _required_artifact_path(
@@ -927,10 +1453,27 @@ def _write_pts_construction_complete_marker(
     )
     payload = {
         "schema_version": "pts_construction_cache_v1",
+        "local_artifact_schema_version": PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION,
         "status": "completed",
         "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        "run_group_key": run_group_key(
+            config,
+            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            attack_identity_context=attack_identity_context,
+        ),
+        "target_cohort_key": target_cohort_key(config),
         "target_item": int(target_item),
-        "cache_mode": "fresh_cem",
+        "cache_mode": (
+            "shared_pts_cem_materialized"
+            if bool(local_materialized_from_shared)
+            else "fresh_cem"
+        ),
+        "shared_pts_cem_cache_key": shared_cache_key,
+        "shared_cache_path": (
+            None if shared_cache_path is None else str(shared_cache_path)
+        ),
+        "reused_shared_pts_cem": bool(reused_shared_pts_cem),
+        "local_materialized_from_shared": bool(local_materialized_from_shared),
         **seed_alignment,
         "identity": _current_pts_construction_cache_identity(
             config,
@@ -939,11 +1482,14 @@ def _write_pts_construction_complete_marker(
         ),
         "best_candidate": {
             "rank": 1,
-            "iteration": int(best_candidate.iteration),
-            "candidate_id": int(best_candidate.candidate_id),
-            "candidate_seed": int(best_candidate.candidate_seed),
-            "reward": float(best_candidate.reward),
-            "reward_metrics": dict(best_candidate.reward_metrics),
+            "iteration": _candidate_marker_int(best_candidate, "iteration"),
+            "candidate_id": _candidate_marker_int(best_candidate, "candidate_id"),
+            "candidate_seed": _candidate_marker_int(best_candidate, "candidate_seed"),
+            "reward": _candidate_marker_float(best_candidate, "reward"),
+            "reward_metrics": _candidate_marker_mapping(
+                best_candidate,
+                "reward_metrics",
+            ),
             "sessions_path": _relative_to_artifact_dir(root, sessions_path),
             "metadata_path": _relative_to_artifact_dir(root, metadata_path),
             "policy_path": _relative_to_artifact_dir(root, policy_path),
@@ -951,6 +1497,299 @@ def _write_pts_construction_complete_marker(
     }
     save_json(_to_jsonable_cache_payload(payload), marker_path)
     return marker_path
+
+
+def _candidate_marker_value(candidate, key: str) -> object:
+    if isinstance(candidate, Mapping):
+        return candidate.get(key)
+    return getattr(candidate, key)
+
+
+def _candidate_marker_int(candidate, key: str) -> int:
+    return _coerce_marker_int(
+        _candidate_marker_value(candidate, key),
+        label=f"best_candidate.{key}",
+    )
+
+
+def _candidate_marker_float(candidate, key: str) -> float:
+    value = _candidate_marker_value(candidate, key)
+    if value is None:
+        raise ValueError(f"best_candidate.{key} is required.")
+    return float(value)
+
+
+def _candidate_marker_mapping(candidate, key: str) -> dict[str, object]:
+    value = _candidate_marker_value(candidate, key)
+    if not isinstance(value, Mapping):
+        return {}
+    return dict(value)
+
+
+def _materialize_shared_pts_cem_cache(
+    *,
+    config: Config,
+    target_item: int,
+    local_artifact_dir: Path,
+    shared_cache_dir: Path,
+    shared_cached: CachedPTSBestCandidate,
+    shared_cache_key: str,
+    attack_identity_context: Mapping[str, Any] | None,
+    current_identity: Mapping[str, object],
+) -> CachedPTSBestCandidate:
+    local_root = Path(local_artifact_dir)
+    if local_root.exists() and any(local_root.iterdir()):
+        _raise_incompatible_local_pts_cache(
+            local_root,
+            ValueError("local folder is not empty before shared materialization"),
+        )
+    _copy_pts_cem_artifact_tree(
+        source_dir=Path(shared_cache_dir),
+        destination_dir=local_root,
+        exclude_markers=True,
+    )
+    _rewrite_top_candidate_paths(local_root)
+    required_paths = _required_pts_cem_relative_artifact_paths()
+    _verify_relative_files_exist(local_root, required_paths)
+    artifact_paths = _existing_pts_artifact_paths(local_root)
+    marker_path = _write_pts_construction_complete_marker(
+        config=config,
+        target_item=int(target_item),
+        artifact_dir=local_root,
+        artifact_paths=artifact_paths,
+        best_candidate=shared_cached.metadata,
+        attack_identity_context=attack_identity_context,
+        shared_cache_key=shared_cache_key,
+        shared_cache_path=Path(shared_cache_dir),
+        reused_shared_pts_cem=True,
+        local_materialized_from_shared=True,
+    )
+    cached = _try_load_cached_pts_best_candidate(
+        artifact_dir=local_root,
+        target_item=int(target_item),
+        current_identity=current_identity,
+        current_shared_cache_key=shared_cache_key,
+    )
+    if cached is None:
+        raise ValueError(f"Materialized PTS-CEM cache was not loadable: {marker_path}")
+    return cached
+
+
+def _write_shared_pts_cem_cache(
+    *,
+    config: Config,
+    target_item: int,
+    local_artifact_dir: Path,
+    artifact_paths: Mapping[str, str],
+    best_candidate,
+    shared_cache_dir: Path,
+    shared_cache_key: str,
+    shared_cache_identity: Mapping[str, object],
+    attack_identity_context: Mapping[str, Any] | None,
+) -> Path:
+    shared_root_dir = Path(shared_cache_dir)
+    _remove_directory_inside(
+        shared_root_dir,
+        shared_root(config) / _PTS_CONSTRUCTION_ARTIFACT_DIR_NAME,
+    )
+    _copy_pts_cem_artifact_tree(
+        source_dir=Path(local_artifact_dir),
+        destination_dir=shared_root_dir,
+        exclude_markers=True,
+    )
+    _rewrite_top_candidate_paths(shared_root_dir)
+    required_paths = _required_pts_cem_relative_artifact_paths()
+    _verify_relative_files_exist(shared_root_dir, required_paths)
+    completeness = _artifact_completeness_metadata(
+        config=config,
+        artifact_dir=shared_root_dir,
+    )
+    marker_path = shared_root_dir / _PTS_CONSTRUCTION_SHARED_COMPLETE_MARKER
+    sessions_path = _required_artifact_path(
+        artifact_paths,
+        "top_candidate_rank_1_sessions",
+    )
+    metadata_path = _required_artifact_path(
+        artifact_paths,
+        "top_candidate_rank_1_metadata",
+    )
+    policy_path = _required_artifact_path(
+        artifact_paths,
+        "top_candidate_rank_1_policy",
+    )
+    payload = {
+        "schema_version": PTS_CEM_SHARED_CACHE_SCHEMA_VERSION,
+        "status": "completed",
+        "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        "shared_pts_cem_cache_key": str(shared_cache_key),
+        "target_item": int(target_item),
+        "construction_identity": dict(shared_cache_identity),
+        "fake_sessions_artifact_identity": (
+            dict(shared_cache_identity)
+            .get("fake_sessions", {})
+            .get("artifact_identity")
+            if isinstance(dict(shared_cache_identity).get("fake_sessions"), Mapping)
+            else None
+        ),
+        "seed_alignment": pts_cem_surrogate_seed_alignment_metadata(
+            config,
+            target_item=int(target_item),
+        ),
+        "required_artifact_files": list(required_paths),
+        "artifact_completeness": completeness,
+        "created_from_experiment": config.experiment.name,
+        "created_from_run_group": run_group_key(
+            config,
+            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            attack_identity_context=attack_identity_context,
+        ),
+        "best_candidate": {
+            "rank": 1,
+            "iteration": _candidate_marker_int(best_candidate, "iteration"),
+            "candidate_id": _candidate_marker_int(best_candidate, "candidate_id"),
+            "candidate_seed": _candidate_marker_int(best_candidate, "candidate_seed"),
+            "reward": _candidate_marker_float(best_candidate, "reward"),
+            "reward_metrics": _candidate_marker_mapping(
+                best_candidate,
+                "reward_metrics",
+            ),
+            "sessions_path": _relative_to_artifact_dir(
+                Path(local_artifact_dir),
+                sessions_path,
+            ),
+            "metadata_path": _relative_to_artifact_dir(
+                Path(local_artifact_dir),
+                metadata_path,
+            ),
+            "policy_path": _relative_to_artifact_dir(
+                Path(local_artifact_dir),
+                policy_path,
+            ),
+        },
+    }
+    save_json(_to_jsonable_cache_payload(payload), marker_path)
+    return marker_path
+
+
+def _copy_pts_cem_artifact_tree(
+    *,
+    source_dir: Path,
+    destination_dir: Path,
+    exclude_markers: bool,
+) -> None:
+    source_root = Path(source_dir)
+    dest_root = Path(destination_dir)
+    dest_root.mkdir(parents=True, exist_ok=True)
+    marker_names = {
+        _PTS_CONSTRUCTION_COMPLETE_MARKER,
+        _PTS_CONSTRUCTION_SHARED_COMPLETE_MARKER,
+    }
+    for child in source_root.iterdir():
+        if exclude_markers and child.name in marker_names:
+            continue
+        dest_child = dest_root / child.name
+        if child.is_dir():
+            if dest_child.exists():
+                shutil.rmtree(dest_child)
+            shutil.copytree(child, dest_child)
+        else:
+            shutil.copy2(child, dest_child)
+
+
+def _required_pts_cem_relative_artifact_paths() -> list[str]:
+    return [
+        "pts_cem_trace.jsonl",
+        "pts_policy_history.json",
+        "pts_best_policy.json",
+        "pts_final_policy.json",
+        "pts_top_candidates.json",
+        "pts_top_candidate_policies.json",
+        "top_candidates/rank_1/policy.json",
+        "top_candidates/rank_1/sessions.json",
+        "top_candidates/rank_1/metadata.json",
+    ]
+
+
+def _verify_relative_files_exist(root: Path, relative_paths: Sequence[str]) -> None:
+    missing = [
+        str(Path(root) / rel_path)
+        for rel_path in relative_paths
+        if not (Path(root) / rel_path).exists()
+    ]
+    if missing:
+        raise ValueError(
+            "PTS-CEM artifact tree is missing required files: "
+            + ", ".join(missing)
+        )
+
+
+def _rewrite_top_candidate_paths(artifact_dir: Path) -> None:
+    root = Path(artifact_dir)
+    path = root / "pts_top_candidates.json"
+    if not path.exists():
+        return
+    payload = _load_json_dict(path)
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list):
+        return
+    for row in candidates:
+        if not isinstance(row, dict):
+            continue
+        try:
+            rank = int(row.get("rank"))
+        except (TypeError, ValueError):
+            continue
+        rank_dir = root / "top_candidates" / f"rank_{rank}"
+        row["policy_path"] = str(rank_dir / "policy.json")
+        row["sessions_path"] = (
+            str(rank_dir / "sessions.json")
+            if (rank_dir / "sessions.json").exists()
+            else None
+        )
+        row["session_records_path"] = (
+            str(rank_dir / "session_records.jsonl")
+            if (rank_dir / "session_records.jsonl").exists()
+            else None
+        )
+        row["metadata_path"] = str(rank_dir / "metadata.json")
+    save_json(_to_jsonable_cache_payload(payload), path)
+
+
+def _artifact_completeness_metadata(
+    *,
+    config: Config,
+    artifact_dir: Path,
+) -> dict[str, object]:
+    pts_config = _require_pts_config(config)
+    root = Path(artifact_dir)
+    top_candidates = _load_json_dict(root / "pts_top_candidates.json")
+    rows = top_candidates.get("candidates", [])
+    available_ranks: list[int] = []
+    candidate_keys_with_sessions: list[str] = []
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            try:
+                rank = int(row.get("rank"))
+            except (TypeError, ValueError):
+                continue
+            available_ranks.append(rank)
+            sessions_path = root / "top_candidates" / f"rank_{rank}" / "sessions.json"
+            candidate_key = row.get("candidate_key")
+            if sessions_path.exists() and candidate_key is not None:
+                candidate_keys_with_sessions.append(str(candidate_key))
+    return {
+        "save_top_k_candidates": int(pts_config.cem.save_top_k_candidates),
+        "save_candidate_sessions": bool(pts_config.artifacts.save_candidate_sessions),
+        "save_best_sessions": bool(pts_config.artifacts.save_best_sessions),
+        "save_top_candidate_sessions": bool(
+            pts_config.artifacts.save_top_candidate_sessions
+        ),
+        "available_candidate_keys_with_sessions": candidate_keys_with_sessions,
+        "available_top_candidate_ranks": sorted(set(available_ranks)),
+        "best_sessions_path": "top_candidates/rank_1/sessions.json",
+    }
 
 
 def _required_artifact_path(
@@ -1133,6 +1972,10 @@ def _target_metadata(
     best_candidate,
     target_item: int,
     complete_marker_path: Path,
+    shared_cache_key: str | None = None,
+    shared_cache_path: Path | None = None,
+    reused_shared_pts_cem: bool = False,
+    local_materialized_from_shared: bool = False,
 ) -> dict[str, object]:
     rank1_sessions = artifact_paths.get("top_candidate_rank_1_sessions")
     rank1_metadata = artifact_paths.get("top_candidate_rank_1_metadata")
@@ -1174,6 +2017,12 @@ def _target_metadata(
         "pts_cem_reused": False,
         "pts_cem_cache_mode": "fresh_cem",
         "pts_cem_cache_marker_missing": False,
+        "shared_pts_cem_cache_key": shared_cache_key,
+        "shared_pts_cem_cache_path": (
+            None if shared_cache_path is None else str(shared_cache_path)
+        ),
+        "reused_shared_pts_cem": bool(reused_shared_pts_cem),
+        "local_materialized_from_shared": bool(local_materialized_from_shared),
         "pts_construction_complete_marker_path": str(complete_marker_path),
     }
 
@@ -1221,6 +2070,14 @@ def _target_metadata_from_cache(
         "pts_cem_reused": True,
         "pts_cem_cache_mode": cached.cache_mode,
         "pts_cem_cache_marker_missing": bool(cached.cache_marker_missing),
+        "shared_pts_cem_cache_key": cached.shared_pts_cem_cache_key,
+        "shared_pts_cem_cache_path": (
+            None if cached.shared_cache_path is None else str(cached.shared_cache_path)
+        ),
+        "reused_shared_pts_cem": bool(cached.reused_shared_pts_cem),
+        "local_materialized_from_shared": bool(
+            cached.local_materialized_from_shared
+        ),
         "pts_reused_candidate_rank": 1,
         "pts_reused_sessions_path": str(cached.sessions_path),
         "pts_reused_metadata_path": str(cached.metadata_path),
@@ -1285,11 +2142,16 @@ if __name__ == "__main__":
 
 __all__ = [
     "DEFAULT_PTS_CONSTRUCTION_CEM_CONFIG_PATH",
+    "PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION",
+    "PTS_CEM_SHARED_CACHE_SCHEMA_VERSION",
     "PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE",
     "PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME",
+    "build_pts_cem_shared_cache_identity",
     "build_pts_construction_attack_identity_context",
     "main",
     "pts_cem_surrogate_seed_alignment_metadata",
+    "pts_cem_shared_cache_dir",
+    "pts_cem_shared_cache_key",
     "resolve_pts_cem_surrogate_effective_seed",
     "run_pts_construction_grouped_cem",
     "_build_pts_cem_config_from_config",
@@ -1297,7 +2159,9 @@ __all__ = [
     "_build_suffix_length_buckets_from_config",
     "_load_json_dict",
     "_load_json_sessions",
+    "_materialize_shared_pts_cem_cache",
     "_resolve_pts_cem_base_seed",
+    "_try_load_shared_pts_cem_cache",
     "_try_load_cached_pts_best_candidate",
     "_validate_pts_construction_run_config",
     "_write_pts_construction_complete_marker",

@@ -40,15 +40,12 @@ from attack.pts.policy import build_valid_actions_by_group
 
 CONFIG_PATH = Path(
     "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_ratio1_srgnn_partial4.yaml"
+    "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
 )
-NEW_VERTEX_CONFIG_PATH = Path(
+SPACE_FILLING_CONFIG_PATH = CONFIG_PATH
+UNIFORM_INIT_CONFIG_PATH = Path(
     "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_vertex_sf_a0a4_elite_centered_ratio1_srgnn_partial4_target5334.yaml"
-)
-ALIGNED_VERTEX_CONFIG_PATH = Path(
-    "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_vertex_sf_a0a4_elite_centered_surrogate_seed_aligned_ratio1_srgnn_partial4_target5334.yaml"
+    "diginetica_valbest_attack_pts_construction_grouped_cem_uniform_init_ratio1_srgnn_partial4_target5334.yaml"
 )
 
 
@@ -71,9 +68,10 @@ def test_pts_pipeline_yaml_loads() -> None:
         "keep_residual_suffix",
         "regenerate_residual_suffix",
         "consume_one_keep_rest",
+        "consume_one_generate_continuation",
         "consume_all_stop",
     ]
-    assert "consume_one_generate_continuation" not in pts.actions.enabled
+    assert pts.cem.init.mode == "vertex_stratified_space_filling"
     assert config.victims.params["srgnn"]["train"]["epochs"] == 4
 
 
@@ -86,14 +84,14 @@ def test_pts_actions_default_remains_old_four_action_space() -> None:
     ]
 
 
-def test_pts_vertex_sf_a0a4_yaml_loads_with_five_actions() -> None:
-    config = load_config(NEW_VERTEX_CONFIG_PATH)
+def test_pts_space_filling_yaml_loads_with_five_actions() -> None:
+    config = load_config(SPACE_FILLING_CONFIG_PATH)
     pts = config.attack.pts_construction
 
     assert pts is not None
     assert pts.enabled is True
     assert config.experiment.name == (
-        "valbest_attack_pts_construction_grouped_cem_vertex_sf_a0a4_elite_centered_ratio1_srgnn_partial4_target5334"
+        "valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334"
     )
     assert list(pts.actions.enabled) == [
         "keep_residual_suffix",
@@ -127,7 +125,7 @@ def test_pts_vertex_sf_a0a4_yaml_loads_with_five_actions() -> None:
 
 
 def test_vertex_space_filling_mandatory_requires_c1_generate_action() -> None:
-    config = load_config(CONFIG_PATH)
+    config = load_config(UNIFORM_INIT_CONFIG_PATH)
     pts = config.attack.pts_construction
     assert pts is not None
 
@@ -140,6 +138,15 @@ def test_vertex_space_filling_mandatory_requires_c1_generate_action() -> None:
     ):
         replace(
             pts,
+            actions=replace(
+                pts.actions,
+                enabled=(
+                    "keep_residual_suffix",
+                    "regenerate_residual_suffix",
+                    "consume_one_keep_rest",
+                    "consume_all_stop",
+                ),
+            ),
             cem=replace(
                 pts.cem,
                 init={
@@ -151,14 +158,15 @@ def test_vertex_space_filling_mandatory_requires_c1_generate_action() -> None:
 
 
 def test_pts_cem_runtime_config_mapping() -> None:
-    config = load_config(CONFIG_PATH)
+    config = load_config(UNIFORM_INIT_CONFIG_PATH)
     cem_config = _build_pts_cem_config_from_config(config)
 
     assert cem_config.iterations == 3
     assert cem_config.population_schedule == [16, 8, 8]
     assert cem_config.base_seed == config.seeds.position_opt_seed
     assert cem_config.candidate_seed_stride == 1000
-    assert cem_config.resampling.mode == "standard"
+    assert cem_config.resampling.mode == "elite_centered"
+    assert cem_config.init.mode == "uniform"
 
 
 def test_pts_cem_resampling_runtime_config_mapping() -> None:
@@ -186,7 +194,7 @@ def test_pts_cem_resampling_runtime_config_mapping() -> None:
 
 
 def test_pts_cem_vertex_init_runtime_config_mapping() -> None:
-    config = load_config(NEW_VERTEX_CONFIG_PATH)
+    config = load_config(SPACE_FILLING_CONFIG_PATH)
     cem_config = _build_pts_cem_config_from_config(config)
 
     assert cem_config.init.mode == "vertex_stratified_space_filling"
@@ -202,11 +210,11 @@ def test_pts_cem_vertex_init_runtime_config_mapping() -> None:
 
 
 def test_pts_cem_surrogate_seed_aligns_to_srgnn_victim_effective_seed() -> None:
-    config = load_config(ALIGNED_VERTEX_CONFIG_PATH)
+    config = load_config(SPACE_FILLING_CONFIG_PATH)
     expected = derive_seed(20260405, "victim_train", "srgnn", 5334)
 
     assert config.experiment.name == (
-        "valbest_attack_pts_construction_grouped_cem_vertex_sf_a0a4_elite_centered_surrogate_seed_aligned_ratio1_srgnn_partial4_target5334"
+        "valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334"
     )
     resolved = resolve_pts_cem_surrogate_effective_seed(config, target_item=5334)
     metadata = pts_cem_surrogate_seed_alignment_metadata(config, target_item=5334)
@@ -278,7 +286,11 @@ def test_pts_attack_identity_changes_but_shared_key_does_not_for_pts_fields() ->
             pts,
             actions=replace(
                 pts.actions,
-                enabled=("keep_residual_suffix", "consume_all_stop"),
+                enabled=(
+                    "keep_residual_suffix",
+                    "consume_one_generate_continuation",
+                    "consume_all_stop",
+                ),
             ),
         ),
     )
@@ -312,7 +324,7 @@ def test_pts_attack_identity_changes_but_shared_key_does_not_for_pts_fields() ->
 
 
 def test_pts_attack_identity_context_includes_a0a4_vertex_init_fields() -> None:
-    config = load_config(NEW_VERTEX_CONFIG_PATH)
+    config = load_config(SPACE_FILLING_CONFIG_PATH)
     context = build_pts_construction_attack_identity_context(config)
     pts_identity = context["pts_construction"]
     cem_identity = pts_identity["cem"]
