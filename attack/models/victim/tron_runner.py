@@ -98,6 +98,7 @@ class TRONRunner(VictimRunnerBase):
         topk: int,
         max_epochs: int | None = None,
         victim_train_seed: int | None = None,
+        diagnostic_summary_path: Path | None = None,
     ) -> dict[str, str | int]:
         if not self.repo_root.exists():
             raise FileNotFoundError(f"TRON repository not found: {self.repo_root}")
@@ -126,6 +127,9 @@ class TRONRunner(VictimRunnerBase):
             int(max_epochs) if max_epochs is not None else int(self.train_config["max_epochs"])
         )
         config["accelerator"] = "gpu" if bool(self.device_config["use_gpu"]) else "cpu"
+        if diagnostic_summary_path is not None:
+            config["diagnostic_summary_path"] = str(Path(diagnostic_summary_path).resolve())
+            config["diagnostic_compare_best_checkpoint"] = True
 
         run_dir.mkdir(parents=True, exist_ok=True)
         config_dir = run_dir / "tron_config"

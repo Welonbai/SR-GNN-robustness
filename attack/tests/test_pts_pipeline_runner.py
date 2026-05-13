@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from attack.common.config import (
+    PTSCEMEpochRewardDiagnosticsRuntimeConfig,
     PTSCEMRuntimeConfig,
     PTSArtifactsConfig,
     PTSRewardConfig,
@@ -46,12 +47,6 @@ CONFIG_PATH = Path(
     "attack/configs/"
     "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
 )
-UNIFORM_INIT_CONFIG_PATH = Path(
-    "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_uniform_init_ratio1_srgnn_partial4_target5334.yaml"
-)
-
-
 def _with_pts(config, pts_config):
     return replace(
         config,
@@ -367,7 +362,16 @@ def test_shared_pts_cem_key_includes_pts_cem_config_and_seed() -> None:
     config = load_config(CONFIG_PATH)
     pts = config.attack.pts_construction
     assert pts is not None
-    uniform = load_config(UNIFORM_INIT_CONFIG_PATH)
+    uniform = _with_pts(
+        config,
+        replace(
+            pts,
+            cem=replace(
+                pts.cem,
+                init={"mode": "uniform"},
+            ),
+        ),
+    )
     schedule_config = _with_pts(
         config,
         replace(pts, cem=replace(pts.cem, population_schedule=(8, 8, 8))),
@@ -409,6 +413,48 @@ def test_shared_pts_cem_key_includes_pts_cem_config_and_seed() -> None:
         assert key_for(schedule_config) != base_key
         assert key_for(action_config) != base_key
         assert key_for(seed_config) != base_key
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_shared_pts_cem_key_excludes_epoch_reward_diagnostics() -> None:
+    config = load_config(CONFIG_PATH)
+    pts = config.attack.pts_construction
+    assert pts is not None
+    diagnostic_config = _with_pts(
+        config,
+        replace(
+            pts,
+            cem=replace(
+                pts.cem,
+                epoch_reward_diagnostics=PTSCEMEpochRewardDiagnosticsRuntimeConfig(
+                    enabled=True,
+                    epochs=(2, 3),
+                ),
+            ),
+        ),
+    )
+    work_dir = _make_test_output_dir()
+    try:
+        fake_sessions, poison_model = _write_identity_inputs(work_dir)
+        base_key = pts_cem_shared_cache_key(
+            build_pts_cem_shared_cache_identity(
+                config,
+                target_item=5334,
+                fake_sessions_path=fake_sessions,
+                poison_model_path=poison_model,
+            )
+        )
+        diagnostic_key = pts_cem_shared_cache_key(
+            build_pts_cem_shared_cache_identity(
+                diagnostic_config,
+                target_item=5334,
+                fake_sessions_path=fake_sessions,
+                poison_model_path=poison_model,
+            )
+        )
+
+        assert diagnostic_key == base_key
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -498,6 +544,46 @@ def test_pts_cache_legacy_fallback_loads_rank1_sessions() -> None:
         assert cached.complete_marker_path is None
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_epoch_reward_diagnostics_cache_reuse_warning(capsys) -> None:
+    config = load_config(CONFIG_PATH)
+    pts = config.attack.pts_construction
+    assert pts is not None
+    diagnostic_config = _with_pts(
+        config,
+        replace(
+            pts,
+            cem=replace(
+                pts.cem,
+                epoch_reward_diagnostics=PTSCEMEpochRewardDiagnosticsRuntimeConfig(
+                    enabled=True,
+                    epochs=(2, 3),
+                ),
+            ),
+        ),
+    )
+    cached = run_pts_construction_cem.CachedPTSBestCandidate(
+        sessions=[[1, 2, 5334]],
+        metadata={"target_item": 5334, "reward": 0.5},
+        sessions_path=Path("sessions.json"),
+        metadata_path=Path("metadata.json"),
+        top_candidates_path=None,
+        complete_marker_path=None,
+        cache_mode="complete_marker",
+        cache_marker_missing=False,
+    )
+
+    run_pts_construction_cem._warn_if_reused_cache_missing_epoch_diagnostics(
+        diagnostic_config,
+        cached,
+    )
+
+    captured = capsys.readouterr()
+    assert (
+        "Epoch reward diagnostics requested, but reused PTS-CEM cache does not "
+        "contain diagnostics."
+    ) in captured.out
 
 
 def test_pts_cache_complete_marker_resolves_relative_paths() -> None:

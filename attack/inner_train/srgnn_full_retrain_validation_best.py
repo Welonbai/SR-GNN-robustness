@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 from attack.common.seed import set_seed
 from attack.data.poisoned_dataset_builder import PoisonedDataset
@@ -39,6 +39,7 @@ class SRGNNFullRetrainValidationBestInnerTrainer:
         config: Any | None = None,
         eval_data: Any | None = None,
         seed: int | None = None,
+        epoch_callback: Callable[[object, Mapping[str, Any]], None] | None = None,
     ) -> InnerTrainResult:
         del clean_checkpoint_path, config
         if seed is not None:
@@ -58,6 +59,14 @@ class SRGNNFullRetrainValidationBestInnerTrainer:
         sessions, labels = _coerce_poisoned_train_data(poisoned_train_data)
         train_data = Data((sessions, labels), shuffle=True)
         model = build_fresh_model()
+        training_epoch_callback = None
+        if epoch_callback is not None:
+            def training_epoch_callback(
+                _runner: object,
+                row: Mapping[str, Any],
+            ) -> None:
+                epoch_callback(model, row)
+
         result = train_srgnn_validation_best(
             model.runner,
             train_data,
@@ -67,6 +76,7 @@ class SRGNNFullRetrainValidationBestInnerTrainer:
             patience=self.patience,
             best_checkpoint_path=None,
             log_prefix=self.log_prefix,
+            epoch_callback=training_epoch_callback,
         )
         history = {
             "surrogate_evaluator_mode": "full_retrain_validation_best",

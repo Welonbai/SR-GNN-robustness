@@ -152,6 +152,7 @@ class PTSCEMEvaluationResult:
     reward: float
     reward_metrics: dict[str, float]
     metadata: dict[str, object] = field(default_factory=dict)
+    epoch_reward_diagnostics: dict[str, object] | None = None
 
 
 @dataclass
@@ -175,6 +176,7 @@ class PTSCEMCandidateResult:
     parent_candidate_key: str | None = None
     parent_reward: float | None = None
     parent_rank_among_elites: int | None = None
+    epoch_reward_diagnostics: dict[str, object] | None = None
 
     @property
     def candidate_key(self) -> str:
@@ -369,6 +371,11 @@ class PTSGroupedCEMTrainer:
                     parent_candidate_key=sample_spec.parent_candidate_key,
                     parent_reward=sample_spec.parent_reward,
                     parent_rank_among_elites=sample_spec.parent_rank_among_elites,
+                    epoch_reward_diagnostics=(
+                        None
+                        if evaluation.epoch_reward_diagnostics is None
+                        else dict(evaluation.epoch_reward_diagnostics)
+                    ),
                 )
                 candidates.append(candidate)
                 all_candidates.append(candidate)

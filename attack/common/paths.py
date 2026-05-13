@@ -394,8 +394,8 @@ def attack_key_payload(
                 "pts_construction_grouped_cem final attack identity requires "
                 "attack.pts_construction."
             )
-        payload["attack"]["pts_construction"] = _normalize_identity_value(
-            config.to_primitive()["attack"]["pts_construction"]
+        payload["attack"]["pts_construction"] = _pts_construction_identity_payload(
+            config
         )
         payload["pts_runtime_seeds"] = {
             "position_opt_seed": int(config.seeds.position_opt_seed),
@@ -414,6 +414,21 @@ def attack_key_payload(
         payload["attack_runtime_identity"] = _normalize_identity_value(
             attack_identity_context
         )
+    return payload
+
+
+def _pts_construction_identity_payload(config: Config) -> Any:
+    """PTS-CEM diagnostics are artifact-only and must not affect run identity."""
+    payload = _normalize_identity_value(
+        config.to_primitive()["attack"]["pts_construction"]
+    )
+    if isinstance(payload, dict):
+        cem = payload.get("cem")
+        if isinstance(cem, dict):
+            cem = dict(cem)
+            cem.pop("epoch_reward_diagnostics", None)
+            payload = dict(payload)
+            payload["cem"] = cem
     return payload
 
 

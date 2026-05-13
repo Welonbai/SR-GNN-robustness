@@ -99,6 +99,8 @@ class MiaSRecRunner(VictimRunnerBase):
         topk: int,
         max_epochs: int | None = None,
         victim_train_seed: int | None = None,
+        diagnostic_epoch_metrics_path: Path | None = None,
+        diagnostic_summary_path: Path | None = None,
     ) -> dict[str, str | int]:
         if not self.repo_root.exists():
             raise FileNotFoundError(f"MiaSRec repository not found: {self.repo_root}")
@@ -150,6 +152,16 @@ class MiaSRecRunner(VictimRunnerBase):
             )
             handle.write(f"export_topk_k: {int(topk)}\n")
             handle.write(f"export_topk_path: {json.dumps(str(export_topk_path.resolve()))}\n")
+            if diagnostic_epoch_metrics_path is not None:
+                handle.write(
+                    "diagnostic_epoch_metrics_path: "
+                    f"{json.dumps(str(Path(diagnostic_epoch_metrics_path).resolve()))}\n"
+                )
+            if diagnostic_summary_path is not None:
+                handle.write(
+                    "diagnostic_summary_path: "
+                    f"{json.dumps(str(Path(diagnostic_summary_path).resolve()))}\n"
+                )
 
         cmd = [
             self.python_executable,

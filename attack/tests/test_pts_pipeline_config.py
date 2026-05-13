@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from attack.common.config import (
     PTSActionsConfig,
+    PTSCEMEpochRewardDiagnosticsRuntimeConfig,
     PTSFinalSelectionConfig,
     PTSRewardConfig,
     PTSCEMRuntimeConfig,
@@ -31,6 +32,7 @@ from attack.pipeline.runs.run_pts_construction_cem import (
     _build_pts_cem_config_from_config,
     _build_pts_specs_from_config,
     _build_suffix_length_buckets_from_config,
+    _validate_pts_construction_run_config,
     build_pts_construction_attack_identity_context,
     pts_cem_surrogate_seed_alignment_metadata,
     resolve_pts_cem_surrogate_effective_seed,
@@ -43,9 +45,13 @@ CONFIG_PATH = Path(
     "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
 )
 SPACE_FILLING_CONFIG_PATH = CONFIG_PATH
-UNIFORM_INIT_CONFIG_PATH = Path(
+EPOCH_DIAG_CONFIG_PATH = Path(
     "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_uniform_init_ratio1_srgnn_partial4_target5334.yaml"
+    "diginetica_valbest_attack_pts_construction_grouped_cem_epochdiag_space_filling_ratio1_srgnn_partial4_target5334.yaml"
+)
+NEW_DIAGNOSTIC_CONFIG_PATH = Path(
+    "attack/configs/"
+    "diginetica_valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_targets39588_1440.yaml"
 )
 
 
@@ -73,15 +79,118 @@ def test_pts_pipeline_yaml_loads() -> None:
     ]
     assert pts.cem.init.mode == "vertex_stratified_space_filling"
     assert config.victims.params["srgnn"]["train"]["epochs"] == 4
+    assert pts.cem.epoch_reward_diagnostics.enabled is False
+    assert pts.cem.epoch_reward_diagnostics.epochs == ()
 
 
-def test_pts_actions_default_remains_old_four_action_space() -> None:
+def test_pts_epoch_reward_diagnostics_yaml_loads() -> None:
+    config = load_config(EPOCH_DIAG_CONFIG_PATH)
+    pts = config.attack.pts_construction
+
+    assert pts is not None
+    diagnostics = pts.cem.epoch_reward_diagnostics
+    assert diagnostics.enabled is True
+    assert diagnostics.epochs == (2, 3)
+    assert diagnostics.include_final_epoch is True
+    assert diagnostics.write_candidate_epoch_metrics is True
+    assert diagnostics.write_ranking_summary is True
+    assert config.victims.params["srgnn"]["train"]["epochs"] == 4
+
+
+def test_pts_epoch_reward_diagnostics_config_validation() -> None:
+    assert PTSCEMEpochRewardDiagnosticsRuntimeConfig().enabled is False
+
+    with pytest.raises(ValueError, match="positive integers"):
+        PTSCEMEpochRewardDiagnosticsRuntimeConfig(enabled=True, epochs=(0,))
+
+    with pytest.raises(ValueError, match="duplicates"):
+        PTSCEMEpochRewardDiagnosticsRuntimeConfig(enabled=True, epochs=(2, 2))
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        PTSCEMEpochRewardDiagnosticsRuntimeConfig(enabled=True, epochs=())
+
+
+def test_pts_epoch_reward_diagnostics_rejects_epoch_above_retrain_budget() -> None:
+    config = load_config(CONFIG_PATH)
+    pts = config.attack.pts_construction
+    assert pts is not None
+    bad_config = _with_pts(
+        config,
+        replace(
+            pts,
+            cem=replace(
+                pts.cem,
+                epoch_reward_diagnostics=PTSCEMEpochRewardDiagnosticsRuntimeConfig(
+                    enabled=True,
+                    epochs=(5,),
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="retrain epochs"):
+        _validate_pts_construction_run_config(bad_config)
+
+
+def test_pts_epoch_reward_diagnostics_rejects_final_epoch_when_included() -> None:
+    config = load_config(CONFIG_PATH)
+    pts = config.attack.pts_construction
+    assert pts is not None
+    bad_config = _with_pts(
+        config,
+        replace(
+            pts,
+            cem=replace(
+                pts.cem,
+                epoch_reward_diagnostics=PTSCEMEpochRewardDiagnosticsRuntimeConfig(
+                    enabled=True,
+                    epochs=(2, 3, 4),
+                    include_final_epoch=True,
+                ),
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="final_partial_retrain_protocol"):
+        _validate_pts_construction_run_config(bad_config)
+
+
+def test_pts_defaults_use_five_action_space_filling_runtime() -> None:
     assert list(PTSActionsConfig().enabled) == [
         "keep_residual_suffix",
         "regenerate_residual_suffix",
         "consume_one_keep_rest",
+        "consume_one_generate_continuation",
         "consume_all_stop",
     ]
+    assert PTSCEMRuntimeConfig().init.mode == "vertex_stratified_space_filling"
+    assert PTSCEMRuntimeConfig().resampling.mode == "elite_centered"
+
+
+def test_new_pts_diagnostic_yaml_loads_with_default_runtime_settings() -> None:
+    config = load_config(NEW_DIAGNOSTIC_CONFIG_PATH)
+    pts = config.attack.pts_construction
+
+    assert pts is not None
+    assert pts.enabled is True
+    assert config.experiment.name == (
+        "valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_targets39588_1440"
+    )
+    assert config.targets.mode == "explicit_list"
+    assert list(config.targets.explicit_list) == [39588, 1440]
+    assert config.targets.count == 2
+    assert list(config.victims.enabled) == ["srgnn"]
+    assert list(pts.actions.enabled) == [
+        "keep_residual_suffix",
+        "regenerate_residual_suffix",
+        "consume_one_keep_rest",
+        "consume_one_generate_continuation",
+        "consume_all_stop",
+    ]
+    assert pts.cem.init.mode == "vertex_stratified_space_filling"
+    assert pts.cem.resampling.mode == "elite_centered"
+    assert pts.cem.epoch_reward_diagnostics.enabled is True
+    assert pts.cem.epoch_reward_diagnostics.epochs == (2, 3)
 
 
 def test_pts_space_filling_yaml_loads_with_five_actions() -> None:
@@ -125,7 +234,7 @@ def test_pts_space_filling_yaml_loads_with_five_actions() -> None:
 
 
 def test_vertex_space_filling_mandatory_requires_c1_generate_action() -> None:
-    config = load_config(UNIFORM_INIT_CONFIG_PATH)
+    config = load_config(CONFIG_PATH)
     pts = config.attack.pts_construction
     assert pts is not None
 
@@ -158,8 +267,20 @@ def test_vertex_space_filling_mandatory_requires_c1_generate_action() -> None:
 
 
 def test_pts_cem_runtime_config_mapping() -> None:
-    config = load_config(UNIFORM_INIT_CONFIG_PATH)
-    cem_config = _build_pts_cem_config_from_config(config)
+    config = load_config(CONFIG_PATH)
+    pts = config.attack.pts_construction
+    assert pts is not None
+    uniform_config = _with_pts(
+        config,
+        replace(
+            pts,
+            cem=replace(
+                pts.cem,
+                init={"mode": "uniform"},
+            ),
+        ),
+    )
+    cem_config = _build_pts_cem_config_from_config(uniform_config)
 
     assert cem_config.iterations == 3
     assert cem_config.population_schedule == [16, 8, 8]
@@ -321,6 +442,34 @@ def test_pts_attack_identity_changes_but_shared_key_does_not_for_pts_fields() ->
             )
             == base_shared_key
         )
+
+
+def test_pts_epoch_reward_diagnostics_do_not_enter_attack_identity() -> None:
+    config = load_config(CONFIG_PATH)
+    pts = config.attack.pts_construction
+    assert pts is not None
+    base_attack_key = attack_key(config, run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE)
+    diagnostic_config = _with_pts(
+        config,
+        replace(
+            pts,
+            cem=replace(
+                pts.cem,
+                epoch_reward_diagnostics=PTSCEMEpochRewardDiagnosticsRuntimeConfig(
+                    enabled=True,
+                    epochs=(2, 3),
+                ),
+            ),
+        ),
+    )
+
+    assert (
+        attack_key(
+            diagnostic_config,
+            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        )
+        == base_attack_key
+    )
 
 
 def test_pts_attack_identity_context_includes_a0a4_vertex_init_fields() -> None:

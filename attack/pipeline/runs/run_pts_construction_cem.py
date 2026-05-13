@@ -90,6 +90,11 @@ PTS_CEM_SHARED_CACHE_SCHEMA_VERSION = "pts_cem_shared_construction_cache_v1"
 PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION = "pts_cem_local_artifact_v2"
 PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE = "victim_effective_seed"
 PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME = "srgnn"
+_EPOCH_REWARD_DIAGNOSTICS_CACHE_WARNING = (
+    "Epoch reward diagnostics requested, but reused PTS-CEM cache does not "
+    "contain diagnostics. Use --force-recompute-pts-cem or delete the old "
+    "cache to regenerate diagnostics."
+)
 
 
 @dataclass(frozen=True)
@@ -179,6 +184,7 @@ def run_pts_construction_grouped_cem(
                 current_shared_cache_key=shared_cache_key,
             )
             if cached is not None:
+                _warn_if_reused_cache_missing_epoch_diagnostics(config, cached)
                 print(
                     f"{_LOG_PREFIX} Reusing cached PTS-CEM best candidate for "
                     f"target {int(target_item)}; skipping CEM."
@@ -220,6 +226,7 @@ def run_pts_construction_grouped_cem(
                     attack_identity_context=attack_identity_context,
                     current_identity=cache_identity,
                 )
+                _warn_if_reused_cache_missing_epoch_diagnostics(config, cached)
                 print(
                     f"{_LOG_PREFIX} Materialized shared PTS-CEM cache into "
                     "local run_group target folder."
@@ -290,6 +297,13 @@ def run_pts_construction_grouped_cem(
                 pts_config.artifacts.save_top_candidate_sessions
             ),
             save_per_session_records=bool(pts_config.artifacts.save_per_session_records),
+            write_candidate_epoch_metrics=bool(
+                pts_config.cem.epoch_reward_diagnostics.write_candidate_epoch_metrics
+            ),
+            write_epoch_reward_ranking_summary=(
+                bool(pts_config.cem.epoch_reward_diagnostics.enabled)
+                and bool(pts_config.cem.epoch_reward_diagnostics.write_ranking_summary)
+            ),
         )
         _write_shared_pts_cem_cache(
             config=config,
@@ -418,6 +432,7 @@ def _validate_pts_construction_run_config(config: Config) -> None:
         )
     _resolve_pts_cem_base_seed(config)
     _srgnn_candidate_train_config(config)
+    _validate_pts_epoch_reward_diagnostics_config(config)
 
 
 def _build_pts_specs_from_config(
@@ -1216,6 +1231,35 @@ def _validate_cached_candidate_metadata_target(
         )
 
 
+def _warn_if_reused_cache_missing_epoch_diagnostics(
+    config: Config,
+    cached: CachedPTSBestCandidate,
+) -> None:
+    diagnostics = _require_pts_config(config).cem.epoch_reward_diagnostics
+    if not bool(diagnostics.enabled):
+        return
+    if _cached_metadata_has_requested_epoch_diagnostics(config, cached.metadata):
+        return
+    print(f"{_LOG_PREFIX} WARNING: {_EPOCH_REWARD_DIAGNOSTICS_CACHE_WARNING}")
+
+
+def _cached_metadata_has_requested_epoch_diagnostics(
+    config: Config,
+    metadata: Mapping[str, object],
+) -> bool:
+    diagnostics_config = _require_pts_config(config).cem.epoch_reward_diagnostics
+    diagnostics = metadata.get("epoch_reward_diagnostics")
+    if not isinstance(diagnostics, Mapping):
+        return False
+    rewards_by_epoch = diagnostics.get("rewards_by_epoch")
+    if not isinstance(rewards_by_epoch, Mapping):
+        return False
+    required_epochs = {int(epoch) for epoch in diagnostics_config.epochs}
+    if bool(diagnostics_config.include_final_epoch):
+        required_epochs.add(_resolved_pts_candidate_retrain_epochs(config))
+    return all(str(epoch) in rewards_by_epoch for epoch in required_epochs)
+
+
 def _coerce_marker_int(value: object, *, label: str) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{label} must be an integer.")
@@ -1835,6 +1879,12 @@ def _existing_pts_artifact_paths(artifact_dir: Path) -> dict[str, str]:
         "pts_final_policy": root / "pts_final_policy.json",
         "pts_top_candidates": root / "pts_top_candidates.json",
         "pts_top_candidate_policies": root / "pts_top_candidate_policies.json",
+        "pts_epoch_reward_ranking_summary_json": (
+            root / "pts_epoch_reward_ranking_summary.json"
+        ),
+        "pts_epoch_reward_ranking_summary_csv": (
+            root / "pts_epoch_reward_ranking_summary.csv"
+        ),
         "top_candidate_rank_1_policy": _rank1_policy_path(root),
         "top_candidate_rank_1_sessions": _rank1_sessions_path(root),
         "top_candidate_rank_1_metadata": _rank1_metadata_path(root),
@@ -1887,6 +1937,12 @@ def _evaluate_candidate_retrain_validation_reward(
     if not isinstance(inner_trainer, SRGNNFullRetrainValidationBestInnerTrainer):
         raise TypeError("PTS-CEM evaluator context has invalid inner trainer.")
 
+    pts_config = _require_pts_config(config)
+    diagnostics_config = pts_config.cem.epoch_reward_diagnostics
+    diagnostics_enabled = bool(diagnostics_config.enabled)
+    diagnostic_epochs = {int(epoch) for epoch in diagnostics_config.epochs}
+    epoch_rewards: dict[int, dict[str, object]] = {}
+
     seed_alignment = pts_cem_surrogate_seed_alignment_metadata(
         config,
         target_item=int(target_item),
@@ -1898,6 +1954,40 @@ def _evaluate_candidate_retrain_validation_reward(
         shared.clean_labels,
         candidate_sessions,
     )
+
+    def epoch_callback(model: object, row: Mapping[str, Any]) -> None:
+        epoch = int(row["epoch"])
+        if epoch not in diagnostic_epochs:
+            return
+        reward, reward_metrics, score_seconds = _score_candidate_target_reward(
+            backend=backend,
+            model=model,
+            validation_sessions=validation_sessions,
+            target_item=int(target_item),
+        )
+        epoch_payload = _epoch_reward_payload_from_metrics(
+            reward=reward,
+            reward_metrics=reward_metrics,
+        )
+        epoch_payload.update(
+            {
+                "epoch": int(epoch),
+                "reward_source": "epoch_reward_diagnostic",
+                "checkpoint_mode": "current_epoch",
+                "epoch_diagnostic_checkpoint_mode": "current_epoch",
+                "score_target_seconds": float(score_seconds),
+            }
+        )
+        if row.get("valid_ground_truth_mrr@20") is not None:
+            epoch_payload["ground_truth_mrr@20"] = float(
+                row["valid_ground_truth_mrr@20"]
+            )
+        if row.get("valid_ground_truth_recall@20") is not None:
+            epoch_payload["ground_truth_recall@20"] = float(
+                row["valid_ground_truth_recall@20"]
+            )
+        epoch_rewards[int(epoch)] = epoch_payload
+
     retrain_start = time.perf_counter()
     inner_result = inner_trainer.run(
         backend,
@@ -1906,12 +1996,113 @@ def _evaluate_candidate_retrain_validation_reward(
         config=None,
         eval_data=validation_eval_data,
         seed=surrogate_effective_seed,
+        epoch_callback=epoch_callback if diagnostics_enabled else None,
     )
     retrain_seconds = time.perf_counter() - retrain_start
 
+    reward, reward_metrics, score_target_seconds = _score_candidate_target_reward(
+        backend=backend,
+        model=inner_result.model,
+        validation_sessions=validation_sessions,
+        target_item=int(target_item),
+    )
+    candidate_total_seconds = time.perf_counter() - candidate_start
+    checkpoint_metadata = _candidate_checkpoint_metadata(inner_result.history)
+    metadata: dict[str, object] = {
+        "reward_name": PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20,
+        "candidate_retrain_validation_reward": reward,
+        "candidate_retrain_seed": surrogate_effective_seed,
+        **seed_alignment,
+        "candidate_seed": int(candidate_seed),
+        "candidate_retrain_validation_prefix_count": int(len(validation_sessions)),
+        "candidate_retrain_epochs": _resolved_pts_candidate_retrain_epochs(config),
+        "iteration": int(iteration),
+        "candidate_id": int(candidate_id),
+        "candidate_total_seconds": float(candidate_total_seconds),
+        "candidate_retrain_seconds": float(retrain_seconds),
+        "score_target_seconds": float(score_target_seconds),
+    }
+    metadata.update(checkpoint_metadata)
+    epoch_reward_diagnostics = None
+    if diagnostics_enabled:
+        _validate_collected_epoch_diagnostics(
+            requested_epochs=diagnostic_epochs,
+            collected_epochs=set(epoch_rewards),
+            history=inner_result.history,
+        )
+        training_budget_epoch = _resolved_pts_candidate_retrain_epochs(config)
+        selected_checkpoint_epoch = checkpoint_metadata.get("selected_checkpoint_epoch")
+        if bool(diagnostics_config.include_final_epoch) and training_budget_epoch not in epoch_rewards:
+            final_payload = _epoch_reward_payload_from_metrics(
+                reward=reward,
+                reward_metrics=reward_metrics,
+            )
+            final_payload.update(
+                {
+                    "epoch": int(training_budget_epoch),
+                    "reward_source": "official_reward",
+                    "checkpoint_mode": "final_partial_retrain_protocol",
+                    "official_reward_source": "final_partial_retrain_protocol",
+                    "training_budget_epoch": int(training_budget_epoch),
+                    "selected_checkpoint_epoch": selected_checkpoint_epoch,
+                    "score_target_seconds": float(score_target_seconds),
+                }
+            )
+            if checkpoint_metadata.get("valid_ground_truth_mrr@20") is not None:
+                final_payload["ground_truth_mrr@20"] = float(
+                    checkpoint_metadata["valid_ground_truth_mrr@20"]
+                )
+            if checkpoint_metadata.get("valid_ground_truth_recall@20") is not None:
+                final_payload["ground_truth_recall@20"] = float(
+                    checkpoint_metadata["valid_ground_truth_recall@20"]
+                )
+            epoch_rewards[int(training_budget_epoch)] = final_payload
+        epoch_reward_diagnostics = {
+            "enabled": True,
+            "reward_name": PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20,
+            "diagnostic_epochs": sorted(int(epoch) for epoch in diagnostic_epochs),
+            "include_final_epoch": bool(diagnostics_config.include_final_epoch),
+            "write_candidate_epoch_metrics": bool(
+                diagnostics_config.write_candidate_epoch_metrics
+            ),
+            "write_ranking_summary": bool(diagnostics_config.write_ranking_summary),
+            "official_reward_source": "final_partial_retrain_protocol",
+            "training_budget_epoch": int(training_budget_epoch),
+            "selected_checkpoint_epoch": selected_checkpoint_epoch,
+            "epoch_diagnostic_checkpoint_mode": "current_epoch",
+            "target_item": int(target_item),
+            "surrogate_effective_seed": surrogate_effective_seed,
+            "surrogate_victim_seed_aligned": True,
+            "rewards_by_epoch": {
+                str(epoch): epoch_rewards[epoch]
+                for epoch in sorted(epoch_rewards)
+            },
+        }
+        metadata["epoch_reward_diagnostics_enabled"] = True
+        metadata["diagnostic_epochs"] = sorted(int(epoch) for epoch in diagnostic_epochs)
+        metadata["official_reward_source"] = "final_partial_retrain_protocol"
+        metadata["training_budget_epoch"] = int(training_budget_epoch)
+        metadata["epoch_diagnostic_checkpoint_mode"] = "current_epoch"
+        metadata["include_final_epoch"] = bool(diagnostics_config.include_final_epoch)
+        metadata["write_ranking_summary"] = bool(diagnostics_config.write_ranking_summary)
+    return PTSCEMEvaluationResult(
+        reward=reward,
+        reward_metrics=reward_metrics,
+        metadata=metadata,
+        epoch_reward_diagnostics=epoch_reward_diagnostics,
+    )
+
+
+def _score_candidate_target_reward(
+    *,
+    backend: SRGNNBackend,
+    model: object,
+    validation_sessions: Sequence[Sequence[int]],
+    target_item: int,
+) -> tuple[float, dict[str, float], float]:
     score_start = time.perf_counter()
     target_result = backend.score_target(
-        inner_result.model,
+        model,
         validation_sessions,
         int(target_item),
     )
@@ -1919,8 +2110,6 @@ def _evaluate_candidate_retrain_validation_reward(
     metrics = _coerce_target_metrics(target_result.metrics)
     lowk_payload = _lowk_reward_metric_payload(metrics)
     reward = float(lowk_payload["absolute_raw_family_lowk_reward"])
-    candidate_total_seconds = time.perf_counter() - candidate_start
-
     reward_metrics = {
         **metrics,
         **{
@@ -1930,25 +2119,41 @@ def _evaluate_candidate_retrain_validation_reward(
         },
         PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20: reward,
     }
-    metadata: dict[str, object] = {
-        "reward_name": PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20,
-        "candidate_retrain_validation_reward": reward,
-        "candidate_retrain_seed": surrogate_effective_seed,
-        **seed_alignment,
-        "candidate_seed": int(candidate_seed),
-        "candidate_retrain_validation_prefix_count": int(len(validation_sessions)),
-        "candidate_retrain_epochs": int(_srgnn_candidate_train_config(config)["epochs"]),
-        "iteration": int(iteration),
-        "candidate_id": int(candidate_id),
-        "candidate_total_seconds": float(candidate_total_seconds),
-        "candidate_retrain_seconds": float(retrain_seconds),
-        "score_target_seconds": float(score_target_seconds),
+    return reward, reward_metrics, float(score_target_seconds)
+
+
+def _epoch_reward_payload_from_metrics(
+    *,
+    reward: float,
+    reward_metrics: Mapping[str, float],
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        key: float(value)
+        for key, value in reward_metrics.items()
     }
-    metadata.update(_candidate_checkpoint_metadata(inner_result.history))
-    return PTSCEMEvaluationResult(
-        reward=reward,
-        reward_metrics=reward_metrics,
-        metadata=metadata,
+    payload["target_summary_value"] = float(reward)
+    payload[PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20] = float(reward)
+    return payload
+
+
+def _validate_collected_epoch_diagnostics(
+    *,
+    requested_epochs: set[int],
+    collected_epochs: set[int],
+    history: Mapping[str, Any] | None,
+) -> None:
+    missing = sorted(set(requested_epochs) - set(collected_epochs))
+    if not missing:
+        return
+    stopped_epoch = None
+    if isinstance(history, Mapping) and history.get("stopped_epoch") is not None:
+        stopped_epoch = int(history["stopped_epoch"])
+    detail = (
+        "" if stopped_epoch is None else f" Retrain stopped at epoch {stopped_epoch}."
+    )
+    raise RuntimeError(
+        "PTS-CEM epoch reward diagnostics were requested for epochs "
+        f"{missing}, but those epochs were not evaluated.{detail}"
     )
 
 
@@ -1960,6 +2165,81 @@ def _srgnn_candidate_train_config(config: Config) -> dict[str, Any]:
     if not isinstance(train_config, Mapping):
         raise ValueError("PTS-CEM Phase 3 requires victims.params.srgnn.train.")
     return dict(train_config)
+
+
+def _resolved_pts_candidate_retrain_epochs(config: Config) -> int:
+    train_config = _srgnn_candidate_train_config(config)
+    epochs = train_config.get("epochs")
+    if isinstance(epochs, bool) or not isinstance(epochs, int):
+        raise TypeError("victims.params.srgnn.train.epochs must be an integer.")
+    if int(epochs) <= 0:
+        raise ValueError("victims.params.srgnn.train.epochs must be positive.")
+    return int(epochs)
+
+
+def _validate_pts_epoch_reward_diagnostics_config(config: Config) -> None:
+    diagnostics = _require_pts_config(config).cem.epoch_reward_diagnostics
+    if not bool(diagnostics.enabled):
+        return
+    retrain_epochs = _resolved_pts_candidate_retrain_epochs(config)
+    if bool(diagnostics.include_final_epoch):
+        reserved = [
+            int(epoch)
+            for epoch in diagnostics.epochs
+            if int(epoch) >= int(retrain_epochs)
+        ]
+        if reserved:
+            raise ValueError(
+                "attack.pts_construction.cem.epoch_reward_diagnostics.epochs "
+                "must be less than resolved PTS-CEM surrogate candidate retrain "
+                "epochs when include_final_epoch=true, because the final epoch "
+                "slot is reserved for the official final_partial_retrain_protocol "
+                f"reward; retrain_epochs={retrain_epochs}, invalid epochs: {reserved}."
+            )
+    invalid = [
+        int(epoch)
+        for epoch in diagnostics.epochs
+        if int(epoch) > int(retrain_epochs)
+    ]
+    if invalid:
+        raise ValueError(
+            "attack.pts_construction.cem.epoch_reward_diagnostics.epochs "
+            "must be <= resolved PTS-CEM surrogate candidate retrain epochs "
+            f"({retrain_epochs}); invalid epochs: {invalid}."
+        )
+
+
+def _epoch_reward_diagnostics_metadata_payload(
+    config: Config,
+    *,
+    artifact_paths: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    diagnostics = _require_pts_config(config).cem.epoch_reward_diagnostics
+    payload: dict[str, object] = {
+        "epoch_reward_diagnostics_enabled": bool(diagnostics.enabled),
+        "diagnostic_epochs": [int(epoch) for epoch in diagnostics.epochs],
+        "include_final_epoch": bool(diagnostics.include_final_epoch),
+        "write_candidate_epoch_metrics": bool(
+            diagnostics.write_candidate_epoch_metrics
+        ),
+        "write_ranking_summary": bool(diagnostics.write_ranking_summary),
+    }
+    if bool(diagnostics.enabled):
+        payload.update(
+            {
+                "official_reward_source": "final_partial_retrain_protocol",
+                "training_budget_epoch": _resolved_pts_candidate_retrain_epochs(config),
+                "epoch_diagnostic_checkpoint_mode": "current_epoch",
+            }
+        )
+    if artifact_paths is not None:
+        payload["pts_epoch_reward_ranking_summary_json_path"] = artifact_paths.get(
+            "pts_epoch_reward_ranking_summary_json"
+        )
+        payload["pts_epoch_reward_ranking_summary_csv_path"] = artifact_paths.get(
+            "pts_epoch_reward_ranking_summary_csv"
+        )
+    return payload
 
 
 def _target_metadata(
@@ -1992,6 +2272,12 @@ def _target_metadata(
         "pts_top_candidate_policies_path": artifact_paths.get(
             "pts_top_candidate_policies"
         ),
+        "pts_epoch_reward_ranking_summary_json_path": artifact_paths.get(
+            "pts_epoch_reward_ranking_summary_json"
+        ),
+        "pts_epoch_reward_ranking_summary_csv_path": artifact_paths.get(
+            "pts_epoch_reward_ranking_summary_csv"
+        ),
         "pts_artifact_dir": str(artifact_dir),
         "pts_best_candidate_iteration": int(best_candidate.iteration),
         "pts_best_candidate_id": int(best_candidate.candidate_id),
@@ -2010,8 +2296,13 @@ def _target_metadata(
         "pts_population_size": cem_config.population_size,
         "pts_actions_enabled": list(pts_config.actions.enabled),
         "pts_grouping_mode": pts_config.grouping.mode,
+        "pts_reward_target_summary": pts_config.reward.target_summary,
         "pts_candidate_retrain_seed": int(
             seed_alignment["resolved_surrogate_effective_seed"]
+        ),
+        **_epoch_reward_diagnostics_metadata_payload(
+            config,
+            artifact_paths=artifact_paths,
         ),
         **seed_alignment,
         "pts_cem_reused": False,
@@ -2050,6 +2341,12 @@ def _target_metadata_from_cache(
         "pts_top_candidate_policies_path": artifact_paths.get(
             "pts_top_candidate_policies"
         ),
+        "pts_epoch_reward_ranking_summary_json_path": artifact_paths.get(
+            "pts_epoch_reward_ranking_summary_json"
+        ),
+        "pts_epoch_reward_ranking_summary_csv_path": artifact_paths.get(
+            "pts_epoch_reward_ranking_summary_csv"
+        ),
         "pts_artifact_dir": str(artifact_dir),
         "pts_best_candidate_sessions_path": str(cached.sessions_path),
         "pts_best_candidate_metadata_path": str(cached.metadata_path),
@@ -2063,8 +2360,13 @@ def _target_metadata_from_cache(
         "pts_population_size": cem_config.population_size,
         "pts_actions_enabled": list(pts_config.actions.enabled),
         "pts_grouping_mode": pts_config.grouping.mode,
+        "pts_reward_target_summary": pts_config.reward.target_summary,
         "pts_candidate_retrain_seed": int(
             seed_alignment["resolved_surrogate_effective_seed"]
+        ),
+        **_epoch_reward_diagnostics_metadata_payload(
+            config,
+            artifact_paths=artifact_paths,
         ),
         **seed_alignment,
         "pts_cem_reused": True,
@@ -2110,6 +2412,11 @@ def _copy_cached_best_candidate_fields(
     reward_metrics = metadata.get("reward_metrics")
     if isinstance(reward_metrics, Mapping):
         payload["pts_best_candidate_reward_metrics"] = dict(reward_metrics)
+    epoch_diagnostics = metadata.get("epoch_reward_diagnostics")
+    if isinstance(epoch_diagnostics, Mapping):
+        payload["pts_best_candidate_epoch_reward_diagnostics"] = dict(
+            epoch_diagnostics
+        )
 
 
 def main(argv: Sequence[str] | None = None) -> None:

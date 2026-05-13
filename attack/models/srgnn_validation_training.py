@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import torch
 
@@ -57,6 +57,7 @@ def train_srgnn_validation_best(
     patience: int,
     best_checkpoint_path: str | Path | None = None,
     log_prefix: str = "[srgnn-validation-best]",
+    epoch_callback: Callable[[Any, Mapping[str, Any]], None] | None = None,
 ) -> SRGNNValidationTrainingResult:
     if runner.model is None:
         raise RuntimeError("SR-GNN model is not initialized.")
@@ -130,6 +131,8 @@ def train_srgnn_validation_best(
             f"bad_counter={bad_counter}",
             flush=True,
         )
+        if epoch_callback is not None:
+            epoch_callback(runner, row)
 
         if bad_counter >= int(patience):
             stopped_epoch = int(epoch)

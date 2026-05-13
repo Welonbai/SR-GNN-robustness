@@ -835,6 +835,7 @@ class PTSActionsConfig:
         "keep_residual_suffix",
         "regenerate_residual_suffix",
         "consume_one_keep_rest",
+        "consume_one_generate_continuation",
         "consume_all_stop",
     )
     dynamic_masks: PTSActionsDynamicMasksConfig = field(
@@ -948,7 +949,7 @@ class PTSCEMUpdateRuntimeConfig:
 
 @dataclass(frozen=True)
 class PTSCEMInitRuntimeConfig:
-    mode: str = PTS_CEM_INIT_UNIFORM
+    mode: str = PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING
     mandatory_enabled: bool = True
     extreme_count: int = 7
     moderate_count: int = 3
@@ -1041,7 +1042,7 @@ class PTSCEMInitRuntimeConfig:
 
 @dataclass(frozen=True)
 class PTSCEMResamplingRuntimeConfig:
-    mode: str = "standard"
+    mode: str = "elite_centered"
     local_concentration_scale: float = 30.0
 
     def __post_init__(self) -> None:
@@ -1072,6 +1073,71 @@ class PTSCEMResamplingRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class PTSCEMEpochRewardDiagnosticsRuntimeConfig:
+    enabled: bool = False
+    epochs: tuple[int, ...] = ()
+    include_final_epoch: bool = True
+    write_candidate_epoch_metrics: bool = True
+    write_ranking_summary: bool = True
+
+    def __post_init__(self) -> None:
+        enabled = _as_bool(
+            self.enabled,
+            "attack.pts_construction.cem.epoch_reward_diagnostics.enabled",
+        )
+        epochs = tuple(
+            _as_int_list(
+                self.epochs,
+                "attack.pts_construction.cem.epoch_reward_diagnostics.epochs",
+            )
+        )
+        if enabled and not epochs:
+            raise ValueError(
+                "attack.pts_construction.cem.epoch_reward_diagnostics.epochs "
+                "must not be empty when enabled=true."
+            )
+        if any(epoch <= 0 for epoch in epochs):
+            raise ValueError(
+                "attack.pts_construction.cem.epoch_reward_diagnostics.epochs "
+                "must contain only positive integers."
+            )
+        if len(set(epochs)) != len(epochs):
+            raise ValueError(
+                "attack.pts_construction.cem.epoch_reward_diagnostics.epochs "
+                "must not contain duplicates."
+            )
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "epochs", epochs)
+        object.__setattr__(
+            self,
+            "include_final_epoch",
+            _as_bool(
+                self.include_final_epoch,
+                "attack.pts_construction.cem.epoch_reward_diagnostics."
+                "include_final_epoch",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "write_candidate_epoch_metrics",
+            _as_bool(
+                self.write_candidate_epoch_metrics,
+                "attack.pts_construction.cem.epoch_reward_diagnostics."
+                "write_candidate_epoch_metrics",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "write_ranking_summary",
+            _as_bool(
+                self.write_ranking_summary,
+                "attack.pts_construction.cem.epoch_reward_diagnostics."
+                "write_ranking_summary",
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class PTSCEMRuntimeConfig:
     iterations: int = 3
     population_schedule: tuple[int, ...] | None = (16, 8, 8)
@@ -1086,6 +1152,9 @@ class PTSCEMRuntimeConfig:
     seed_source: str = PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED
     candidate_seed_stride: int = 1000
     save_top_k_candidates: int = 3
+    epoch_reward_diagnostics: PTSCEMEpochRewardDiagnosticsRuntimeConfig = field(
+        default_factory=PTSCEMEpochRewardDiagnosticsRuntimeConfig
+    )
 
     def __post_init__(self) -> None:
         iterations = _as_int(self.iterations, "attack.pts_construction.cem.iterations")
@@ -1143,6 +1212,11 @@ class PTSCEMRuntimeConfig:
             PTSCEMResamplingRuntimeConfig,
             "attack.pts_construction.cem.resampling",
         )
+        epoch_reward_diagnostics = _coerce_pts_dataclass(
+            self.epoch_reward_diagnostics,
+            PTSCEMEpochRewardDiagnosticsRuntimeConfig,
+            "attack.pts_construction.cem.epoch_reward_diagnostics",
+        )
         seed_source = _as_str(
             self.seed_source,
             "attack.pts_construction.cem.seed_source",
@@ -1176,6 +1250,11 @@ class PTSCEMRuntimeConfig:
         object.__setattr__(self, "update", update)
         object.__setattr__(self, "init", init)
         object.__setattr__(self, "resampling", resampling)
+        object.__setattr__(
+            self,
+            "epoch_reward_diagnostics",
+            epoch_reward_diagnostics,
+        )
         object.__setattr__(self, "seed_source", seed_source)
         object.__setattr__(self, "candidate_seed_stride", candidate_seed_stride)
         object.__setattr__(self, "save_top_k_candidates", save_top_k_candidates)
@@ -3307,6 +3386,7 @@ __all__ = [
     "PTSArtifactsConfig",
     "PTSActionsConfig",
     "PTSActionsDynamicMasksConfig",
+    "PTSCEMEpochRewardDiagnosticsRuntimeConfig",
     "PTSCEMInitRuntimeConfig",
     "PTSCEMRuntimeConfig",
     "PTSCEMResamplingRuntimeConfig",

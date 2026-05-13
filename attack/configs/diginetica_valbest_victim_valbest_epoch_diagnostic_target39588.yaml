@@ -1,0 +1,110 @@
+experiment:
+  name: valbest_victim_valbest_epoch_diagnostic_target39588
+
+data:
+  dataset_name: diginetica
+  split_protocol: unified
+  poison_train_only: true
+  canonical_split:
+    min_item_count: 5
+    min_session_len: 2
+    valid_ratio: 0.1
+    test_days: 7
+
+seeds:
+  fake_session_seed: 20260405
+  target_selection_seed: 20260405
+  position_opt_seed: 20260405
+  surrogate_train_seed: 20260405
+  victim_train_seed: 20260405
+
+attack:
+  size: 0.01
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 1.0
+  poison_model:
+    name: srgnn
+    params:
+      train:
+        epochs: 30
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-5
+        step: 1
+        patience: 10
+        nonhybrid: false
+        checkpoint_protocol: validation_best
+        best_metric: valid_ground_truth_mrr@20
+        patience_metric: recall20_or_mrr20
+
+target:
+  item: 39588
+
+source_attack:
+  type: pts_cem
+  source_run: valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_target39588
+  target_item: 39588
+  candidate_rank: 1
+  expected_candidate_key: iter1_cand5
+  source_method_note: "5-action space-filling seed-aligned PTS-CEM"
+  final_target_raw_lowk: 0.144961
+
+targets:
+  mode: explicit_list
+  explicit_list: [39588]
+  bucket: popular
+  count: 1
+  reuse_saved_targets: false
+
+victims:
+  enabled: [miasrec, tron]
+  params:
+    miasrec:
+      train:
+        epochs: 30
+        train_batch_size: 64
+        eval_batch_size: 32
+    tron:
+      train:
+        max_epochs: 30
+  runtime:
+    miasrec:
+      python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"
+      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
+      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      logging:
+        show_progress: false
+    tron:
+      python_executable: "C:\\Users\\User\\anaconda3\\envs\\tron-gpu\\python.exe"
+      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
+      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      dataloader:
+        num_workers: 2
+
+diagnostic:
+  record_epoch_metrics: true
+  metrics: [recall@20, mrr@20]
+  primary_metric:
+    miasrec: mrr@20
+    tron: recall@20
+  also_record_loss: true
+  compare_best_vs_last: true
+
+evaluation:
+  topk: [5, 10, 15, 20, 25, 30, 40, 50]
+  targeted_metrics: [precision, recall, mrr, ndcg]
+  ground_truth_metrics: [precision, recall, mrr, ndcg]
+
+artifacts:
+  root: outputs
+  shared_dir: shared
+  runs_dir: runs
