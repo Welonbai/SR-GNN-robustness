@@ -21,6 +21,18 @@ from attack.common.srgnn_training_protocol import (
 _ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron"}
 _ALLOWED_TARGET_BUCKETS = {"popular", "unpopular", "all"}
 _ALLOWED_EVAL_METRICS = {"precision", "recall", "mrr", "ndcg"}
+VICTIM_VALIDATION_BEST_PROTOCOL = "validation_best"
+VICTIM_FIXED_EPOCH_PROTOCOL = "fixed_epoch"
+VICTIM_EXPORT_BEST = "best"
+VICTIM_EXPORT_LAST = "last"
+_ALLOWED_EXTERNAL_VICTIM_CHECKPOINT_PROTOCOLS = {
+    VICTIM_VALIDATION_BEST_PROTOCOL,
+    VICTIM_FIXED_EPOCH_PROTOCOL,
+}
+_ALLOWED_EXTERNAL_VICTIM_EXPORT_MODELS = {
+    VICTIM_EXPORT_BEST,
+    VICTIM_EXPORT_LAST,
+}
 _ALLOWED_POSITION_OPT_REWARD_MODES = {
     "poisoned_target_utility",
     "delta_target_utility",
@@ -3101,6 +3113,11 @@ def _normalize_miasrec_train(train: Mapping[str, Any], context: str) -> dict[str
         raise ValueError(f"{context}.train_batch_size must be positive.")
     if normalized["eval_batch_size"] <= 0:
         raise ValueError(f"{context}.eval_batch_size must be positive.")
+    _normalize_external_victim_train_protocol(
+        normalized,
+        context,
+        default_export_model=VICTIM_EXPORT_BEST,
+    )
     return normalized
 
 
@@ -3108,11 +3125,73 @@ def _normalize_tron_train(train: Mapping[str, Any], context: str) -> dict[str, A
     normalized = _normalize_primitive(train, context)
     if not isinstance(normalized, dict):
         raise TypeError(f"Expected {context} to be a mapping.")
-    _require(normalized, "max_epochs", context)
-    normalized["max_epochs"] = _as_int(normalized["max_epochs"], f"{context}.max_epochs")
-    if normalized["max_epochs"] <= 0:
-        raise ValueError(f"{context}.max_epochs must be positive.")
+    has_epochs = "epochs" in normalized
+    has_max_epochs = "max_epochs" in normalized
+    if not has_epochs and not has_max_epochs:
+        raise ValueError(f"Missing required configuration: {context}.epochs")
+    epochs = (
+        _as_int(normalized["epochs"], f"{context}.epochs")
+        if has_epochs
+        else _as_int(normalized["max_epochs"], f"{context}.max_epochs")
+    )
+    if has_max_epochs:
+        max_epochs = _as_int(normalized["max_epochs"], f"{context}.max_epochs")
+        if max_epochs != epochs:
+            raise ValueError(f"{context}.epochs and {context}.max_epochs must match.")
+    if epochs <= 0:
+        raise ValueError(f"{context}.epochs must be positive.")
+    normalized["epochs"] = int(epochs)
+    normalized["max_epochs"] = int(epochs)
+    _normalize_external_victim_train_protocol(
+        normalized,
+        context,
+        default_export_model=VICTIM_EXPORT_LAST,
+    )
     return normalized
+
+
+def _normalize_external_victim_train_protocol(
+    normalized: dict[str, Any],
+    context: str,
+    *,
+    default_export_model: str,
+) -> None:
+    protocol = _as_str(
+        normalized.get("checkpoint_protocol", VICTIM_VALIDATION_BEST_PROTOCOL),
+        f"{context}.checkpoint_protocol",
+    ).strip().lower()
+    if protocol not in _ALLOWED_EXTERNAL_VICTIM_CHECKPOINT_PROTOCOLS:
+        allowed = ", ".join(sorted(_ALLOWED_EXTERNAL_VICTIM_CHECKPOINT_PROTOCOLS))
+        raise ValueError(f"{context}.checkpoint_protocol must be one of: {allowed}.")
+    normalized["checkpoint_protocol"] = protocol
+
+    validation_enabled = _as_bool(
+        normalized.get("validation_enabled", True),
+        f"{context}.validation_enabled",
+    )
+    normalized["validation_enabled"] = bool(validation_enabled)
+
+    export_model = _as_str(
+        normalized.get("export_model", default_export_model),
+        f"{context}.export_model",
+    ).strip().lower()
+    if export_model not in _ALLOWED_EXTERNAL_VICTIM_EXPORT_MODELS:
+        allowed = ", ".join(sorted(_ALLOWED_EXTERNAL_VICTIM_EXPORT_MODELS))
+        raise ValueError(f"{context}.export_model must be one of: {allowed}.")
+    normalized["export_model"] = export_model
+
+    if not validation_enabled and export_model == VICTIM_EXPORT_BEST:
+        raise ValueError(
+            f"{context}.validation_enabled=false is incompatible with export_model=best."
+        )
+    if protocol == VICTIM_FIXED_EPOCH_PROTOCOL and export_model != VICTIM_EXPORT_LAST:
+        raise ValueError(
+            f"{context}.checkpoint_protocol=fixed_epoch requires export_model=last."
+        )
+    if protocol == VICTIM_VALIDATION_BEST_PROTOCOL and not validation_enabled:
+        raise ValueError(
+            f"{context}.checkpoint_protocol=validation_best requires validation_enabled=true."
+        )
 
 
 def _normalize_evaluation_config(evaluation: Mapping[str, Any]) -> dict[str, Any]:

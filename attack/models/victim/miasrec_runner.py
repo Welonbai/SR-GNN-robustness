@@ -101,7 +101,7 @@ class MiaSRecRunner(VictimRunnerBase):
         victim_train_seed: int | None = None,
         diagnostic_epoch_metrics_path: Path | None = None,
         diagnostic_summary_path: Path | None = None,
-    ) -> dict[str, str | int]:
+    ) -> dict[str, str | int | bool | None]:
         if not self.repo_root.exists():
             raise FileNotFoundError(f"MiaSRec repository not found: {self.repo_root}")
         if not self.working_dir.exists():
@@ -126,6 +126,23 @@ class MiaSRecRunner(VictimRunnerBase):
         tb_snapshot = _snapshot_files(tensorboard_root)
         saved_snapshot = _snapshot_files(saved_root)
         effective_epochs = int(max_epochs) if max_epochs is not None else int(self.train_config["epochs"])
+        diagnostic_mode = (
+            diagnostic_epoch_metrics_path is not None or diagnostic_summary_path is not None
+        )
+        checkpoint_protocol = str(
+            self.train_config.get("checkpoint_protocol", "validation_best")
+        ).strip().lower()
+        validation_enabled = bool(self.train_config.get("validation_enabled", True))
+        export_model = str(self.train_config.get("export_model", "best")).strip().lower()
+        if diagnostic_mode:
+            checkpoint_protocol = "validation_best"
+            validation_enabled = True
+            export_model = "best"
+        used_best_checkpoint_for_export = export_model == "best"
+        if checkpoint_protocol == "fixed_epoch" and not validation_enabled:
+            print(
+                "MiaSRec fixed-epoch fast mode: validation disabled, exporting last model."
+            )
         requested_gpu_id = _resolve_requested_gpu_id(self.device_config)
         effective_seed = (
             int(victim_train_seed)
@@ -152,6 +169,13 @@ class MiaSRecRunner(VictimRunnerBase):
             )
             handle.write(f"export_topk_k: {int(topk)}\n")
             handle.write(f"export_topk_path: {json.dumps(str(export_topk_path.resolve()))}\n")
+            handle.write(f"checkpoint_protocol: {json.dumps(checkpoint_protocol)}\n")
+            handle.write(f"validation_enabled: {json.dumps(bool(validation_enabled))}\n")
+            handle.write(f"export_model: {json.dumps(export_model)}\n")
+            handle.write(
+                "load_best_model_for_export: "
+                f"{json.dumps(bool(used_best_checkpoint_for_export))}\n"
+            )
             if diagnostic_epoch_metrics_path is not None:
                 handle.write(
                     "diagnostic_epoch_metrics_path: "
@@ -218,6 +242,10 @@ class MiaSRecRunner(VictimRunnerBase):
             )
 
         print(f"[miasrec] Completed. Predictions: {export_topk_path}")
+        validation_metrics_recorded = bool(validation_enabled)
+        selected_checkpoint_epoch = (
+            None if checkpoint_protocol == "validation_best" else int(effective_epochs)
+        )
         return {
             "returncode": int(result.returncode),
             "log_path": str(log_path),
@@ -225,6 +253,16 @@ class MiaSRecRunner(VictimRunnerBase):
             "checkpoint_dir": str(checkpoint_dir),
             "export_topk_path": str(export_topk_path),
             "victim_train_seed": int(effective_seed),
+            "victim_name": self.name,
+            "checkpoint_protocol": checkpoint_protocol,
+            "validation_enabled": bool(validation_enabled),
+            "export_model": export_model,
+            "epochs_configured": int(effective_epochs),
+            "epochs_completed": int(effective_epochs),
+            "used_best_checkpoint_for_export": bool(used_best_checkpoint_for_export),
+            "selected_checkpoint_epoch": selected_checkpoint_epoch,
+            "selected_checkpoint_path": None,
+            "validation_metrics_recorded": validation_metrics_recorded,
         }
 
 

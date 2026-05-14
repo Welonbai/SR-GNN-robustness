@@ -99,7 +99,7 @@ class TRONRunner(VictimRunnerBase):
         max_epochs: int | None = None,
         victim_train_seed: int | None = None,
         diagnostic_summary_path: Path | None = None,
-    ) -> dict[str, str | int]:
+    ) -> dict[str, str | int | bool | None]:
         if not self.repo_root.exists():
             raise FileNotFoundError(f"TRON repository not found: {self.repo_root}")
         if not self.working_dir.exists():
@@ -123,9 +123,30 @@ class TRONRunner(VictimRunnerBase):
         config["export_topk_k"] = int(topk)
         config["log_dir"] = str((run_dir / "tron_logs").resolve())
         config["num_workers"] = int(self.dataloader_config["num_workers"])
-        config["max_epochs"] = (
-            int(max_epochs) if max_epochs is not None else int(self.train_config["max_epochs"])
+        effective_epochs = (
+            int(max_epochs)
+            if max_epochs is not None
+            else int(self.train_config.get("epochs", self.train_config["max_epochs"]))
         )
+        diagnostic_mode = diagnostic_summary_path is not None
+        checkpoint_protocol = str(
+            self.train_config.get("checkpoint_protocol", "validation_best")
+        ).strip().lower()
+        validation_enabled = bool(self.train_config.get("validation_enabled", True))
+        export_model = str(self.train_config.get("export_model", "last")).strip().lower()
+        if diagnostic_mode:
+            checkpoint_protocol = "validation_best"
+            validation_enabled = True
+            export_model = "last"
+        if checkpoint_protocol == "fixed_epoch" and not validation_enabled:
+            print(
+                "TRON fixed-epoch fast mode: validation disabled, checkpoint monitor disabled, exporting last model."
+            )
+        config["max_epochs"] = int(effective_epochs)
+        config["checkpoint_protocol"] = checkpoint_protocol
+        config["validation_enabled"] = bool(validation_enabled)
+        config["export_model"] = export_model
+        config["checkpoint_monitor_enabled"] = checkpoint_protocol == "validation_best"
         config["accelerator"] = "gpu" if bool(self.device_config["use_gpu"]) else "cpu"
         if diagnostic_summary_path is not None:
             config["diagnostic_summary_path"] = str(Path(diagnostic_summary_path).resolve())
@@ -188,6 +209,9 @@ class TRONRunner(VictimRunnerBase):
             )
 
         print(f"[tron] Completed. Predictions: {export_topk_path}")
+        selected_checkpoint_epoch = (
+            None if checkpoint_protocol == "validation_best" else int(effective_epochs)
+        )
         return {
             "returncode": int(result.returncode),
             "log_path": str(log_path),
@@ -195,6 +219,16 @@ class TRONRunner(VictimRunnerBase):
             "config_path": str(config_path),
             "log_dir": config["log_dir"],
             "victim_train_seed": int(effective_seed),
+            "victim_name": self.name,
+            "checkpoint_protocol": checkpoint_protocol,
+            "validation_enabled": bool(validation_enabled),
+            "export_model": export_model,
+            "epochs_configured": int(effective_epochs),
+            "epochs_completed": int(effective_epochs),
+            "used_best_checkpoint_for_export": False,
+            "selected_checkpoint_epoch": selected_checkpoint_epoch,
+            "selected_checkpoint_path": None,
+            "validation_metrics_recorded": bool(validation_enabled),
         }
 
 

@@ -44,7 +44,7 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 12
+  count: 6
   reuse_saved_targets: true
 
 victims:
@@ -70,9 +70,15 @@ victims:
         epochs: 6
         train_batch_size: 64
         eval_batch_size: 32
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
     tron:
       train:
         max_epochs: 3
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
   runtime:
     miasrec:
       python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"

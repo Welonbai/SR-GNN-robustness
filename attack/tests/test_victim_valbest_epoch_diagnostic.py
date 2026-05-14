@@ -108,8 +108,8 @@ def test_diagnostic_yaml_loads() -> None:
 
     assert config.targets.explicit_list == (39588,)
     assert set(config.victims.enabled) == {"miasrec", "tron"}
-    assert config.victims.params["miasrec"]["train"]["epochs"] == 30
-    assert config.victims.params["tron"]["train"]["max_epochs"] == 30
+    assert config.victims.params["miasrec"]["train"]["epochs"] == 6
+    assert config.victims.params["tron"]["train"]["max_epochs"] == 3
 
 
 def test_explicit_source_resolution_records_identity(tmp_path: Path) -> None:

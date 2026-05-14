@@ -380,7 +380,10 @@ def test_explicit_to_sampled_pts_cem_victim_prediction_cache_reuse(monkeypatch) 
             )
         )
 
-    assert execute_calls == [{"target_item": sampled_target, "victim_name": "srgnn"}]
+    assert execute_calls == [
+        {"target_item": sampled_target, "victim_name": victim_name}
+        for victim_name in explicit_config.victims.enabled
+    ]
     assert sampled_metrics["reused_predictions"] is True
     assert (
         sampled_metrics["victim_prediction_attack_identity_mode"]

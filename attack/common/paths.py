@@ -5,7 +5,13 @@ from typing import Any, Mapping
 import hashlib
 import json
 
-from .config import Config, COVERAGE_AWARE_LOCAL_POSITION_SCORER
+from .config import (
+    Config,
+    COVERAGE_AWARE_LOCAL_POSITION_SCORER,
+    VICTIM_EXPORT_BEST,
+    VICTIM_EXPORT_LAST,
+    VICTIM_VALIDATION_BEST_PROTOCOL,
+)
 from .srgnn_training_protocol import (
     SRGNN_VALIDATION_BEST_PROTOCOL,
     srgnn_checkpoint_protocol,
@@ -489,6 +495,7 @@ _VICTIM_IDENTITY_EXCLUDED_PARAM_KEYS = frozenset(
         "batch_size",
         "train_batch_size",
         "eval_batch_size",
+        "validation_enabled",
     }
 )
 
@@ -547,6 +554,9 @@ def victim_prediction_key_payload(
         "victim_train_seed": int(config.seeds.victim_train_seed),
         "victim_params": victim_params,
     }
+    training_protocol = _external_victim_training_protocol_identity(config, victim_name)
+    if training_protocol is not None:
+        payload["victim_training_protocol"] = training_protocol
     if victim_effective_train_seed is not None:
         payload["victim_effective_train_seed"] = int(victim_effective_train_seed)
     if victim_name == "srgnn":
@@ -559,6 +569,32 @@ def victim_prediction_key_payload(
                 srgnn_validation_protocol_identity(train_config, prefix="victim_srgnn")
             )
     return payload
+
+
+def _external_victim_training_protocol_identity(
+    config: Config,
+    victim_name: str,
+) -> dict[str, Any] | None:
+    if victim_name not in {"miasrec", "tron"}:
+        return None
+    train_config = config.victims.params[victim_name].get("train", {})
+    if not isinstance(train_config, Mapping):
+        return None
+    epochs = train_config.get("epochs", train_config.get("max_epochs"))
+    if epochs is None:
+        return None
+    return {
+        "checkpoint_protocol": str(
+            train_config.get("checkpoint_protocol", VICTIM_VALIDATION_BEST_PROTOCOL)
+        ),
+        "export_model": str(
+            train_config.get(
+                "export_model",
+                VICTIM_EXPORT_BEST if victim_name == "miasrec" else VICTIM_EXPORT_LAST,
+            )
+        ),
+        "epochs": int(epochs),
+    }
 
 
 def victim_prediction_key(

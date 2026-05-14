@@ -51,7 +51,7 @@ EPOCH_DIAG_CONFIG_PATH = Path(
 )
 NEW_DIAGNOSTIC_CONFIG_PATH = Path(
     "attack/configs/"
-    "diginetica_valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_targets39588_1440.yaml"
+    "diginetica_valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_target39588.yaml"
 )
 
 
@@ -174,11 +174,11 @@ def test_new_pts_diagnostic_yaml_loads_with_default_runtime_settings() -> None:
     assert pts is not None
     assert pts.enabled is True
     assert config.experiment.name == (
-        "valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_targets39588_1440"
+        "valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_target39588"
     )
     assert config.targets.mode == "explicit_list"
-    assert list(config.targets.explicit_list) == [39588, 1440]
-    assert config.targets.count == 2
+    assert list(config.targets.explicit_list) == [39588]
+    assert config.targets.count == 1
     assert list(config.victims.enabled) == ["srgnn"]
     assert list(pts.actions.enabled) == [
         "keep_residual_suffix",

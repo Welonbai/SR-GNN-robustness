@@ -1,5 +1,5 @@
 experiment:
-  name: valbest_attack_ptscem_ratio1_partial4_sample
+  name: valbest_attack_ptscem_ratio1_srgnn_miasrec_tron_fixed_epoch_fast_sample2
 
 data:
   dataset_name: diginetica
@@ -130,7 +130,7 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 3
+  count: 2
   reuse_saved_targets: false
 
 victims:
@@ -154,14 +154,14 @@ victims:
     miasrec:
       train:
         epochs: 6
-        train_batch_size: 64
-        eval_batch_size: 32
         checkpoint_protocol: fixed_epoch
         validation_enabled: false
         export_model: last
+        train_batch_size: 64
+        eval_batch_size: 32
     tron:
       train:
-        max_epochs: 3
+        epochs: 4
         checkpoint_protocol: fixed_epoch
         validation_enabled: false
         export_model: last
