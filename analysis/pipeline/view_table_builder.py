@@ -28,6 +28,7 @@ ALLOWED_AGGREGATIONS = {
     "first",
     "last",
 }
+ALLOWED_MEAN_COMPLETENESS_ON_MISSING = {"error", "warn"}
 COLUMN_LABEL_SEPARATOR = " | "
 METRIC_COLUMN = "metric"
 METRIC_NAME_COLUMN = "metric_name"
@@ -64,6 +65,7 @@ class ViewSpec:
     auto_context: bool
     require_unique_cells: bool
     ground_truth_relative_to_clean: GroundTruthRelativeToCleanSpec | None
+    mean_completeness: MeanCompletenessSpec | None
 
 
 @dataclass(frozen=True)
@@ -72,6 +74,17 @@ class GroundTruthRelativeToCleanSpec:
 
     baseline_attack_method: str
     ignore_pairing_columns: list[str]
+
+
+@dataclass(frozen=True)
+class MeanCompletenessSpec:
+    """Optional strict completeness guard before view-time aggregation."""
+
+    complete_over: str
+    expected_values: list[Any]
+    group_by: list[str]
+    on_missing: str
+    write_missing_report: bool
 
 
 @dataclass(frozen=True)
@@ -195,6 +208,11 @@ def parse_view_spec(payload: Mapping[str, Any], *, source_spec_path: Path) -> Vi
         payload.get("ground_truth_relative_to_clean"),
         label="ground_truth_relative_to_clean",
     )
+    mean_completeness = normalize_mean_completeness_spec(
+        payload.get("mean_completeness"),
+        filters=filters,
+        label="mean_completeness",
+    )
     if agg not in ALLOWED_AGGREGATIONS:
         raise AnalysisError(
             f"Unsupported agg '{agg}'. Allowed values: {sorted(ALLOWED_AGGREGATIONS)}."
@@ -214,6 +232,7 @@ def parse_view_spec(payload: Mapping[str, Any], *, source_spec_path: Path) -> Vi
         auto_context=auto_context,
         require_unique_cells=require_unique_cells,
         ground_truth_relative_to_clean=ground_truth_relative_to_clean,
+        mean_completeness=mean_completeness,
     )
 
 
@@ -250,6 +269,9 @@ def prepare_view_dataframe(dataframe: pd.DataFrame, spec: ViewSpec) -> pd.DataFr
     requested_columns.update(spec.filters.keys())
     if spec.ground_truth_relative_to_clean is not None:
         requested_columns.add(METRIC_SCOPE_COLUMN)
+    if spec.mean_completeness is not None:
+        requested_columns.add(spec.mean_completeness.complete_over)
+        requested_columns.update(spec.mean_completeness.group_by)
 
     missing_derived_columns = sorted(
         column_name
@@ -509,6 +531,14 @@ def write_view_bundle(
 ) -> None:
     """Write one fully-renderable view bundle."""
     hidden_column_summary = summarize_hidden_columns(dataframe, spec)
+    mean_completeness_report_path: Path | None = None
+    if spec.mean_completeness is not None:
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        mean_completeness_report_path = validate_mean_completeness(
+            dataframe=dataframe,
+            spec=spec.mean_completeness,
+            bundle_dir=bundle_dir,
+        )
     if spec.require_unique_cells:
         validate_unique_cells(dataframe, spec)
 
@@ -575,6 +605,18 @@ def write_view_bundle(
             "baseline_attack_method": spec.ground_truth_relative_to_clean.baseline_attack_method,
             "ignore_pairing_columns": spec.ground_truth_relative_to_clean.ignore_pairing_columns,
         }
+    if spec.mean_completeness is not None:
+        mean_meta: dict[str, Any] = {
+            "enabled": True,
+            "complete_over": spec.mean_completeness.complete_over,
+            "expected_values": normalize_for_json(spec.mean_completeness.expected_values),
+            "group_by": list(spec.mean_completeness.group_by),
+            "on_missing": spec.mean_completeness.on_missing,
+            "write_missing_report": spec.mean_completeness.write_missing_report,
+        }
+        if mean_completeness_report_path is not None:
+            mean_meta["missing_report_path"] = to_repo_relative(mean_completeness_report_path)
+        meta["mean_completeness"] = mean_meta
     write_json(meta_path, meta)
 
 
@@ -610,6 +652,168 @@ def build_report_table(dataframe: pd.DataFrame, spec: ViewSpec) -> tuple[pd.Data
     flattened = pivoted.reset_index()
     flattened.columns = [flatten_column_label(column) for column in flattened.columns]
     return flattened, pivot_structure
+
+
+def validate_mean_completeness(
+    *,
+    dataframe: pd.DataFrame,
+    spec: MeanCompletenessSpec,
+    bundle_dir: Path,
+) -> Path | None:
+    """Require every aggregate group to contain all configured complete-over values."""
+    validate_required_columns(
+        dataframe,
+        required_columns=spec.group_by + [spec.complete_over],
+        label="view input CSV for mean_completeness",
+    )
+    duplicate_group_by_columns = sorted(
+        {column_name for column_name in spec.group_by if spec.group_by.count(column_name) > 1}
+    )
+    if duplicate_group_by_columns:
+        raise AnalysisError(
+            "mean_completeness.group_by contains duplicate columns: "
+            f"{duplicate_group_by_columns}."
+        )
+    if spec.complete_over in spec.group_by:
+        raise AnalysisError(
+            "mean_completeness.complete_over must not also appear in "
+            f"mean_completeness.group_by: '{spec.complete_over}'."
+        )
+
+    expected_lookup = {
+        stringify_completeness_value(value): value for value in spec.expected_values
+    }
+    expected_keys = list(expected_lookup.keys())
+    missing_rows: list[dict[str, Any]] = []
+
+    grouped = dataframe.groupby(spec.group_by, dropna=False, sort=True)
+    for raw_group_key, group in grouped:
+        group_values = coerce_group_key(raw_group_key, level_count=len(spec.group_by))
+        observed_lookup: dict[str, Any] = {}
+        for raw_value in group[spec.complete_over].dropna().tolist():
+            observed_value = normalize_completeness_value(
+                raw_value,
+                label=f"mean_completeness.{spec.complete_over} observed value",
+            )
+            observed_lookup.setdefault(stringify_completeness_value(observed_value), observed_value)
+
+        missing_keys = [value_key for value_key in expected_keys if value_key not in observed_lookup]
+        if not missing_keys:
+            continue
+
+        row = {
+            column_name: normalize_scalar(group_value)
+            for column_name, group_value in zip(spec.group_by, group_values, strict=True)
+        }
+        observed_values = sorted(
+            observed_lookup.values(),
+            key=lambda item: stringify_completeness_value(item),
+        )
+        missing_values = [expected_lookup[value_key] for value_key in missing_keys]
+        row.update(
+            {
+                "complete_over": spec.complete_over,
+                "expected_count": len(spec.expected_values),
+                "observed_count": len(observed_lookup),
+                "observed_count_distinct": len(observed_lookup),
+                "raw_row_count": int(len(group)),
+                "expected_values": json.dumps(
+                    normalize_for_json(spec.expected_values),
+                    sort_keys=True,
+                ),
+                "observed_values": json.dumps(
+                    normalize_for_json(observed_values),
+                    sort_keys=True,
+                ),
+                "missing_values": json.dumps(
+                    normalize_for_json(missing_values),
+                    sort_keys=True,
+                ),
+            }
+        )
+        missing_rows.append(row)
+
+    if not missing_rows:
+        return None
+
+    report_path: Path | None = None
+    if spec.write_missing_report:
+        report_path = bundle_dir / "mean_completeness_missing_report.csv"
+        pd.DataFrame(missing_rows).to_csv(report_path, index=False)
+
+    message = build_mean_completeness_failure_message(
+        spec=spec,
+        missing_rows=missing_rows,
+        report_path=report_path,
+    )
+    if spec.on_missing == "error":
+        raise AnalysisError(message)
+
+    print(f"Warning: {message}")
+    return report_path
+
+
+def build_mean_completeness_failure_message(
+    *,
+    spec: MeanCompletenessSpec,
+    missing_rows: list[dict[str, Any]],
+    report_path: Path | None,
+) -> str:
+    """Build a clear error/warning for incomplete aggregate groups."""
+    parts = [
+        f"Mean completeness check failed for complete_over={spec.complete_over}.",
+        f"Expected {len(spec.expected_values)} values: {normalize_for_json(spec.expected_values)}.",
+        f"Found {len(missing_rows)} incomplete groups.",
+    ]
+    if report_path is not None:
+        parts.append(f"Missing report written to: {report_path}.")
+    example = missing_rows[0]
+    example_fields = [
+        f"{column_name}={example[column_name]}" for column_name in spec.group_by
+    ]
+    example_fields.append(f"missing {spec.complete_over}={example['missing_values']}")
+    parts.append("Example incomplete group: " + ", ".join(example_fields) + ".")
+    return " ".join(parts)
+
+
+def coerce_group_key(raw_key: Any, *, level_count: int) -> tuple[Any, ...]:
+    """Normalize one pandas groupby key into a tuple with the expected arity."""
+    if level_count == 1:
+        return (raw_key,)
+    if isinstance(raw_key, tuple) and len(raw_key) == level_count:
+        return raw_key
+    raise AnalysisError(
+        f"Unexpected mean_completeness group key {raw_key!r}; expected {level_count} levels."
+    )
+
+
+def normalize_completeness_value(value: Any, *, label: str) -> Any:
+    """Normalize one scalar value used by the completeness guard."""
+    if isinstance(value, (list, dict)):
+        raise AnalysisError(f"Expected '{label}' to be a scalar value.")
+    normalized = normalize_scalar(value)
+    if normalized is None or pd.isna(normalized):
+        raise AnalysisError(f"Expected '{label}' to be non-null.")
+    return normalized
+
+
+def stringify_completeness_value(value: Any) -> str:
+    """Build a type-stable comparison key while allowing numeric strings to match ints."""
+    normalized = normalize_completeness_value(value, label="mean_completeness value")
+    if isinstance(normalized, str):
+        stripped = normalized.strip()
+        if stripped.lstrip("-").isdigit():
+            return f"int:{int(stripped)}"
+        return f"str:{stripped}"
+    if isinstance(normalized, bool):
+        return f"bool:{normalized}"
+    if isinstance(normalized, int):
+        return f"int:{normalized}"
+    if isinstance(normalized, float) and normalized.is_integer():
+        return f"int:{int(normalized)}"
+    if isinstance(normalized, float):
+        return f"float:{normalized:.17g}"
+    return f"{type(normalized).__name__}:{normalized}"
 
 
 def summarize_hidden_columns(dataframe: pd.DataFrame, spec: ViewSpec) -> HiddenColumnSummary:
@@ -859,6 +1063,91 @@ def normalize_filters(value: Any) -> dict[str, Any]:
             normalized[key] = [normalize_scalar(item) for item in raw_value]
         else:
             normalized[key] = normalize_scalar(raw_value)
+    return normalized
+
+
+def normalize_mean_completeness_spec(
+    value: Any,
+    *,
+    filters: Mapping[str, Any],
+    label: str,
+) -> MeanCompletenessSpec | None:
+    """Normalize an optional completeness guard for aggregate views."""
+    if value is None:
+        return None
+
+    payload = require_mapping(value, label=label)
+    enabled = require_bool(payload.get("enabled", False), label=f"{label}.enabled")
+    if not enabled:
+        return None
+
+    complete_over = require_nonempty_string(
+        payload.get("complete_over"),
+        label=f"{label}.complete_over",
+    )
+    expected_values = normalize_mean_completeness_expected_values(
+        payload.get("expected_values"),
+        filters=filters,
+        complete_over=complete_over,
+        label=f"{label}.expected_values",
+    )
+    group_by = require_string_list(payload.get("group_by"), label=f"{label}.group_by")
+    on_missing = require_nonempty_string(
+        payload.get("on_missing", "error"),
+        label=f"{label}.on_missing",
+    ).lower()
+    if on_missing not in ALLOWED_MEAN_COMPLETENESS_ON_MISSING:
+        raise AnalysisError(
+            f"Unsupported {label}.on_missing '{on_missing}'. "
+            f"Allowed values: {sorted(ALLOWED_MEAN_COMPLETENESS_ON_MISSING)}."
+        )
+    write_missing_report = require_bool(
+        payload.get("write_missing_report", False),
+        label=f"{label}.write_missing_report",
+    )
+
+    return MeanCompletenessSpec(
+        complete_over=complete_over,
+        expected_values=expected_values,
+        group_by=group_by,
+        on_missing=on_missing,
+        write_missing_report=write_missing_report,
+    )
+
+
+def normalize_mean_completeness_expected_values(
+    value: Any,
+    *,
+    filters: Mapping[str, Any],
+    complete_over: str,
+    label: str,
+) -> list[Any]:
+    """Resolve and validate the expected complete-over values."""
+    raw_values = value
+    if raw_values is None:
+        filter_value = filters.get(complete_over)
+        if isinstance(filter_value, list) and filter_value:
+            raw_values = filter_value
+        else:
+            raise AnalysisError(
+                f"{label} is required unless filters.{complete_over} is a non-empty list."
+            )
+    if not isinstance(raw_values, list) or not raw_values:
+        raise AnalysisError(f"Expected '{label}' to be a non-empty list.")
+
+    normalized: list[Any] = []
+    seen_keys: set[str] = set()
+    duplicate_values: list[Any] = []
+    for index, raw_item in enumerate(raw_values):
+        normalized_item = normalize_completeness_value(raw_item, label=f"{label}[{index}]")
+        item_key = stringify_completeness_value(normalized_item)
+        if item_key in seen_keys:
+            duplicate_values.append(normalized_item)
+        seen_keys.add(item_key)
+        normalized.append(normalized_item)
+
+    if duplicate_values:
+        raise AnalysisError(f"Duplicate values are not allowed in '{label}': {duplicate_values}.")
     return normalized
 
 
@@ -1273,6 +1562,8 @@ def build_slice_context(slice_metadata: Mapping[str, Any] | None) -> dict[str, A
 def normalize_optional_string_list(value: Any, *, label: str) -> list[str]:
     """Normalize an optional list of strings."""
     if value is None:
+        return []
+    if isinstance(value, list) and not value:
         return []
     return require_string_list(value, label=label)
 

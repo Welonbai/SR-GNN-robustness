@@ -1,0 +1,44 @@
+name: ptscem_mean_targets_example
+
+input: results\comparisons\diginetica_seven_method_compare\merged_long_table.csv
+output: results\comparisons\diginetica_seven_method_compare\ptscem_mean_targets_example
+
+filters:
+  target_item: [11103, 39588]
+  victim_model: [srgnn, miasrec, tron]
+  attack_method: [cem]
+  poison_model: srgnn
+  target_type: popular
+  attack_size: 0.01
+  metric_name: [recall, mrr]
+  metric_scope: [ground_truth, targeted]
+  k: [10, 20]
+
+split_by: []
+
+rows:
+  - victim_model
+  - attack_method
+
+cols:
+  - metric_scope
+  - metric_name
+  - k
+
+value_col: value
+agg: mean
+auto_context: true
+require_unique_cells: false
+
+mean_completeness:
+  enabled: true
+  complete_over: target_item
+  expected_values: [11103, 39588]
+  group_by:
+    - victim_model
+    - attack_method
+    - metric_scope
+    - metric_name
+    - k
+  on_missing: error
+  write_missing_report: true

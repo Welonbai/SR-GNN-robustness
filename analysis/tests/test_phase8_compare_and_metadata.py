@@ -215,6 +215,107 @@ def _rows_for_method_stats_case(
     return rows
 
 
+def _mean_completeness_rows(
+    *,
+    targets: list[int],
+    victims: list[str] | None = None,
+    methods: list[str] | None = None,
+    metrics: list[str] | None = None,
+    ks: list[int] | None = None,
+) -> list[dict[str, object]]:
+    victims = victims or ["srgnn", "tron"]
+    methods = methods or ["random_nz", "pts_cem"]
+    metrics = metrics or ["recall", "mrr"]
+    ks = ks or [10, 20]
+    rows: list[dict[str, object]] = []
+    for victim_model in victims:
+        for attack_method in methods:
+            for target_item in targets:
+                for metric in metrics:
+                    for k_value in ks:
+                        rows.append(
+                            {
+                                "run_id": f"{attack_method}_{target_item}",
+                                "dataset": "diginetica",
+                                "attack_method": attack_method,
+                                "victim_model": victim_model,
+                                "target_item": target_item,
+                                "target_type": "popular",
+                                "attack_size": 0.01,
+                                "poison_model": "srgnn",
+                                "fake_session_generation_topk": 20,
+                                "replacement_topk_ratio": 1.0,
+                                "metric": metric,
+                                "k": k_value,
+                                "value": float(target_item % 100) + float(k_value) / 100.0,
+                            }
+                        )
+    return rows
+
+
+def _write_mean_completeness_input(
+    *,
+    token: str,
+    rows: list[dict[str, object]],
+    created_paths: list[Path],
+) -> Path:
+    bundle_dir = RESULTS_ROOT / "tests" / f"phase8_{token}_mean_input"
+    created_paths.append(bundle_dir)
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = bundle_dir / "merged_long_table.csv"
+    pd.DataFrame(rows, columns=CANONICAL_COLUMNS).to_csv(csv_path, index=False)
+    return csv_path
+
+
+def _mean_completeness_view_payload(
+    *,
+    input_csv: Path,
+    output_dir: Path,
+    mean_completeness: dict[str, object] | None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "name": "mean_completeness_test_view",
+        "input": str(input_csv),
+        "output": str(output_dir),
+        "filters": {
+            "target_item": [11103, 39588],
+            "victim_model": ["srgnn", "tron"],
+            "metric_name": ["recall", "mrr"],
+            "metric_scope": ["targeted"],
+            "k": [10, 20],
+        },
+        "split_by": [],
+        "rows": ["victim_model", "attack_method"],
+        "cols": ["metric_scope", "metric_name", "k"],
+        "value_col": "value",
+        "agg": "mean",
+        "auto_context": True,
+        "require_unique_cells": False,
+    }
+    if mean_completeness is not None:
+        payload["mean_completeness"] = mean_completeness
+    return payload
+
+
+def _enabled_mean_completeness_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "enabled": True,
+        "complete_over": "target_item",
+        "expected_values": [11103, 39588],
+        "group_by": [
+            "victim_model",
+            "attack_method",
+            "metric_scope",
+            "metric_name",
+            "k",
+        ],
+        "on_missing": "error",
+        "write_missing_report": True,
+    }
+    payload.update(overrides)
+    return payload
+
+
 def test_compare_runs_strict_accepts_compatible_slice_manifests() -> None:
     with _phase8_results_root() as (token, created_paths):
         run_ids = [f"phase8_{token}_a", f"phase8_{token}_b"]
@@ -601,6 +702,221 @@ def test_view_table_builder_propagates_slice_metadata_into_meta_and_context() ->
     assert meta["context"]["slice_policy"] == "largest_complete_prefix"
     assert meta["context"]["requested_victims"] == ["miasrec", "tron"]
     assert meta["source_slice_manifest_path"].endswith("slice_manifest.json")
+
+
+def test_view_table_builder_mean_completeness_passes_for_complete_targets() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=_mean_completeness_rows(targets=[11103, 39588]),
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_complete"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            _mean_completeness_view_payload(
+                input_csv=input_csv,
+                output_dir=output_bundle_dir,
+                mean_completeness=_enabled_mean_completeness_payload(),
+            ),
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_complete.yaml",
+        )
+
+        bundle_dirs = build_view_bundles(view_spec)
+        table = pd.read_csv(bundle_dirs[0] / "table.csv")
+        meta = _load_json(bundle_dirs[0] / "meta.json")
+
+    assert table["victim_model"].tolist() == ["srgnn", "srgnn", "tron", "tron"]
+    assert (bundle_dirs[0] / "mean_completeness_missing_report.csv").exists() is False
+    assert meta["mean_completeness"]["complete_over"] == "target_item"
+    assert meta["mean_completeness"]["expected_values"] == [11103, 39588]
+
+
+def test_view_table_builder_mean_completeness_errors_and_writes_missing_report() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        rows = _mean_completeness_rows(targets=[11103, 39588])
+        rows = [
+            row
+            for row in rows
+            if not (
+                row["victim_model"] == "tron"
+                and row["attack_method"] == "pts_cem"
+                and row["target_item"] == 39588
+                and row["metric"] == "mrr"
+                and row["k"] == 20
+            )
+        ]
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=rows,
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_missing"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            _mean_completeness_view_payload(
+                input_csv=input_csv,
+                output_dir=output_bundle_dir,
+                mean_completeness=_enabled_mean_completeness_payload(),
+            ),
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_missing.yaml",
+        )
+
+        with pytest.raises(ViewAnalysisError) as exc_info:
+            build_view_bundles(view_spec)
+
+        report_path = output_bundle_dir / "mean_completeness_missing_report.csv"
+        report = pd.read_csv(report_path)
+        report_exists = report_path.exists()
+
+    assert "Mean completeness check failed for complete_over=target_item" in str(exc_info.value)
+    assert "Found 1 incomplete groups" in str(exc_info.value)
+    assert report_exists
+    assert report.loc[0, "victim_model"] == "tron"
+    assert report.loc[0, "attack_method"] == "pts_cem"
+    assert report.loc[0, "metric_scope"] == "targeted"
+    assert report.loc[0, "metric_name"] == "mrr"
+    assert int(report.loc[0, "k"]) == 20
+    assert report.loc[0, "missing_values"] == "[39588]"
+
+
+def test_view_table_builder_mean_completeness_warn_mode_continues(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with _phase8_results_root() as (token, created_paths):
+        rows = _mean_completeness_rows(targets=[11103, 39588], victims=["tron"], methods=["pts_cem"])
+        rows = [row for row in rows if not (row["target_item"] == 39588 and row["metric"] == "mrr")]
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=rows,
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_warn"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            _mean_completeness_view_payload(
+                input_csv=input_csv,
+                output_dir=output_bundle_dir,
+                mean_completeness=_enabled_mean_completeness_payload(on_missing="warn"),
+            ),
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_warn.yaml",
+        )
+
+        bundle_dirs = build_view_bundles(view_spec)
+        report_path = bundle_dirs[0] / "mean_completeness_missing_report.csv"
+        report = pd.read_csv(report_path)
+        captured = capsys.readouterr()
+        report_exists = report_path.exists()
+        table_exists = (bundle_dirs[0] / "table.csv").is_file()
+
+    assert "Warning: Mean completeness check failed" in captured.out
+    assert report_exists
+    assert len(report) == 2
+    assert table_exists
+
+
+def test_view_table_builder_mean_completeness_infers_expected_values_from_filter() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=_mean_completeness_rows(targets=[11103, 39588], victims=["srgnn"], methods=["pts_cem"]),
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_infer"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            _mean_completeness_view_payload(
+                input_csv=input_csv,
+                output_dir=output_bundle_dir,
+                mean_completeness=_enabled_mean_completeness_payload(expected_values=None),
+            ),
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_infer.yaml",
+        )
+
+        bundle_dirs = build_view_bundles(view_spec)
+        meta = _load_json(bundle_dirs[0] / "meta.json")
+
+    assert meta["mean_completeness"]["expected_values"] == [11103, 39588]
+
+
+def test_view_table_builder_mean_completeness_rejects_missing_complete_over_column() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=_mean_completeness_rows(targets=[11103, 39588]),
+            created_paths=created_paths,
+        )
+        dataframe = pd.read_csv(input_csv).drop(columns=["target_item"])
+        dataframe.to_csv(input_csv, index=False)
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_missing_complete_over"
+        created_paths.append(output_bundle_dir)
+
+        view_spec = parse_view_spec(
+            _mean_completeness_view_payload(
+                input_csv=input_csv,
+                output_dir=output_bundle_dir,
+                mean_completeness=_enabled_mean_completeness_payload(),
+            ),
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_missing_col.yaml",
+        )
+        with pytest.raises(ViewAnalysisError) as exc_info:
+            build_view_bundles(view_spec)
+
+    assert "derived metric columns" not in str(exc_info.value)
+    assert "target_item" in str(exc_info.value)
+
+
+def test_view_table_builder_mean_completeness_rejects_missing_group_by_column() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=_mean_completeness_rows(targets=[11103, 39588]),
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_missing_group_by"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            _mean_completeness_view_payload(
+                input_csv=input_csv,
+                output_dir=output_bundle_dir,
+                mean_completeness=_enabled_mean_completeness_payload(group_by=["missing_column"]),
+            ),
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_missing_group_by.yaml",
+        )
+
+        with pytest.raises(ViewAnalysisError) as exc_info:
+            build_view_bundles(view_spec)
+
+    assert "mean_completeness" in str(exc_info.value)
+    assert "missing_column" in str(exc_info.value)
+
+
+def test_view_table_builder_without_mean_completeness_keeps_existing_mean_behavior() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        rows = _mean_completeness_rows(targets=[11103, 39588], victims=["tron"], methods=["pts_cem"])
+        rows = [row for row in rows if not (row["target_item"] == 39588 and row["metric"] == "mrr")]
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=rows,
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_legacy"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            _mean_completeness_view_payload(
+                input_csv=input_csv,
+                output_dir=output_bundle_dir,
+                mean_completeness=None,
+            ),
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_legacy.yaml",
+        )
+
+        bundle_dirs = build_view_bundles(view_spec)
+        table_exists = (bundle_dirs[0] / "table.csv").is_file()
+        report_exists = (bundle_dirs[0] / "mean_completeness_missing_report.csv").exists()
+
+    assert table_exists
+    assert report_exists is False
 
 
 def test_view_table_builder_transforms_ground_truth_relative_to_clean_before_aggregation() -> None:
