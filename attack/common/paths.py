@@ -433,6 +433,7 @@ def _pts_construction_identity_payload(config: Config) -> Any:
         if isinstance(cem, dict):
             cem = dict(cem)
             cem.pop("epoch_reward_diagnostics", None)
+            cem.pop("surrogate_retrain", None)
             payload = dict(payload)
             payload["cem"] = cem
     return payload

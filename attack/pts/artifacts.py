@@ -104,6 +104,7 @@ def write_pts_cem_artifacts(
                 "selected_as_global_best": bool(candidate.selected_as_global_best),
                 "policy": candidate.policy.to_dict(),
                 **_candidate_seed_alignment_payload(candidate),
+                **_candidate_surrogate_retrain_payload(candidate),
                 **_candidate_sampling_payload(candidate),
             }
         )
@@ -169,6 +170,7 @@ def _candidate_trace_row(
                 write_candidate_epoch_metrics=write_candidate_epoch_metrics,
             ),
             **_candidate_seed_alignment_payload(candidate),
+            **_candidate_surrogate_retrain_payload(candidate),
             **_candidate_sampling_payload(candidate),
         }
     )
@@ -193,6 +195,7 @@ def _best_policy_payload(
                 write_candidate_epoch_metrics=write_candidate_epoch_metrics,
             ),
             **_candidate_seed_alignment_payload(candidate),
+            **_candidate_surrogate_retrain_payload(candidate),
             **_candidate_sampling_payload(candidate),
             "policy": candidate.policy.to_dict(),
         }
@@ -227,6 +230,7 @@ def _top_candidate_metadata(
                 write_candidate_epoch_metrics=write_candidate_epoch_metrics,
             ),
             **_candidate_seed_alignment_payload(candidate),
+            **_candidate_surrogate_retrain_payload(candidate),
             **_candidate_sampling_payload(candidate),
             "policy": candidate.policy.to_dict(),
         }
@@ -257,6 +261,20 @@ _SEED_ALIGNMENT_METADATA_KEYS = (
     "surrogate_victim_seed_aligned",
 )
 
+_SURROGATE_RETRAIN_METADATA_KEYS = (
+    "pts_cem_surrogate_retrain_checkpoint_protocol",
+    "pts_cem_surrogate_retrain_validation_enabled",
+    "pts_cem_surrogate_retrain_reward_checkpoint",
+    "pts_cem_surrogate_retrain_identity_neutral",
+    "pts_cem_surrogate_retrain_identity_note",
+    "selected_checkpoint_epoch",
+    "selected_checkpoint_protocol",
+    "selected_checkpoint_source",
+    "selected_checkpoint_metric",
+    "validation_best_metrics_recorded",
+    "official_reward_checkpoint_epoch",
+)
+
 
 def _candidate_seed_alignment_payload(
     candidate: PTSCEMCandidateResult,
@@ -265,6 +283,17 @@ def _candidate_seed_alignment_payload(
     return {
         key: metadata[key]
         for key in _SEED_ALIGNMENT_METADATA_KEYS
+        if key in metadata
+    }
+
+
+def _candidate_surrogate_retrain_payload(
+    candidate: PTSCEMCandidateResult,
+) -> dict[str, Any]:
+    metadata = dict(candidate.evaluator_metadata)
+    return {
+        key: metadata[key]
+        for key in _SURROGATE_RETRAIN_METADATA_KEYS
         if key in metadata
     }
 

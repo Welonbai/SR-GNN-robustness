@@ -7,7 +7,7 @@ import shutil
 from uuid import uuid4
 
 from attack.common.artifact_io import load_json, save_json
-from attack.common.config import load_config
+from attack.common.config import PTSCEMSurrogateRetrainRuntimeConfig, load_config
 from attack.common.paths import (
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     shared_artifact_paths,
@@ -149,6 +149,47 @@ def test_pts_cem_victim_identity_excludes_evaluation_rendering_config() -> None:
         "srgnn",
         run_type=RUN_TYPE,
         victim_attack_identity_context=changed_identity,
+        victim_effective_train_seed=123,
+    )
+
+
+def test_pts_cem_surrogate_retrain_protocol_excluded_from_victim_identity() -> None:
+    config = _base_config()
+    pts = config.attack.pts_construction
+    assert pts is not None
+    fixed_config = replace(
+        config,
+        attack=replace(
+            config.attack,
+            pts_construction=replace(
+                pts,
+                cem=replace(
+                    pts.cem,
+                    surrogate_retrain=PTSCEMSurrogateRetrainRuntimeConfig(
+                        checkpoint_protocol="fixed_last",
+                        validation_enabled=False,
+                        reward_checkpoint="last",
+                    ),
+                ),
+            ),
+        ),
+    )
+    metadata = _metadata()
+    identity = _identity(config, metadata=metadata)
+    fixed_identity = _identity(fixed_config, metadata=metadata)
+
+    assert identity == fixed_identity
+    assert victim_prediction_key(
+        config,
+        "srgnn",
+        run_type=RUN_TYPE,
+        victim_attack_identity_context=identity,
+        victim_effective_train_seed=123,
+    ) == victim_prediction_key(
+        fixed_config,
+        "srgnn",
+        run_type=RUN_TYPE,
+        victim_attack_identity_context=fixed_identity,
         victim_effective_train_seed=123,
     )
 

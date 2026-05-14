@@ -17,6 +17,7 @@ from attack.common.config import (
     PTSFinalSelectionConfig,
     PTSRewardConfig,
     PTSCEMRuntimeConfig,
+    PTSCEMSurrogateRetrainRuntimeConfig,
     PTSSuffixLengthBucketConfig,
     load_config,
 )
@@ -33,7 +34,9 @@ from attack.pipeline.runs.run_pts_construction_cem import (
     _build_pts_specs_from_config,
     _build_suffix_length_buckets_from_config,
     _validate_pts_construction_run_config,
+    build_pts_cem_shared_cache_identity,
     build_pts_construction_attack_identity_context,
+    pts_cem_shared_cache_key,
     pts_cem_surrogate_seed_alignment_metadata,
     resolve_pts_cem_surrogate_effective_seed,
 )
@@ -52,6 +55,10 @@ EPOCH_DIAG_CONFIG_PATH = Path(
 NEW_DIAGNOSTIC_CONFIG_PATH = Path(
     "attack/configs/"
     "diginetica_valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_target39588.yaml"
+)
+FAST_SURROGATE_CONFIG_PATH = Path(
+    "attack/configs/"
+    "diginetica_valbest_attack_ptscem_ratio1_partial4_sample2_fast_surrogate.yaml"
 )
 
 
@@ -81,6 +88,49 @@ def test_pts_pipeline_yaml_loads() -> None:
     assert config.victims.params["srgnn"]["train"]["epochs"] == 4
     assert pts.cem.epoch_reward_diagnostics.enabled is False
     assert pts.cem.epoch_reward_diagnostics.epochs == ()
+    assert pts.cem.surrogate_retrain.checkpoint_protocol == "validation_best"
+    assert pts.cem.surrogate_retrain.validation_enabled is True
+    assert pts.cem.surrogate_retrain.reward_checkpoint == "best"
+
+
+def test_pts_surrogate_retrain_fixed_last_config_validation() -> None:
+    fixed = PTSCEMSurrogateRetrainRuntimeConfig(
+        checkpoint_protocol="fixed_last",
+        validation_enabled=False,
+        reward_checkpoint="last",
+    )
+
+    assert fixed.checkpoint_protocol == "fixed_last"
+    assert fixed.validation_enabled is False
+    assert fixed.reward_checkpoint == "last"
+
+    with pytest.raises(ValueError, match="fixed_last requires"):
+        PTSCEMSurrogateRetrainRuntimeConfig(
+            checkpoint_protocol="fixed_last",
+            validation_enabled=False,
+            reward_checkpoint="best",
+        )
+    with pytest.raises(ValueError, match="validation_best requires"):
+        PTSCEMSurrogateRetrainRuntimeConfig(
+            checkpoint_protocol="validation_best",
+            validation_enabled=False,
+            reward_checkpoint="best",
+        )
+
+
+def test_pts_fast_surrogate_yaml_loads() -> None:
+    config = load_config(FAST_SURROGATE_CONFIG_PATH)
+    pts = config.attack.pts_construction
+    assert pts is not None
+
+    assert config.experiment.name == (
+        "valbest_attack_ptscem_ratio1_partial4_sample2_fast_surrogate"
+    )
+    assert config.targets.count == 2
+    assert config.victims.params["srgnn"]["train"]["epochs"] == 4
+    assert pts.cem.surrogate_retrain.checkpoint_protocol == "fixed_last"
+    assert pts.cem.surrogate_retrain.validation_enabled is False
+    assert pts.cem.surrogate_retrain.reward_checkpoint == "last"
 
 
 def test_pts_epoch_reward_diagnostics_yaml_loads() -> None:
@@ -469,6 +519,61 @@ def test_pts_epoch_reward_diagnostics_do_not_enter_attack_identity() -> None:
             run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
         )
         == base_attack_key
+    )
+
+
+def test_pts_surrogate_retrain_protocol_is_identity_neutral() -> None:
+    config = load_config(CONFIG_PATH)
+    pts = config.attack.pts_construction
+    assert pts is not None
+    fixed_config = _with_pts(
+        config,
+        replace(
+            pts,
+            cem=replace(
+                pts.cem,
+                surrogate_retrain=PTSCEMSurrogateRetrainRuntimeConfig(
+                    checkpoint_protocol="fixed_last",
+                    validation_enabled=False,
+                    reward_checkpoint="last",
+                ),
+            ),
+        ),
+    )
+    target_item = 5334
+    fake_sessions_path = Path(__file__)
+
+    base_context = build_pts_construction_attack_identity_context(config)
+    fixed_context = build_pts_construction_attack_identity_context(fixed_config)
+    assert base_context == fixed_context
+    assert (
+        attack_key(
+            config,
+            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            attack_identity_context=base_context,
+        )
+        == attack_key(
+            fixed_config,
+            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            attack_identity_context=fixed_context,
+        )
+    )
+
+    base_shared_identity = build_pts_cem_shared_cache_identity(
+        config,
+        target_item=target_item,
+        fake_sessions_path=fake_sessions_path,
+        poison_model_path=None,
+    )
+    fixed_shared_identity = build_pts_cem_shared_cache_identity(
+        fixed_config,
+        target_item=target_item,
+        fake_sessions_path=fake_sessions_path,
+        poison_model_path=None,
+    )
+    assert base_shared_identity == fixed_shared_identity
+    assert pts_cem_shared_cache_key(base_shared_identity) == pts_cem_shared_cache_key(
+        fixed_shared_identity
     )
 
 

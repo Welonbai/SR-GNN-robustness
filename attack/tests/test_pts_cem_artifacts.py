@@ -60,6 +60,20 @@ def _evaluator_fn(**kwargs) -> PTSCEMEvaluationResult:
         metadata={
             "candidate_seed": int(kwargs["candidate_seed"]),
             **EXPECTED_SEED_ALIGNMENT,
+            "pts_cem_surrogate_retrain_checkpoint_protocol": "fixed_last",
+            "pts_cem_surrogate_retrain_validation_enabled": False,
+            "pts_cem_surrogate_retrain_reward_checkpoint": "last",
+            "pts_cem_surrogate_retrain_identity_neutral": True,
+            "pts_cem_surrogate_retrain_identity_note": (
+                "Surrogate retrain checkpoint protocol is intentionally excluded "
+                "from PTS-CEM cache identity."
+            ),
+            "selected_checkpoint_epoch": 4,
+            "selected_checkpoint_protocol": "fixed_last",
+            "selected_checkpoint_source": "last_epoch",
+            "selected_checkpoint_metric": None,
+            "validation_best_metrics_recorded": False,
+            "official_reward_checkpoint_epoch": 4,
         },
     )
 
@@ -180,6 +194,11 @@ def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None
         assert all(row["sampled_policy_max_probability"] == 0.90 for row in trace_rows)
         assert all("parent_candidate_key" in row for row in trace_rows)
         _assert_seed_alignment_payload(trace_rows[0])
+        assert trace_rows[0]["pts_cem_surrogate_retrain_checkpoint_protocol"] == (
+            "fixed_last"
+        )
+        assert trace_rows[0]["pts_cem_surrogate_retrain_identity_neutral"] is True
+        assert trace_rows[0]["selected_checkpoint_source"] == "last_epoch"
 
         best_policy = _read_json(Path(paths["pts_best_policy"]))
         final_policy = _read_json(Path(paths["pts_final_policy"]))
@@ -209,6 +228,15 @@ def test_pts_cem_artifact_writer_creates_standalone_outputs(monkeypatch) -> None
         assert "parent_candidate_key" in top_candidates["candidates"][0]
         assert top_policies["candidates"][0]["candidate_key"] == best_key
         _assert_seed_alignment_payload(top_policies["candidates"][0])
+        assert best_policy["pts_cem_surrogate_retrain_checkpoint_protocol"] == (
+            "fixed_last"
+        )
+        assert top_candidates["candidates"][0][
+            "pts_cem_surrogate_retrain_checkpoint_protocol"
+        ] == "fixed_last"
+        assert rank1_metadata["pts_cem_surrogate_retrain_checkpoint_protocol"] == (
+            "fixed_last"
+        )
         assert "sample_metadata" in top_policies["candidates"][0]
         assert "policy" in top_policies["candidates"][0]
         assert rank1_metadata["candidate_key"] == best_key

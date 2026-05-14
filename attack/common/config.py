@@ -125,6 +125,18 @@ PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED = "position_opt_seed"
 PTS_CEM_SAMPLER_DIRICHLET = "dirichlet"
 PTS_CEM_INIT_UNIFORM = "uniform"
 PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING = "vertex_stratified_space_filling"
+PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST = "validation_best"
+PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST = "fixed_last"
+PTS_CEM_SURROGATE_REWARD_BEST = "best"
+PTS_CEM_SURROGATE_REWARD_LAST = "last"
+_ALLOWED_PTS_CEM_SURROGATE_RETRAIN_PROTOCOLS = {
+    PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST,
+    PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST,
+}
+_ALLOWED_PTS_CEM_SURROGATE_REWARD_CHECKPOINTS = {
+    PTS_CEM_SURROGATE_REWARD_BEST,
+    PTS_CEM_SURROGATE_REWARD_LAST,
+}
 _ALLOWED_PTS_V1_ACTIONS = {
     "keep_residual_suffix",
     "regenerate_residual_suffix",
@@ -1150,6 +1162,53 @@ class PTSCEMEpochRewardDiagnosticsRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class PTSCEMSurrogateRetrainRuntimeConfig:
+    checkpoint_protocol: str = PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST
+    validation_enabled: bool = True
+    reward_checkpoint: str = PTS_CEM_SURROGATE_REWARD_BEST
+
+    def __post_init__(self) -> None:
+        context = "attack.pts_construction.cem.surrogate_retrain"
+        checkpoint_protocol = _as_str(
+            self.checkpoint_protocol,
+            f"{context}.checkpoint_protocol",
+        ).strip().lower()
+        if checkpoint_protocol not in _ALLOWED_PTS_CEM_SURROGATE_RETRAIN_PROTOCOLS:
+            allowed = ", ".join(sorted(_ALLOWED_PTS_CEM_SURROGATE_RETRAIN_PROTOCOLS))
+            raise ValueError(
+                f"{context}.checkpoint_protocol must be one of: {allowed}."
+            )
+        validation_enabled = _as_bool(
+            self.validation_enabled,
+            f"{context}.validation_enabled",
+        )
+        reward_checkpoint = _as_str(
+            self.reward_checkpoint,
+            f"{context}.reward_checkpoint",
+        ).strip().lower()
+        if reward_checkpoint not in _ALLOWED_PTS_CEM_SURROGATE_REWARD_CHECKPOINTS:
+            allowed = ", ".join(sorted(_ALLOWED_PTS_CEM_SURROGATE_REWARD_CHECKPOINTS))
+            raise ValueError(
+                f"{context}.reward_checkpoint must be one of: {allowed}."
+            )
+        if checkpoint_protocol == PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST:
+            if not validation_enabled or reward_checkpoint != PTS_CEM_SURROGATE_REWARD_BEST:
+                raise ValueError(
+                    f"{context}.checkpoint_protocol=validation_best requires "
+                    "validation_enabled=true and reward_checkpoint=best."
+                )
+        if checkpoint_protocol == PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
+            if validation_enabled or reward_checkpoint != PTS_CEM_SURROGATE_REWARD_LAST:
+                raise ValueError(
+                    f"{context}.checkpoint_protocol=fixed_last requires "
+                    "validation_enabled=false and reward_checkpoint=last."
+                )
+        object.__setattr__(self, "checkpoint_protocol", checkpoint_protocol)
+        object.__setattr__(self, "validation_enabled", validation_enabled)
+        object.__setattr__(self, "reward_checkpoint", reward_checkpoint)
+
+
+@dataclass(frozen=True)
 class PTSCEMRuntimeConfig:
     iterations: int = 3
     population_schedule: tuple[int, ...] | None = (16, 8, 8)
@@ -1166,6 +1225,9 @@ class PTSCEMRuntimeConfig:
     save_top_k_candidates: int = 3
     epoch_reward_diagnostics: PTSCEMEpochRewardDiagnosticsRuntimeConfig = field(
         default_factory=PTSCEMEpochRewardDiagnosticsRuntimeConfig
+    )
+    surrogate_retrain: PTSCEMSurrogateRetrainRuntimeConfig = field(
+        default_factory=PTSCEMSurrogateRetrainRuntimeConfig
     )
 
     def __post_init__(self) -> None:
@@ -1229,6 +1291,11 @@ class PTSCEMRuntimeConfig:
             PTSCEMEpochRewardDiagnosticsRuntimeConfig,
             "attack.pts_construction.cem.epoch_reward_diagnostics",
         )
+        surrogate_retrain = _coerce_pts_dataclass(
+            self.surrogate_retrain,
+            PTSCEMSurrogateRetrainRuntimeConfig,
+            "attack.pts_construction.cem.surrogate_retrain",
+        )
         seed_source = _as_str(
             self.seed_source,
             "attack.pts_construction.cem.seed_source",
@@ -1267,6 +1334,7 @@ class PTSCEMRuntimeConfig:
             "epoch_reward_diagnostics",
             epoch_reward_diagnostics,
         )
+        object.__setattr__(self, "surrogate_retrain", surrogate_retrain)
         object.__setattr__(self, "seed_source", seed_source)
         object.__setattr__(self, "candidate_seed_stride", candidate_seed_stride)
         object.__setattr__(self, "save_top_k_candidates", save_top_k_candidates)
@@ -3470,6 +3538,7 @@ __all__ = [
     "PTSCEMRuntimeConfig",
     "PTSCEMResamplingRuntimeConfig",
     "PTSCEMSamplerRuntimeConfig",
+    "PTSCEMSurrogateRetrainRuntimeConfig",
     "PTSCEMUpdateRuntimeConfig",
     "PTSConstructionConfig",
     "PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1",
@@ -3477,6 +3546,10 @@ __all__ = [
     "PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING",
     "PTS_CEM_SAMPLER_DIRICHLET",
     "PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED",
+    "PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST",
+    "PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST",
+    "PTS_CEM_SURROGATE_REWARD_BEST",
+    "PTS_CEM_SURROGATE_REWARD_LAST",
     "PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE",
     "PTS_GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX",
     "PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH",

@@ -80,7 +80,7 @@ def train_srgnn_validation_best(
     for epoch in range(1, int(max_epochs) + 1):
         if bool(log_epochs):
             print(f"{log_prefix} epoch={epoch}/{int(max_epochs)} training...", flush=True)
-        train_loss = _train_one_epoch(runner, train_data)
+        train_loss = train_srgnn_one_epoch(runner, train_data)
         valid_metrics = _evaluate_ground_truth_for_data(runner, valid_data)
         current_valid_mrr20 = float(valid_metrics["ground_truth_mrr@20"])
         current_valid_recall20 = float(valid_metrics["ground_truth_recall@20"])
@@ -230,7 +230,7 @@ def _validate_supported_training_selection(train_config: Mapping[str, Any]) -> N
         )
 
 
-def _train_one_epoch(runner: Any, train_data: Any) -> float:
+def train_srgnn_one_epoch(runner: Any, train_data: Any) -> float:
     if runner.model is None:
         raise RuntimeError("SR-GNN model is not initialized.")
     model = runner.model
@@ -250,6 +250,9 @@ def _train_one_epoch(runner: Any, train_data: Any) -> float:
     avg_loss = total_loss / float(max(1, batch_count))
     runner.train_loss_history.append(float(avg_loss))
     return float(avg_loss)
+
+
+_train_one_epoch = train_srgnn_one_epoch
 
 
 def _evaluate_ground_truth_for_data(runner: Any, data: Any) -> dict[str, float]:
@@ -293,5 +296,6 @@ __all__ = [
     "improved_over_best",
     "official_patience_improved",
     "srgnn_validation_train_history_extra",
+    "train_srgnn_one_epoch",
     "train_srgnn_validation_best",
 ]

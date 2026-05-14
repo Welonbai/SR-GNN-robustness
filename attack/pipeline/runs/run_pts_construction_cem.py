@@ -18,6 +18,8 @@ from attack.common.config import (
     Config,
     PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
     PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED,
+    PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST,
+    PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST,
     PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE,
     PTS_GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX,
     PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH,
@@ -39,6 +41,9 @@ from attack.common.paths import (
     target_cohort_key,
 )
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
+from attack.inner_train.srgnn_full_retrain_fixed_last import (
+    SRGNNFullRetrainFixedLastInnerTrainer,
+)
 from attack.inner_train.srgnn_full_retrain_validation_best import (
     SRGNNFullRetrainValidationBestInnerTrainer,
 )
@@ -53,7 +58,7 @@ from attack.pipeline.core.pipeline_utils import (
 )
 from attack.pipeline.core.victim_execution import victim_effective_train_seed
 from attack.position_opt.cem.trainer import (
-    _candidate_checkpoint_metadata,
+    _candidate_checkpoint_metadata as _rank_bucket_candidate_checkpoint_metadata,
     _coerce_target_metrics,
     _lowk_reward_metric_payload,
     _resolve_validation_pairs,
@@ -94,6 +99,14 @@ _EPOCH_REWARD_DIAGNOSTICS_CACHE_WARNING = (
     "Epoch reward diagnostics requested, but reused PTS-CEM cache does not "
     "contain diagnostics. Use --force-recompute-pts-cem or delete the old "
     "cache to regenerate diagnostics."
+)
+_SURROGATE_RETRAIN_IDENTITY_NOTE = (
+    "Surrogate retrain checkpoint protocol is intentionally excluded from "
+    "PTS-CEM cache identity."
+)
+_SURROGATE_RETRAIN_REUSE_NOTE = (
+    "fixed_last is intentionally excluded from cache identity; reused artifact "
+    "may have been generated with validation_best."
 )
 
 
@@ -212,6 +225,16 @@ def run_pts_construction_grouped_cem(
                 print(
                     f"{_LOG_PREFIX} target={int(target_item)} reuse shared CEM cache"
                 )
+                if (
+                    _pts_cem_surrogate_retrain_protocol(config)
+                    == PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST
+                ):
+                    print(
+                        f"{_LOG_PREFIX} Reusing existing PTS-CEM shared cache. "
+                        "Requested surrogate retrain protocol is fixed_last, "
+                        "but this option is identity-neutral and does not "
+                        "invalidate existing validation_best artifacts."
+                    )
                 cached = _materialize_shared_pts_cem_cache(
                     config=config,
                     target_item=int(target_item),
@@ -546,6 +569,89 @@ def pts_cem_surrogate_seed_alignment_metadata(
         "resolved_victim_effective_seed": int(resolved_seed),
         "surrogate_victim_seed_aligned": True,
     }
+
+
+def pts_cem_surrogate_retrain_metadata(config: Config) -> dict[str, object]:
+    surrogate_retrain = _require_pts_config(config).cem.surrogate_retrain
+    return {
+        "pts_cem_surrogate_retrain_checkpoint_protocol": (
+            surrogate_retrain.checkpoint_protocol
+        ),
+        "pts_cem_surrogate_retrain_validation_enabled": bool(
+            surrogate_retrain.validation_enabled
+        ),
+        "pts_cem_surrogate_retrain_reward_checkpoint": (
+            surrogate_retrain.reward_checkpoint
+        ),
+        "pts_cem_surrogate_retrain_identity_neutral": True,
+        "pts_cem_surrogate_retrain_identity_note": _SURROGATE_RETRAIN_IDENTITY_NOTE,
+    }
+
+
+def _pts_cem_surrogate_retrain_reuse_metadata(
+    config: Config,
+    cached: CachedPTSBestCandidate,
+) -> dict[str, object]:
+    requested = _require_pts_config(config).cem.surrogate_retrain.checkpoint_protocol
+    if requested != PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
+        return {}
+    if not bool(cached.reused_shared_pts_cem):
+        return {}
+    return {
+        "requested_surrogate_retrain_checkpoint_protocol": (
+            PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST
+        ),
+        "reused_shared_pts_cem": True,
+        "reused_artifact_surrogate_retrain_protocol": (
+            _infer_reused_artifact_surrogate_retrain_protocol(cached.metadata)
+        ),
+        "pts_cem_surrogate_retrain_identity_neutral": True,
+        "note": _SURROGATE_RETRAIN_REUSE_NOTE,
+    }
+
+
+def _pts_cem_surrogate_retrain_marker_reuse_metadata(
+    config: Config,
+    *,
+    reused_shared_pts_cem: bool,
+) -> dict[str, object]:
+    requested = _require_pts_config(config).cem.surrogate_retrain.checkpoint_protocol
+    if requested != PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST or not bool(reused_shared_pts_cem):
+        return {}
+    return {
+        "requested_surrogate_retrain_checkpoint_protocol": (
+            PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST
+        ),
+        "reused_artifact_surrogate_retrain_protocol": "unknown",
+        "note": _SURROGATE_RETRAIN_REUSE_NOTE,
+    }
+
+
+def _infer_reused_artifact_surrogate_retrain_protocol(
+    metadata: Mapping[str, object],
+) -> str:
+    protocol = metadata.get("pts_cem_surrogate_retrain_checkpoint_protocol")
+    if protocol is None:
+        evaluator_metadata = metadata.get("evaluator_metadata")
+        if isinstance(evaluator_metadata, Mapping):
+            protocol = evaluator_metadata.get(
+                "pts_cem_surrogate_retrain_checkpoint_protocol"
+            )
+    if protocol is not None:
+        return str(protocol)
+    evaluator_metadata = metadata.get("evaluator_metadata")
+    if isinstance(evaluator_metadata, Mapping):
+        if (
+            evaluator_metadata.get("selected_checkpoint_metric") is not None
+            or evaluator_metadata.get("best_valid_mrr20") is not None
+            or evaluator_metadata.get("valid_ground_truth_mrr@20") is not None
+        ):
+            return PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST
+    return "unknown"
+
+
+def _pts_cem_surrogate_retrain_protocol(config: Config) -> str:
+    return str(_require_pts_config(config).cem.surrogate_retrain.checkpoint_protocol)
 
 
 def _pts_cem_seed_alignment_identity(config: Config) -> dict[str, object]:
@@ -1516,6 +1622,11 @@ def _write_pts_construction_complete_marker(
         ),
         "reused_shared_pts_cem": bool(reused_shared_pts_cem),
         "local_materialized_from_shared": bool(local_materialized_from_shared),
+        **pts_cem_surrogate_retrain_metadata(config),
+        **_pts_cem_surrogate_retrain_marker_reuse_metadata(
+            config,
+            reused_shared_pts_cem=bool(reused_shared_pts_cem),
+        ),
         **seed_alignment,
         "identity": _current_pts_construction_cache_identity(
             config,
@@ -1679,6 +1790,7 @@ def _write_shared_pts_cem_cache(
         ),
         "required_artifact_files": list(required_paths),
         "artifact_completeness": completeness,
+        **pts_cem_surrogate_retrain_metadata(config),
         "created_from_experiment": config.experiment.name,
         "created_from_run_group": run_group_key(
             config,
@@ -1897,18 +2009,42 @@ def _build_candidate_evaluator_context(
 ) -> dict[str, object]:
     train_config = _srgnn_candidate_train_config(config)
     validation_sessions, validation_labels = _resolve_validation_pairs(shared)
-    return {
-        "backend": SRGNNBackend(config, base_dir=Path.cwd(), train_config=train_config),
-        "inner_trainer": SRGNNFullRetrainValidationBestInnerTrainer(
+    protocol = _pts_cem_surrogate_retrain_protocol(config)
+    retrain_epochs = int(train_config["epochs"])
+    if protocol == PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST:
+        print(
+            f"{_LOG_PREFIX} PTS-CEM surrogate validation_best mode: using "
+            "per-epoch validation metrics and best checkpoint selection."
+        )
+        inner_trainer = SRGNNFullRetrainValidationBestInnerTrainer(
             train_config=train_config,
-            max_epochs=int(train_config["epochs"]),
+            max_epochs=retrain_epochs,
             patience=int(train_config["patience"]),
             log_prefix="[pts-cem:candidate-retrain]",
             log_epochs=False,
-        ),
+        )
+        validation_eval_data = Data((validation_sessions, validation_labels), shuffle=False)
+    elif protocol == PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
+        print(
+            f"{_LOG_PREFIX} PTS-CEM surrogate fixed_last mode: training for "
+            f"{retrain_epochs} epochs, skipping per-epoch validation-best "
+            "checkpointing, using last model for reward."
+        )
+        inner_trainer = SRGNNFullRetrainFixedLastInnerTrainer(
+            train_config=train_config,
+            max_epochs=retrain_epochs,
+            log_prefix="[pts-cem:candidate-retrain-fixed-last]",
+            log_epochs=False,
+        )
+        validation_eval_data = None
+    else:
+        raise ValueError(f"Unsupported PTS-CEM surrogate retrain protocol: {protocol!r}")
+    return {
+        "backend": SRGNNBackend(config, base_dir=Path.cwd(), train_config=train_config),
+        "inner_trainer": inner_trainer,
         "validation_sessions": validation_sessions,
         "validation_labels": validation_labels,
-        "validation_eval_data": Data((validation_sessions, validation_labels), shuffle=False),
+        "validation_eval_data": validation_eval_data,
         "train_config": train_config,
         "shared": shared,
     }
@@ -1934,7 +2070,13 @@ def _evaluate_candidate_retrain_validation_reward(
     validation_eval_data = evaluator_context["validation_eval_data"]
     if not isinstance(backend, SRGNNBackend):
         raise TypeError("PTS-CEM evaluator context has invalid SRGNNBackend.")
-    if not isinstance(inner_trainer, SRGNNFullRetrainValidationBestInnerTrainer):
+    if not isinstance(
+        inner_trainer,
+        (
+            SRGNNFullRetrainValidationBestInnerTrainer,
+            SRGNNFullRetrainFixedLastInnerTrainer,
+        ),
+    ):
         raise TypeError("PTS-CEM evaluator context has invalid inner trainer.")
 
     pts_config = _require_pts_config(config)
@@ -2019,6 +2161,7 @@ def _evaluate_candidate_retrain_validation_reward(
         "candidate_retrain_validation_reward": reward,
         "candidate_retrain_seed": surrogate_effective_seed,
         **seed_alignment,
+        **pts_cem_surrogate_retrain_metadata(config),
         "candidate_seed": int(candidate_seed),
         "candidate_retrain_validation_prefix_count": int(len(validation_sessions)),
         "candidate_retrain_epochs": _resolved_pts_candidate_retrain_epochs(config),
@@ -2051,6 +2194,19 @@ def _evaluate_candidate_retrain_validation_reward(
                     "official_reward_source": "final_partial_retrain_protocol",
                     "training_budget_epoch": int(training_budget_epoch),
                     "selected_checkpoint_epoch": selected_checkpoint_epoch,
+                    "selected_checkpoint_protocol": checkpoint_metadata.get(
+                        "selected_checkpoint_protocol"
+                    ),
+                    "selected_checkpoint_source": checkpoint_metadata.get(
+                        "selected_checkpoint_source"
+                    ),
+                    "selected_checkpoint_metric": checkpoint_metadata.get(
+                        "selected_checkpoint_metric"
+                    ),
+                    "official_reward_checkpoint_epoch": checkpoint_metadata.get(
+                        "official_reward_checkpoint_epoch",
+                        selected_checkpoint_epoch,
+                    ),
                     "score_target_seconds": float(score_target_seconds),
                 }
             )
@@ -2075,6 +2231,19 @@ def _evaluate_candidate_retrain_validation_reward(
             "official_reward_source": "final_partial_retrain_protocol",
             "training_budget_epoch": int(training_budget_epoch),
             "selected_checkpoint_epoch": selected_checkpoint_epoch,
+            "selected_checkpoint_protocol": checkpoint_metadata.get(
+                "selected_checkpoint_protocol"
+            ),
+            "selected_checkpoint_source": checkpoint_metadata.get(
+                "selected_checkpoint_source"
+            ),
+            "selected_checkpoint_metric": checkpoint_metadata.get(
+                "selected_checkpoint_metric"
+            ),
+            "official_reward_checkpoint_epoch": checkpoint_metadata.get(
+                "official_reward_checkpoint_epoch",
+                selected_checkpoint_epoch,
+            ),
             "epoch_diagnostic_checkpoint_mode": "current_epoch",
             "target_item": int(target_item),
             "surrogate_effective_seed": surrogate_effective_seed,
@@ -2161,6 +2330,29 @@ def _validate_collected_epoch_diagnostics(
         "PTS-CEM epoch reward diagnostics were requested for epochs "
         f"{missing}, but those epochs were not evaluated.{detail}"
     )
+
+
+def _candidate_checkpoint_metadata(
+    history: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    history_map = dict(history or {})
+    checkpoint_protocol = history_map.get("checkpoint_protocol")
+    if checkpoint_protocol == PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
+        selected_epoch = history_map.get("selected_checkpoint_epoch")
+        official_epoch = history_map.get("official_reward_checkpoint_epoch")
+        return {
+            "selected_checkpoint_epoch": (
+                None if selected_epoch is None else int(selected_epoch)
+            ),
+            "selected_checkpoint_protocol": PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST,
+            "selected_checkpoint_source": "last_epoch",
+            "selected_checkpoint_metric": None,
+            "validation_best_metrics_recorded": False,
+            "official_reward_checkpoint_epoch": (
+                None if official_epoch is None else int(official_epoch)
+            ),
+        }
+    return _rank_bucket_candidate_checkpoint_metadata(history)
 
 
 def _srgnn_candidate_train_config(config: Config) -> dict[str, Any]:
@@ -2317,6 +2509,7 @@ def _target_metadata(
             config,
             artifact_paths=artifact_paths,
         ),
+        **pts_cem_surrogate_retrain_metadata(config),
         **seed_alignment,
         "pts_cem_reused": False,
         "pts_cem_cache_mode": "fresh_cem",
@@ -2392,6 +2585,8 @@ def _target_metadata_from_cache(
             config,
             artifact_paths=artifact_paths,
         ),
+        **pts_cem_surrogate_retrain_metadata(config),
+        **_pts_cem_surrogate_retrain_reuse_metadata(config, cached),
         **seed_alignment,
         "pts_cem_reused": True,
         "pts_cem_cache_mode": cached.cache_mode,
