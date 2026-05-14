@@ -57,6 +57,7 @@ def train_srgnn_validation_best(
     patience: int,
     best_checkpoint_path: str | Path | None = None,
     log_prefix: str = "[srgnn-validation-best]",
+    log_epochs: bool = True,
     epoch_callback: Callable[[Any, Mapping[str, Any]], None] | None = None,
 ) -> SRGNNValidationTrainingResult:
     if runner.model is None:
@@ -77,7 +78,8 @@ def train_srgnn_validation_best(
     start = time.perf_counter()
 
     for epoch in range(1, int(max_epochs) + 1):
-        print(f"{log_prefix} epoch={epoch}/{int(max_epochs)} training...", flush=True)
+        if bool(log_epochs):
+            print(f"{log_prefix} epoch={epoch}/{int(max_epochs)} training...", flush=True)
         train_loss = _train_one_epoch(runner, train_data)
         valid_metrics = _evaluate_ground_truth_for_data(runner, valid_data)
         current_valid_mrr20 = float(valid_metrics["ground_truth_mrr@20"])
@@ -122,22 +124,27 @@ def train_srgnn_validation_best(
             "elapsed_seconds": float(time.perf_counter() - start),
         }
         rows.append(row)
-        print(
-            f"{log_prefix} epoch={epoch} train_loss={train_loss:.6g} "
-            f"valid_mrr20={current_valid_mrr20:.9f} "
-            f"valid_recall20={current_valid_recall20:.9f} "
-            f"improved_mrr20={improved_mrr20} "
-            f"improved_recall20={improved_recall20} "
-            f"bad_counter={bad_counter}",
-            flush=True,
-        )
+        if bool(log_epochs):
+            print(
+                f"{log_prefix} epoch={epoch} train_loss={train_loss:.6g} "
+                f"valid_mrr20={current_valid_mrr20:.9f} "
+                f"valid_recall20={current_valid_recall20:.9f} "
+                f"improved_mrr20={improved_mrr20} "
+                f"improved_recall20={improved_recall20} "
+                f"bad_counter={bad_counter}",
+                flush=True,
+            )
         if epoch_callback is not None:
             epoch_callback(runner, row)
 
         if bad_counter >= int(patience):
             stopped_epoch = int(epoch)
             stop_reason = "patience_exhausted"
-            print(f"{log_prefix} early stop at epoch={epoch} patience={int(patience)}", flush=True)
+            if bool(log_epochs):
+                print(
+                    f"{log_prefix} early stop at epoch={epoch} patience={int(patience)}",
+                    flush=True,
+                )
             break
 
     if best_state is None:

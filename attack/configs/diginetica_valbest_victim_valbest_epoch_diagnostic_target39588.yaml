@@ -64,12 +64,12 @@ victims:
   params:
     miasrec:
       train:
-        epochs: 30
+        epochs: 6
         train_batch_size: 64
         eval_batch_size: 32
     tron:
       train:
-        max_epochs: 30
+        max_epochs: 3
   runtime:
     miasrec:
       python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"

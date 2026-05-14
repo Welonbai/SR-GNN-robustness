@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import hashlib
 from pathlib import Path
 import shutil
 import time
@@ -17,6 +18,7 @@ from attack.common.artifact_io import (
 )
 from attack.common.config import Config
 from attack.common.paths import (
+    PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     attack_key,
     attack_key_payload,
     canonical_split_paths,
@@ -52,7 +54,11 @@ from attack.pipeline.core.pipeline_utils import (
     requested_target_prefix,
     sync_run_coverage_materialized_prefix,
 )
-from attack.pipeline.core.victim_execution import VictimExecutionResult, execute_single_victim
+from attack.pipeline.core.victim_execution import (
+    VictimExecutionResult,
+    execute_single_victim,
+    victim_effective_train_seed,
+)
 
 
 PROGRESS_TIMEZONE = "Asia/Taipei"
@@ -239,12 +245,32 @@ def run_targets_and_victims(
                 )
                 save_json(progress_payload, metadata_paths["progress"])
 
+                victim_effective_seed = victim_effective_train_seed(
+                    config,
+                    victim_name=victim_name,
+                    run_type=run_type,
+                    target_item=int(target_item),
+                )
+                victim_attack_identity_context = _pts_cem_victim_attack_identity_context(
+                    config,
+                    run_type=run_type,
+                    target_item=int(target_item),
+                    target_metadata=target_payload.metadata,
+                )
+                victim_cache_effective_seed = (
+                    victim_effective_seed
+                    if victim_attack_identity_context is not None
+                    else None
+                )
+
                 artifacts = run_artifact_paths(
                     config,
                     run_type=run_type,
                     target_id=target_item,
                     victim_name=victim_name,
                     attack_identity_context=attack_identity_context,
+                    victim_attack_identity_context=victim_attack_identity_context,
+                    victim_effective_train_seed=victim_cache_effective_seed,
                 )
                 current_artifacts = artifacts
                 run_dir = artifacts["run_dir"]
@@ -281,6 +307,7 @@ def run_targets_and_victims(
                     srg_nn_export_paths=context.export_paths,
                     predictions_path=artifacts["predictions"],
                     artifacts=artifacts,
+                    victim_attack_identity_context=victim_attack_identity_context,
                 )
 
                 ground_truth_labels = resolve_ground_truth_labels(
@@ -310,7 +337,24 @@ def run_targets_and_victims(
                     "metrics": metrics,
                     "predictions_path": _repo_relative_path(artifacts["predictions"]),
                     "reused_predictions": bool(reused),
+                    "victim_prediction_key": victim_prediction_key(
+                        config,
+                        victim_name,
+                        run_type=run_type,
+                        attack_identity_context=attack_identity_context,
+                        victim_attack_identity_context=victim_attack_identity_context,
+                        victim_effective_train_seed=victim_cache_effective_seed,
+                    ),
                 }
+                if victim_attack_identity_context is not None:
+                    payload.update(
+                        _pts_cem_victim_identity_metrics_payload(
+                            config,
+                            run_type=run_type,
+                            attack_identity_context=attack_identity_context,
+                            victim_attack_identity_context=victim_attack_identity_context,
+                        )
+                    )
                 if victim_result.poisoned_train_path is not None:
                     payload["poisoned_train_path"] = _repo_relative_path(victim_result.poisoned_train_path)
                 if target_payload.metadata:
@@ -450,6 +494,119 @@ def _repo_relative_path(path: str | Path) -> str:
         return path_obj.relative_to(_REPO_ROOT).as_posix()
     except ValueError:
         return str(path_obj)
+
+
+def _repo_path(path: str | Path) -> Path:
+    path_obj = Path(path)
+    if path_obj.is_absolute():
+        return path_obj
+    return (_REPO_ROOT / path_obj).resolve()
+
+
+def _file_sha1(path: str | Path) -> str:
+    digest = hashlib.sha1()
+    with _repo_path(path).open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _pts_cem_victim_attack_identity_context(
+    config: Config,
+    *,
+    run_type: str,
+    target_item: int,
+    target_metadata: Mapping[str, object],
+) -> dict[str, object] | None:
+    if run_type != PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE:
+        return None
+    if str(target_metadata.get("pts_construction_method", "")) != "grouped_cem_v1":
+        return None
+
+    shared_cache_key = target_metadata.get("shared_pts_cem_cache_key")
+    if shared_cache_key is None:
+        return None
+    sessions_sha1 = target_metadata.get("selected_pts_cem_sessions_sha1")
+    if sessions_sha1 is None:
+        sessions_path = target_metadata.get("pts_best_candidate_sessions_path")
+        if sessions_path is None:
+            raise ValueError(
+                "PTS-CEM victim cache identity requires selected sessions hash or path."
+            )
+        sessions_sha1 = _file_sha1(str(sessions_path))
+
+    seed_alignment_keys = (
+        "pts_cem_surrogate_seed_alignment_mode",
+        "pts_cem_surrogate_seed_alignment_target_victim_name",
+        "configured_surrogate_train_seed",
+        "configured_victim_train_seed",
+        "resolved_surrogate_effective_seed",
+        "resolved_victim_effective_seed",
+        "surrogate_victim_seed_aligned",
+    )
+    seed_alignment = {
+        key: target_metadata[key]
+        for key in seed_alignment_keys
+        if key in target_metadata and target_metadata[key] is not None
+    }
+    return {
+        "schema_version": "pts_cem_target_level_victim_attack_identity_v1",
+        "attack_type": "pts_cem",
+        "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        "construction_method": "grouped_cem_v1",
+        "dataset_split_identity": split_key(config),
+        "poison_train_only": bool(config.data.poison_train_only),
+        "target_item": int(target_item),
+        "shared_pts_cem_cache_key": str(shared_cache_key),
+        "selected_pts_cem_sessions_sha1": str(sessions_sha1),
+        "source_candidate_rank": (
+            None
+            if target_metadata.get("source_candidate_rank") is None
+            else int(target_metadata["source_candidate_rank"])
+        ),
+        "source_candidate_key": (
+            None
+            if target_metadata.get("source_candidate_key") is None
+            else str(target_metadata["source_candidate_key"])
+        ),
+        "seed_alignment": seed_alignment,
+    }
+
+
+def _evaluation_metrics_config_payload(config: Config) -> dict[str, object]:
+    return {
+        "topk": [int(k) for k in config.evaluation.topk],
+        "targeted_metrics": list(config.evaluation.targeted_metrics),
+        "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
+    }
+
+
+def _pts_cem_victim_identity_metrics_payload(
+    config: Config,
+    *,
+    run_type: str,
+    attack_identity_context: Mapping[str, object] | None,
+    victim_attack_identity_context: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "victim_prediction_attack_identity_mode": "pts_cem_target_level_construction",
+        "shared_pts_cem_cache_key": victim_attack_identity_context["shared_pts_cem_cache_key"],
+        "selected_pts_cem_sessions_sha1": victim_attack_identity_context[
+            "selected_pts_cem_sessions_sha1"
+        ],
+        "target_item": int(victim_attack_identity_context["target_item"]),
+        "source_candidate_rank": victim_attack_identity_context.get("source_candidate_rank"),
+        "source_candidate_key": victim_attack_identity_context.get("source_candidate_key"),
+        "evaluation": _evaluation_metrics_config_payload(config),
+        "old_run_level_attack_key": attack_key(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ),
+    }
 
 
 def _canonical_identity_sections(
@@ -1665,6 +1822,7 @@ def _maybe_reuse_or_execute_victim(
     srg_nn_export_paths: dict[str, Path] | None,
     predictions_path: Path,
     artifacts: dict[str, Path],
+    victim_attack_identity_context: Mapping[str, object] | None = None,
 ) -> tuple[VictimExecutionResult, bool]:
     _guard_clean_shared_cache_bootstrap(
         run_type=run_type,
@@ -1682,11 +1840,20 @@ def _maybe_reuse_or_execute_victim(
         predictions_path=predictions_path,
     )
     if reused is not None:
-        print(
-            f"[victim:{victim_name}] Reusing shared predictions from "
-            f"{artifacts['shared_predictions']}"
-        )
+        if victim_attack_identity_context is not None:
+            print(
+                f"[victim-cache] target={int(target_item)} victim={victim_name} reuse"
+            )
+        else:
+            print(
+                f"[victim:{victim_name}] target={int(target_item)} reuse predictions"
+            )
         return reused, True
+
+    if victim_attack_identity_context is not None:
+        print(
+            f"[victim-cache] target={int(target_item)} victim={victim_name} train"
+        )
 
     victim_result = execute_single_victim(
         config,

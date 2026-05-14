@@ -513,11 +513,20 @@ def victim_prediction_key_payload(
     *,
     run_type: str,
     attack_identity_context: Mapping[str, Any] | None = None,
+    victim_attack_identity_context: Mapping[str, Any] | None = None,
+    victim_effective_train_seed: int | None = None,
 ) -> dict[str, Any]:
     if run_type == "clean":
         base_context: dict[str, Any] = {
             "run_type": "clean",
             "split_key": split_key(config),
+        }
+    elif victim_attack_identity_context is not None:
+        base_context = {
+            "run_type": run_type,
+            "victim_attack_identity": _normalize_identity_value(
+                victim_attack_identity_context
+            ),
         }
     else:
         base_context = {
@@ -538,6 +547,8 @@ def victim_prediction_key_payload(
         "victim_train_seed": int(config.seeds.victim_train_seed),
         "victim_params": victim_params,
     }
+    if victim_effective_train_seed is not None:
+        payload["victim_effective_train_seed"] = int(victim_effective_train_seed)
     if victim_name == "srgnn":
         train_config = config.victims.params[victim_name].get("train", {})
         if (
@@ -556,12 +567,16 @@ def victim_prediction_key(
     *,
     run_type: str,
     attack_identity_context: Mapping[str, Any] | None = None,
+    victim_attack_identity_context: Mapping[str, Any] | None = None,
+    victim_effective_train_seed: int | None = None,
 ) -> str:
     payload = victim_prediction_key_payload(
         config,
         victim_name,
         run_type=run_type,
         attack_identity_context=attack_identity_context,
+        victim_attack_identity_context=victim_attack_identity_context,
+        victim_effective_train_seed=victim_effective_train_seed,
     )
     return f"victim_{victim_name}_{_hash_token(_stable_json(payload))}"
 
@@ -705,6 +720,8 @@ def shared_victim_dir(
     target_id: str | int,
     victim_name: str,
     attack_identity_context: Mapping[str, Any] | None = None,
+    victim_attack_identity_context: Mapping[str, Any] | None = None,
+    victim_effective_train_seed: int | None = None,
 ) -> Path:
     base = (
         shared_root(config)
@@ -715,6 +732,8 @@ def shared_victim_dir(
             victim_name,
             run_type=run_type,
             attack_identity_context=attack_identity_context,
+            victim_attack_identity_context=victim_attack_identity_context,
+            victim_effective_train_seed=victim_effective_train_seed,
         )
     )
     if run_type == "clean":
@@ -860,6 +879,8 @@ def run_artifact_paths(
     target_id: str | int,
     victim_name: str | None = None,
     attack_identity_context: Mapping[str, Any] | None = None,
+    victim_attack_identity_context: Mapping[str, Any] | None = None,
+    victim_effective_train_seed: int | None = None,
 ) -> dict[str, Path]:
     victim = victim_name or _primary_victim(config)
     local_base = victim_dir(
@@ -875,6 +896,8 @@ def run_artifact_paths(
         target_id=target_id,
         victim_name=victim,
         attack_identity_context=attack_identity_context,
+        victim_attack_identity_context=victim_attack_identity_context,
+        victim_effective_train_seed=victim_effective_train_seed,
     )
     return {
         "run_dir": local_base,

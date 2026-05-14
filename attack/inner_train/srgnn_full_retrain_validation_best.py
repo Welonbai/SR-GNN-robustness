@@ -24,11 +24,13 @@ class SRGNNFullRetrainValidationBestInnerTrainer:
         max_epochs: int | None = None,
         patience: int | None = None,
         log_prefix: str = "[surrogate:srgnn-full-retrain]",
+        log_epochs: bool = True,
     ) -> None:
         self.train_config = dict(train_config)
         self.max_epochs = int(max_epochs if max_epochs is not None else self.train_config["epochs"])
         self.patience = int(patience if patience is not None else self.train_config["patience"])
         self.log_prefix = str(log_prefix)
+        self.log_epochs = bool(log_epochs)
 
     def run(
         self,
@@ -76,6 +78,7 @@ class SRGNNFullRetrainValidationBestInnerTrainer:
             patience=self.patience,
             best_checkpoint_path=None,
             log_prefix=self.log_prefix,
+            log_epochs=self.log_epochs,
             epoch_callback=training_epoch_callback,
         )
         history = {

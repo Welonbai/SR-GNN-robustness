@@ -186,8 +186,7 @@ def run_pts_construction_grouped_cem(
             if cached is not None:
                 _warn_if_reused_cache_missing_epoch_diagnostics(config, cached)
                 print(
-                    f"{_LOG_PREFIX} Reusing cached PTS-CEM best candidate for "
-                    f"target {int(target_item)}; skipping CEM."
+                    f"{_LOG_PREFIX} target={int(target_item)} reuse CEM cache"
                 )
                 poisoned = build_poisoned_dataset(
                     shared.clean_sessions,
@@ -211,11 +210,8 @@ def run_pts_construction_grouped_cem(
             )
             if shared_cached is not None:
                 print(
-                    f"{_LOG_PREFIX} Reusing shared PTS-CEM construction cache "
-                    f"for target {int(target_item)}"
+                    f"{_LOG_PREFIX} target={int(target_item)} reuse shared CEM cache"
                 )
-                print(f"{_LOG_PREFIX} shared_pts_cem_cache_key = {shared_cache_key}")
-                print(f"{_LOG_PREFIX} shared_cache_path = {shared_cache_dir}")
                 cached = _materialize_shared_pts_cem_cache(
                     config=config,
                     target_item=int(target_item),
@@ -227,10 +223,6 @@ def run_pts_construction_grouped_cem(
                     current_identity=cache_identity,
                 )
                 _warn_if_reused_cache_missing_epoch_diagnostics(config, cached)
-                print(
-                    f"{_LOG_PREFIX} Materialized shared PTS-CEM cache into "
-                    "local run_group target folder."
-                )
                 poisoned = build_poisoned_dataset(
                     shared.clean_sessions,
                     shared.clean_labels,
@@ -246,8 +238,7 @@ def run_pts_construction_grouped_cem(
                 )
                 return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
             print(
-                f"{_LOG_PREFIX} No compatible shared PTS-CEM construction cache "
-                f"found for target {int(target_item)}; running CEM."
+                f"{_LOG_PREFIX} target={int(target_item)} run CEM"
             )
 
         evaluator_context = _build_candidate_evaluator_context(config, shared)
@@ -279,6 +270,7 @@ def run_pts_construction_grouped_cem(
                 candidate_sessions=candidate_sessions,
                 target_item=int(target_item),
                 iteration=int(iteration),
+                population_size=_pts_cem_population_size(cem_config, int(iteration)),
                 candidate_id=int(candidate_id),
                 candidate_seed=int(candidate_seed),
             )
@@ -316,9 +308,7 @@ def run_pts_construction_grouped_cem(
             shared_cache_identity=shared_cache_identity,
             attack_identity_context=attack_identity_context,
         )
-        print(f"{_LOG_PREFIX} Wrote shared PTS-CEM construction cache:")
-        print(f"{_LOG_PREFIX} shared_pts_cem_cache_key = {shared_cache_key}")
-        print(f"{_LOG_PREFIX} shared_cache_path = {shared_cache_dir}")
+        print(f"{_LOG_PREFIX} target={int(target_item)} wrote shared CEM cache")
         complete_marker_path = _write_pts_construction_complete_marker(
             config=config,
             target_item=int(target_item),
@@ -501,6 +491,14 @@ def _build_pts_cem_config_from_config(config: Config) -> PTSCEMConfig:
         candidate_seed_stride=int(cem.candidate_seed_stride),
         save_top_k_candidates=int(cem.save_top_k_candidates),
     )
+
+
+def _pts_cem_population_size(cem_config: PTSCEMConfig, iteration: int) -> int:
+    if cem_config.population_schedule is not None:
+        return int(cem_config.population_schedule[int(iteration)])
+    if cem_config.population_size is None:
+        raise ValueError("PTS-CEM population_size is required without population_schedule.")
+    return int(cem_config.population_size)
 
 
 def _resolve_pts_cem_base_seed(config: Config) -> int:
@@ -1906,6 +1904,7 @@ def _build_candidate_evaluator_context(
             max_epochs=int(train_config["epochs"]),
             patience=int(train_config["patience"]),
             log_prefix="[pts-cem:candidate-retrain]",
+            log_epochs=False,
         ),
         "validation_sessions": validation_sessions,
         "validation_labels": validation_labels,
@@ -1922,6 +1921,7 @@ def _evaluate_candidate_retrain_validation_reward(
     candidate_sessions: Sequence[Sequence[int]],
     target_item: int,
     iteration: int,
+    population_size: int,
     candidate_id: int,
     candidate_seed: int,
 ) -> PTSCEMEvaluationResult:
@@ -1953,6 +1953,12 @@ def _evaluate_candidate_retrain_validation_reward(
         shared.clean_sessions,
         shared.clean_labels,
         candidate_sessions,
+    )
+    print(
+        f"{_LOG_PREFIX} target={int(target_item)} "
+        f"iter={int(iteration) + 1}/{int(pts_config.cem.iterations)} "
+        f"population={int(candidate_id) + 1}/{int(population_size)} "
+        f"seed={int(candidate_seed)}"
     )
 
     def epoch_callback(model: object, row: Mapping[str, Any]) -> None:
@@ -2259,6 +2265,10 @@ def _target_metadata(
 ) -> dict[str, object]:
     rank1_sessions = artifact_paths.get("top_candidate_rank_1_sessions")
     rank1_metadata = artifact_paths.get("top_candidate_rank_1_metadata")
+    selected_sessions_sha1 = _selected_sessions_sha1(
+        sessions_path=rank1_sessions,
+        sessions=best_candidate.final_sessions,
+    )
     seed_alignment = pts_cem_surrogate_seed_alignment_metadata(
         config,
         target_item=int(target_item),
@@ -2286,6 +2296,9 @@ def _target_metadata(
         "pts_best_candidate_reward_metrics": dict(best_candidate.reward_metrics),
         "pts_best_candidate_sessions_path": rank1_sessions,
         "pts_best_candidate_metadata_path": rank1_metadata,
+        "selected_pts_cem_sessions_sha1": selected_sessions_sha1,
+        "source_candidate_rank": 1,
+        "source_candidate_key": str(best_candidate.candidate_key),
         "pts_final_selection_mode": pts_config.final_selection.mode,
         "pts_construction_method": pts_config.method,
         "pts_population_schedule": (
@@ -2328,6 +2341,10 @@ def _target_metadata_from_cache(
     cached: CachedPTSBestCandidate,
 ) -> dict[str, object]:
     artifact_paths = _existing_pts_artifact_paths(artifact_dir)
+    selected_sessions_sha1 = _selected_sessions_sha1(
+        sessions_path=cached.sessions_path,
+        sessions=cached.sessions,
+    )
     seed_alignment = pts_cem_surrogate_seed_alignment_metadata(
         config,
         target_item=int(target_item),
@@ -2350,6 +2367,13 @@ def _target_metadata_from_cache(
         "pts_artifact_dir": str(artifact_dir),
         "pts_best_candidate_sessions_path": str(cached.sessions_path),
         "pts_best_candidate_metadata_path": str(cached.metadata_path),
+        "selected_pts_cem_sessions_sha1": selected_sessions_sha1,
+        "source_candidate_rank": int(cached.metadata.get("rank", 1)),
+        "source_candidate_key": (
+            None
+            if cached.metadata.get("candidate_key") is None
+            else str(cached.metadata["candidate_key"])
+        ),
         "pts_final_selection_mode": pts_config.final_selection.mode,
         "pts_construction_method": pts_config.method,
         "pts_population_schedule": (
@@ -2409,6 +2433,8 @@ def _copy_cached_best_candidate_fields(
             )
     if "reward" in metadata and metadata["reward"] is not None:
         payload["pts_best_candidate_reward"] = float(metadata["reward"])
+    if "candidate_key" in metadata and metadata["candidate_key"] is not None:
+        payload["source_candidate_key"] = str(metadata["candidate_key"])
     reward_metrics = metadata.get("reward_metrics")
     if isinstance(reward_metrics, Mapping):
         payload["pts_best_candidate_reward_metrics"] = dict(reward_metrics)
@@ -2417,6 +2443,18 @@ def _copy_cached_best_candidate_fields(
         payload["pts_best_candidate_epoch_reward_diagnostics"] = dict(
             epoch_diagnostics
         )
+
+
+def _selected_sessions_sha1(
+    *,
+    sessions_path: str | Path | None,
+    sessions: Sequence[Sequence[int]],
+) -> str:
+    if sessions_path is not None and Path(sessions_path).exists():
+        return str(_file_sha1_identity(sessions_path)["sha1"])
+    payload = [[int(item) for item in session] for session in sessions]
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
 
 
 def main(argv: Sequence[str] | None = None) -> None:

@@ -434,7 +434,11 @@ def load_miasrec_epoch_metrics(path: str | Path) -> list[dict[str, Any]]:
     return rows
 
 
-def load_tron_epoch_metrics(log_dir: str | Path) -> list[dict[str, Any]]:
+def load_tron_epoch_metrics(
+    log_dir: str | Path,
+    *,
+    max_epochs: int | None = None,
+) -> list[dict[str, Any]]:
     metrics_path = _find_latest_metrics_csv(Path(log_dir))
     if metrics_path is None:
         return []
@@ -446,6 +450,8 @@ def load_tron_epoch_metrics(log_dir: str | Path) -> list[dict[str, Any]]:
             if epoch_value is None:
                 continue
             epoch = int(epoch_value)
+            if max_epochs is not None and epoch >= int(max_epochs):
+                continue
             row = by_epoch.setdefault(epoch, {"epoch": epoch})
             for key, value in raw_row.items():
                 if value is None or value == "":
@@ -577,7 +583,7 @@ def _run_tron_diagnostic(
         ),
         diagnostic_summary_path=diagnostic_summary_path,
     )
-    rows = load_tron_epoch_metrics(run_info["log_dir"])
+    rows = load_tron_epoch_metrics(run_info["log_dir"], max_epochs=epochs)
     _write_json_and_csv(rows, out_dir / "tron_epoch_metrics")
     diag_summary = _load_json_object(diagnostic_summary_path)
     checkpoint_path = _optional_str(diag_summary.get("best_model_path"))

@@ -19,6 +19,7 @@ from attack.pipeline.runs.run_victim_valbest_epoch_diagnostic import (
     EXPECTED_ACTIONS,
     SourcePTSArtifact,
     load_miasrec_epoch_metrics,
+    load_tron_epoch_metrics,
     resolve_source_pts_artifact,
     source_identity_payload,
     summarize_epoch_metrics,
@@ -255,6 +256,32 @@ def test_tron_summary_records_best_checkpoint_flags() -> None:
     assert summary["formal_export_behavior"] == "last_model"
     assert summary["diagnostic_compared_best_checkpoint"] is True
     assert summary["used_best_checkpoint_for_formal_export"] is False
+
+
+def test_tron_epoch_metric_parsing_excludes_posthoc_validation_rows(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs" / "tron" / "version_0"
+    log_dir.mkdir(parents=True)
+    metrics_path = log_dir / "metrics.csv"
+    metrics_path.write_text(
+        "\n".join(
+            [
+                "epoch,step,train_loss,recall_cutoff_20,mrr_cutoff_20,test_loss",
+                "0,1,4.8,,,",
+                "0,2,,0.4,0.1,4.2",
+                "1,3,4.4,,,",
+                "1,4,,0.5,0.2,4.0",
+                "2,5,,0.3,0.08,5.0",
+                "2,5,,0.45,0.18,4.1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    rows = load_tron_epoch_metrics(log_dir, max_epochs=2)
+
+    assert [row["epoch"] for row in rows] == [1, 2]
+    assert rows[-1]["recall@20"] == pytest.approx(0.5)
+    assert rows[-1]["mrr@20"] == pytest.approx(0.2)
 
 
 def test_summary_csv_contains_source_identity_and_delta(tmp_path: Path) -> None:
