@@ -70,6 +70,11 @@ ACTION_COLUMNS = (
     CONTINUOUS_ACTION_STOP,
 )
 
+BEHAVIOR_SELECTION_MODE_GREEDY_MAXIMIN = "behavior_space_greedy_maximin"
+BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1 = (
+    "behavior_stratified_space_filling_v1"
+)
+
 CANDIDATE_DISTRIBUTION_COLUMNS = (
     "candidate_key",
     "candidate_id",
@@ -127,6 +132,27 @@ BY_SUFFIX_COLUMNS = (
     "continuous_stop_ratio",
 )
 
+BEHAVIOR_SELECTED_METADATA_COLUMNS = (
+    "selected_rank",
+    "source_pool_candidate_key",
+    "selection_stratum",
+    "selection_reason",
+)
+
+BEHAVIOR_SELECTED_DISTRIBUTION_COLUMNS = (
+    *CANDIDATE_DISTRIBUTION_COLUMNS[:2],
+    *BEHAVIOR_SELECTED_METADATA_COLUMNS,
+    "max_action_ratio_overall",
+    "entropy_overall",
+    *CANDIDATE_DISTRIBUTION_COLUMNS[2:],
+)
+
+BEHAVIOR_SELECTED_BY_SUFFIX_COLUMNS = (
+    *BY_SUFFIX_COLUMNS[:2],
+    *BEHAVIOR_SELECTED_METADATA_COLUMNS,
+    *BY_SUFFIX_COLUMNS[2:],
+)
+
 OVERALL_SUFFIX_COLUMNS = (
     "residual_suffix_len",
     "num_sessions",
@@ -157,6 +183,11 @@ BEHAVIOR_POOL_SUMMARY_COLUMNS = (
     "parameter_vector_json",
     "dominant_action_family",
     "dominant_action_ratio",
+    "max_action_ratio_overall",
+    "entropy_overall",
+    "max_action_ratio_behavior_vector",
+    "entropy_behavior_vector",
+    "behavior_selection_pool",
     "behavior_vector_json",
     "stop_ratio",
     "full_suffix_ratio",
@@ -179,13 +210,19 @@ class ContinuousInitDiagnosticResult:
 @dataclass(frozen=True)
 class BehaviorAwareSelectionConfig:
     enabled: bool = False
+    mode: str = BEHAVIOR_SELECTION_MODE_GREEDY_MAXIMIN
     pool_size: int = 256
     select_size: int | None = None
     distance: str = "l1"
-    max_stop_ratio: float = 0.90
-    max_per_dominant_family: int = 3
-    min_partial_candidates: int = 2
-    min_generate_candidates: int = 2
+    min_behavior_distance: float = 1e-9
+    extreme_count: int = 6
+    moderate_count: int = 9
+    balanced_count: int = 1
+    extreme_max_action_ratio_min: float = 0.70
+    extreme_max_action_ratio_max: float = 0.90
+    moderate_max_action_ratio_min: float = 0.35
+    moderate_max_action_ratio_max: float = 0.70
+    reject_max_action_ratio_above: float = 0.95
 
     def resolved_select_size(self, default_size: int) -> int:
         value = int(default_size if self.select_size is None else self.select_size)
@@ -194,19 +231,51 @@ class BehaviorAwareSelectionConfig:
         return value
 
     def validate(self, *, default_select_size: int) -> None:
+        mode = str(self.mode).strip().lower()
+        if mode not in {
+            BEHAVIOR_SELECTION_MODE_GREEDY_MAXIMIN,
+            BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1,
+        }:
+            raise ValueError(f"Unsupported behavior_selection_mode: {self.mode}")
         if int(self.pool_size) <= 0:
             raise ValueError("behavior_pool_size must be positive.")
-        self.resolved_select_size(default_select_size)
+        select_size = self.resolved_select_size(default_select_size)
         if str(self.distance).strip().lower() != "l1":
             raise ValueError("behavior_distance currently supports only 'l1'.")
-        if not 0.0 <= float(self.max_stop_ratio) <= 1.0:
-            raise ValueError("behavior_max_stop_ratio must be in [0, 1].")
-        if int(self.max_per_dominant_family) <= 0:
-            raise ValueError("behavior_max_per_dominant_family must be positive.")
-        if int(self.min_partial_candidates) < 0:
-            raise ValueError("behavior_min_partial_candidates must be non-negative.")
-        if int(self.min_generate_candidates) < 0:
-            raise ValueError("behavior_min_generate_candidates must be non-negative.")
+        if float(self.min_behavior_distance) < 0.0:
+            raise ValueError("behavior_min_distance must be non-negative.")
+        if mode != BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1:
+            return
+        for field_name in ("extreme_count", "moderate_count", "balanced_count"):
+            if int(getattr(self, field_name)) < 0:
+                raise ValueError(f"{field_name} must be non-negative.")
+        requested = (
+            int(self.extreme_count)
+            + int(self.moderate_count)
+            + int(self.balanced_count)
+        )
+        if requested > select_size:
+            raise ValueError(
+                "behavior_extreme_count + behavior_moderate_count + "
+                "behavior_balanced_count must not exceed behavior_select_size."
+            )
+        if not (
+            0.0
+            <= float(self.moderate_max_action_ratio_min)
+            <= float(self.moderate_max_action_ratio_max)
+            <= float(self.extreme_max_action_ratio_max)
+            <= 1.0
+        ):
+            raise ValueError("behavior max-ratio thresholds must be ordered in [0, 1].")
+        if not (
+            0.0
+            <= float(self.extreme_max_action_ratio_min)
+            <= float(self.extreme_max_action_ratio_max)
+            <= 1.0
+        ):
+            raise ValueError("behavior extreme max-ratio thresholds must be in [0, 1].")
+        if float(self.reject_max_action_ratio_above) < 0.0:
+            raise ValueError("behavior_reject_max_ratio_above must be non-negative.")
 
 
 def run_continuous_beta_init_diagnostic(
@@ -220,13 +289,23 @@ def run_continuous_beta_init_diagnostic(
     template_sessions: Sequence[Sequence[int]] | None = None,
     target_item: int | None = None,
     behavior_aware_select: bool = False,
+    behavior_selection_mode: str = BEHAVIOR_SELECTION_MODE_GREEDY_MAXIMIN,
     behavior_pool_size: int = 256,
     behavior_select_size: int | None = None,
     behavior_distance: str = "l1",
-    behavior_max_stop_ratio: float = 0.90,
-    behavior_max_per_dominant_family: int = 3,
-    behavior_min_partial_candidates: int = 2,
-    behavior_min_generate_candidates: int = 2,
+    behavior_min_distance: float = 1e-9,
+    behavior_max_stop_ratio: float | None = None,
+    behavior_max_per_dominant_family: int | None = None,
+    behavior_min_partial_candidates: int | None = None,
+    behavior_min_generate_candidates: int | None = None,
+    behavior_extreme_count: int = 6,
+    behavior_moderate_count: int = 9,
+    behavior_balanced_count: int = 1,
+    behavior_extreme_max_ratio_min: float = 0.70,
+    behavior_extreme_max_ratio_max: float = 0.90,
+    behavior_moderate_max_ratio_min: float = 0.35,
+    behavior_moderate_max_ratio_max: float = 0.70,
+    behavior_reject_max_ratio_above: float = 0.95,
 ) -> ContinuousInitDiagnosticResult:
     _validate_continuous_config(config)
     shared_paths = shared_artifact_paths(
@@ -263,13 +342,19 @@ def run_continuous_beta_init_diagnostic(
         raise ValueError("max_candidates must be positive.")
     behavior_config = BehaviorAwareSelectionConfig(
         enabled=bool(behavior_aware_select),
+        mode=str(behavior_selection_mode),
         pool_size=int(behavior_pool_size),
         select_size=behavior_select_size,
         distance=str(behavior_distance),
-        max_stop_ratio=float(behavior_max_stop_ratio),
-        max_per_dominant_family=int(behavior_max_per_dominant_family),
-        min_partial_candidates=int(behavior_min_partial_candidates),
-        min_generate_candidates=int(behavior_min_generate_candidates),
+        min_behavior_distance=float(behavior_min_distance),
+        extreme_count=int(behavior_extreme_count),
+        moderate_count=int(behavior_moderate_count),
+        balanced_count=int(behavior_balanced_count),
+        extreme_max_action_ratio_min=float(behavior_extreme_max_ratio_min),
+        extreme_max_action_ratio_max=float(behavior_extreme_max_ratio_max),
+        moderate_max_action_ratio_min=float(behavior_moderate_max_ratio_min),
+        moderate_max_action_ratio_max=float(behavior_moderate_max_ratio_max),
+        reject_max_action_ratio_above=float(behavior_reject_max_ratio_above),
     )
     if behavior_config.enabled:
         behavior_config.validate(default_select_size=first_population_size)
@@ -439,18 +524,51 @@ def _write_behavior_aware_artifacts(
             "[continuous-beta-init-diagnostic] warning: behavior_select_size "
             "exceeds pool size; selecting all available candidates."
         )
-    selected = select_behavior_aware_candidates(
-        pool,
-        select_size=select_size,
-        distance=str(behavior_config.distance),
-        max_stop_ratio=float(behavior_config.max_stop_ratio),
-        max_per_dominant_family=int(behavior_config.max_per_dominant_family),
-        min_partial_candidates=int(behavior_config.min_partial_candidates),
-        min_generate_candidates=int(behavior_config.min_generate_candidates),
-    )
+    fallback_records: list[dict[str, object]] = []
+    if (
+        str(behavior_config.mode).strip().lower()
+        == BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1
+    ):
+        selected = select_behavior_stratified_space_filling_candidates(
+            pool,
+            select_size=select_size,
+            distance=str(behavior_config.distance),
+            extreme_count=int(behavior_config.extreme_count),
+            moderate_count=int(behavior_config.moderate_count),
+            balanced_count=int(behavior_config.balanced_count),
+            extreme_max_action_ratio_min=float(
+                behavior_config.extreme_max_action_ratio_min
+            ),
+            extreme_max_action_ratio_max=float(
+                behavior_config.extreme_max_action_ratio_max
+            ),
+            moderate_max_action_ratio_min=float(
+                behavior_config.moderate_max_action_ratio_min
+            ),
+            moderate_max_action_ratio_max=float(
+                behavior_config.moderate_max_action_ratio_max
+            ),
+            reject_max_action_ratio_above=float(
+                behavior_config.reject_max_action_ratio_above
+            ),
+            fallback_records=fallback_records,
+        )
+    else:
+        selected = select_behavior_aware_candidates(
+            pool,
+            select_size=select_size,
+            distance=str(behavior_config.distance),
+            min_behavior_distance=float(behavior_config.min_behavior_distance),
+        )
+    selected = _attach_selected_min_distances(selected)
     selected_by_pool_key = {
         str(candidate["pool_candidate_key"]): (rank, candidate)
         for rank, candidate in enumerate(selected)
+    }
+    balanced_pool_keys = {
+        str(candidate["pool_candidate_key"])
+        for candidate in selected
+        if str(candidate.get("selection_stratum", "")) == "balanced"
     }
 
     pool_summary_path = output_path / "behavior_pool_summary.csv"
@@ -463,6 +581,8 @@ def _write_behavior_aware_artifacts(
                 selected_entry=selected_by_pool_key.get(
                     str(candidate["pool_candidate_key"])
                 ),
+                behavior_config=behavior_config,
+                balanced_pool_keys=balanced_pool_keys,
             )
             for candidate in pool
         ],
@@ -488,7 +608,7 @@ def _write_behavior_aware_artifacts(
     selected_summary_path = output_path / "behavior_selected_distribution_summary.csv"
     _write_csv(
         selected_summary_path,
-        CANDIDATE_DISTRIBUTION_COLUMNS,
+        BEHAVIOR_SELECTED_DISTRIBUTION_COLUMNS,
         selected_candidate_rows,
     )
     paths["behavior_selected_distribution_summary"] = str(selected_summary_path)
@@ -496,7 +616,7 @@ def _write_behavior_aware_artifacts(
     selected_by_suffix_path = output_path / "behavior_selected_by_suffix_len_summary.csv"
     _write_csv(
         selected_by_suffix_path,
-        BY_SUFFIX_COLUMNS,
+        BEHAVIOR_SELECTED_BY_SUFFIX_COLUMNS,
         selected_by_suffix_rows,
     )
     paths["behavior_selected_by_suffix_len_summary"] = str(selected_by_suffix_path)
@@ -507,15 +627,11 @@ def _write_behavior_aware_artifacts(
             behavior_config,
             default_select_size=default_select_size,
             selected_count=len(selected),
+            fallbacks_used=fallback_records,
         ),
         selection_config_path,
     )
     paths["behavior_selection_config"] = str(selection_config_path)
-
-    _warn_if_behavior_soft_targets_missed(
-        selected,
-        behavior_config=behavior_config,
-    )
 
 
 def _build_behavior_candidate_pool(
@@ -568,6 +684,7 @@ def _build_behavior_candidate_pool(
         summary = _candidate_summary_row(candidate_info, records)
         behavior_vector = build_behavior_vector(records)
         dominant_action_family, dominant_action_ratio = _dominant_action_family(summary)
+        behavior_stats = behavior_statistics(summary, behavior_vector)
         pool.append(
             {
                 "pool_candidate_key": pool_key,
@@ -576,6 +693,7 @@ def _build_behavior_candidate_pool(
                 "records": records,
                 "summary": summary,
                 "behavior_vector": behavior_vector,
+                "behavior_stats": behavior_stats,
                 "dominant_action_family": dominant_action_family,
                 "dominant_action_ratio": float(dominant_action_ratio),
             }
@@ -779,63 +897,225 @@ def build_behavior_vector(records: Sequence[Mapping[str, object]]) -> list[float
     return vector
 
 
+def behavior_statistics(
+    summary: Mapping[str, object],
+    behavior_vector: Sequence[float],
+) -> dict[str, float]:
+    overall = [
+        float(summary[f"{action_name}_ratio"])
+        for action_name in ACTION_COLUMNS
+    ]
+    vector = [float(value) for value in behavior_vector]
+    return {
+        "max_action_ratio_overall": max(overall) if overall else 0.0,
+        "entropy_overall": _normalized_entropy(overall),
+        "max_action_ratio_behavior_vector": max(vector) if vector else 0.0,
+        "entropy_behavior_vector": _normalized_entropy(vector),
+    }
+
+
 def select_behavior_aware_candidates(
     candidates: Sequence[Mapping[str, Any]],
     *,
     select_size: int,
     distance: str = "l1",
-    max_stop_ratio: float = 0.90,
-    max_per_dominant_family: int = 3,
-    min_partial_candidates: int = 2,
-    min_generate_candidates: int = 2,
+    min_behavior_distance: float = 1e-9,
+    max_stop_ratio: float | None = None,
+    max_per_dominant_family: int | None = None,
+    min_partial_candidates: int | None = None,
+    min_generate_candidates: int | None = None,
 ) -> list[Mapping[str, Any]]:
     if str(distance).strip().lower() != "l1":
         raise ValueError("behavior_distance currently supports only 'l1'.")
     if int(select_size) <= 0:
         raise ValueError("select_size must be positive.")
+    if float(min_behavior_distance) < 0.0:
+        raise ValueError("min_behavior_distance must be non-negative.")
     pool = list(candidates)
     if not pool:
         return []
-    selected: list[Mapping[str, Any]] = []
-
-    for candidate in pool:
-        if len(selected) >= int(select_size):
-            break
-        if not _is_behavior_covering_candidate(candidate):
-            continue
-        if not _passes_behavior_selection_caps(
-            candidate,
-            selected,
-            max_stop_ratio=float(max_stop_ratio),
-            max_per_dominant_family=int(max_per_dominant_family),
-        ):
-            continue
-        if _min_behavior_distance(candidate, selected) <= 1e-12:
-            continue
-        selected.append(candidate)
-
-    if not selected:
-        selected.append(_most_balanced_candidate(pool))
-
+    selected: list[Mapping[str, Any]] = [_most_balanced_candidate(pool)]
     _fill_behavior_selection(
         pool,
         selected,
         select_size=int(select_size),
-        strict_caps=True,
-        max_stop_ratio=float(max_stop_ratio),
-        max_per_dominant_family=int(max_per_dominant_family),
-        min_partial_candidates=int(min_partial_candidates),
-        min_generate_candidates=int(min_generate_candidates),
+        min_behavior_distance=float(min_behavior_distance),
+        enforce_min_distance=True,
     )
     _fill_behavior_selection(
         pool,
         selected,
         select_size=int(select_size),
-        strict_caps=False,
-        max_stop_ratio=float(max_stop_ratio),
-        max_per_dominant_family=int(max_per_dominant_family),
-        min_partial_candidates=int(min_partial_candidates),
-        min_generate_candidates=int(min_generate_candidates),
+        min_behavior_distance=float(min_behavior_distance),
+        enforce_min_distance=False,
+    )
+    return selected[: int(select_size)]
+
+
+def select_behavior_stratified_space_filling_candidates(
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    select_size: int,
+    distance: str = "l1",
+    extreme_count: int = 6,
+    moderate_count: int = 9,
+    balanced_count: int = 1,
+    extreme_max_action_ratio_min: float = 0.70,
+    extreme_max_action_ratio_max: float = 0.90,
+    moderate_max_action_ratio_min: float = 0.35,
+    moderate_max_action_ratio_max: float = 0.70,
+    reject_max_action_ratio_above: float = 0.95,
+    fallback_records: list[dict[str, object]] | None = None,
+) -> list[Mapping[str, Any]]:
+    if str(distance).strip().lower() != "l1":
+        raise ValueError("behavior_distance currently supports only 'l1'.")
+    if int(select_size) <= 0:
+        raise ValueError("select_size must be positive.")
+    for name, value in (
+        ("extreme_count", extreme_count),
+        ("moderate_count", moderate_count),
+        ("balanced_count", balanced_count),
+    ):
+        if int(value) < 0:
+            raise ValueError(f"{name} must be non-negative.")
+    if int(extreme_count) + int(moderate_count) + int(balanced_count) > int(select_size):
+        raise ValueError("requested stratum counts must not exceed select_size.")
+
+    pool = [_with_behavior_stats(candidate) for candidate in candidates]
+    if not pool:
+        return []
+
+    selected: list[dict[str, Any]] = []
+    selected_keys: set[str] = set()
+    fallbacks = fallback_records if fallback_records is not None else []
+
+    noncollapsed = [
+        candidate
+        for candidate in pool
+        if _candidate_max_action_ratio(candidate) <= float(reject_max_action_ratio_above)
+    ]
+    eligible_for_balance = noncollapsed if noncollapsed else pool
+    if not noncollapsed:
+        fallbacks.append(
+            {
+                "stage": "balanced",
+                "reason": "no_noncollapsed_candidates",
+                "added": 0,
+            }
+        )
+
+    balanced = _highest_entropy_candidates(
+        eligible_for_balance,
+        count=int(balanced_count),
+        selected_keys=selected_keys,
+    )
+    _append_selected(
+        selected,
+        selected_keys,
+        balanced,
+        stratum="balanced",
+        reason="highest_entropy",
+    )
+
+    extreme_pool = [
+        candidate
+        for candidate in noncollapsed
+        if _candidate_key(candidate) not in selected_keys
+        and float(extreme_max_action_ratio_min)
+        <= _candidate_max_action_ratio(candidate)
+        <= float(extreme_max_action_ratio_max)
+    ]
+    extreme = _maximin_candidates(
+        extreme_pool,
+        count=int(extreme_count),
+        selected_keys=selected_keys,
+    )
+    _append_selected(
+        selected,
+        selected_keys,
+        extreme,
+        stratum="extreme",
+        reason="extreme_maximin",
+    )
+    if len(extreme) < int(extreme_count):
+        fallbacks.append(
+            {
+                "stage": "extreme",
+                "reason": "insufficient_extreme_pool",
+                "requested": int(extreme_count),
+                "selected": int(len(extreme)),
+            }
+        )
+
+    moderate_pool = [
+        candidate
+        for candidate in noncollapsed
+        if _candidate_key(candidate) not in selected_keys
+        and float(moderate_max_action_ratio_min)
+        <= _candidate_max_action_ratio(candidate)
+        < float(moderate_max_action_ratio_max)
+    ]
+    moderate = _maximin_candidates(
+        moderate_pool,
+        count=int(moderate_count),
+        selected_keys=selected_keys,
+    )
+    _append_selected(
+        selected,
+        selected_keys,
+        moderate,
+        stratum="moderate",
+        reason="moderate_maximin",
+    )
+    if len(moderate) < int(moderate_count):
+        fallbacks.append(
+            {
+                "stage": "moderate",
+                "reason": "insufficient_moderate_pool",
+                "requested": int(moderate_count),
+                "selected": int(len(moderate)),
+            }
+        )
+
+    _fill_stratified_fallback(
+        selected,
+        selected_keys,
+        [
+            candidate
+            for candidate in noncollapsed
+            if (
+                float(moderate_max_action_ratio_min)
+                <= _candidate_max_action_ratio(candidate)
+                < float(moderate_max_action_ratio_max)
+            )
+            or (
+                float(extreme_max_action_ratio_min)
+                <= _candidate_max_action_ratio(candidate)
+                <= float(extreme_max_action_ratio_max)
+            )
+        ],
+        select_size=int(select_size),
+        stratum="fallback",
+        reason="fallback_other_stratum",
+        fallbacks=fallbacks,
+    )
+    _fill_stratified_fallback(
+        selected,
+        selected_keys,
+        noncollapsed,
+        select_size=int(select_size),
+        stratum="fallback",
+        reason="fallback_noncollapsed",
+        fallbacks=fallbacks,
+    )
+    _fill_stratified_fallback(
+        selected,
+        selected_keys,
+        pool,
+        select_size=int(select_size),
+        stratum="fallback",
+        reason="fallback_full_pool",
+        fallbacks=fallbacks,
     )
     return selected[: int(select_size)]
 
@@ -845,68 +1125,185 @@ def _fill_behavior_selection(
     selected: list[Mapping[str, Any]],
     *,
     select_size: int,
-    strict_caps: bool,
-    max_stop_ratio: float,
-    max_per_dominant_family: int,
-    min_partial_candidates: int,
-    min_generate_candidates: int,
+    min_behavior_distance: float,
+    enforce_min_distance: bool,
 ) -> None:
+    selected_keys = {str(item["pool_candidate_key"]) for item in selected}
     while len(selected) < int(select_size):
         remaining = [
             candidate
             for candidate in pool
-            if str(candidate["pool_candidate_key"])
-            not in {str(item["pool_candidate_key"]) for item in selected}
+            if str(candidate["pool_candidate_key"]) not in selected_keys
         ]
-        if strict_caps:
-            remaining = [
-                candidate
-                for candidate in remaining
-                if _passes_behavior_selection_caps(
-                    candidate,
-                    selected,
-                    max_stop_ratio=float(max_stop_ratio),
-                    max_per_dominant_family=int(max_per_dominant_family),
-                )
-            ]
         if not remaining:
             return
         best = max(
             remaining,
             key=lambda candidate: (
-                _behavior_selection_score(
-                    candidate,
-                    selected,
-                    min_partial_candidates=int(min_partial_candidates),
-                    min_generate_candidates=int(min_generate_candidates),
-                ),
+                _min_behavior_distance(candidate, selected),
                 -int(candidate.get("pool_candidate_id", 0)),
             ),
         )
-        if strict_caps and _min_behavior_distance(best, selected) <= 1e-12:
+        if enforce_min_distance and _min_behavior_distance(
+            best,
+            selected,
+        ) < float(min_behavior_distance):
             return
         selected.append(best)
+        selected_keys.add(str(best["pool_candidate_key"]))
 
 
-def _behavior_selection_score(
-    candidate: Mapping[str, Any],
-    selected: Sequence[Mapping[str, Any]],
+def _with_behavior_stats(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    item = dict(candidate)
+    if "behavior_stats" not in item:
+        item["behavior_stats"] = behavior_statistics(
+            item["summary"],
+            item["behavior_vector"],
+        )
+    return item
+
+
+def _candidate_key(candidate: Mapping[str, Any]) -> str:
+    return str(candidate["pool_candidate_key"])
+
+
+def _candidate_pool_id(candidate: Mapping[str, Any]) -> int:
+    return int(candidate.get("pool_candidate_id", 0))
+
+
+def _candidate_max_action_ratio(candidate: Mapping[str, Any]) -> float:
+    return float(candidate["behavior_stats"]["max_action_ratio_overall"])
+
+
+def _candidate_entropy(candidate: Mapping[str, Any]) -> float:
+    return float(candidate["behavior_stats"]["entropy_overall"])
+
+
+def _highest_entropy_candidates(
+    pool: Sequence[Mapping[str, Any]],
     *,
-    min_partial_candidates: int,
-    min_generate_candidates: int,
-) -> float:
-    score = _min_behavior_distance(candidate, selected)
-    if _partial_candidate_count(selected) < int(min_partial_candidates) and _is_partial_rich(
-        candidate
-    ):
-        score += 0.25
-    if _generate_candidate_count(selected) < int(min_generate_candidates) and _is_generate_rich(
-        candidate
-    ):
-        score += 0.25
-    if _is_mixed_behavior(candidate):
-        score += 0.05
-    return float(score)
+    count: int,
+    selected_keys: set[str],
+) -> list[Mapping[str, Any]]:
+    if int(count) <= 0:
+        return []
+    ordered = sorted(
+        [
+            candidate
+            for candidate in pool
+            if _candidate_key(candidate) not in selected_keys
+        ],
+        key=lambda candidate: (
+            -_candidate_entropy(candidate),
+            _candidate_max_action_ratio(candidate),
+            _candidate_pool_id(candidate),
+        ),
+    )
+    return ordered[: int(count)]
+
+
+def _maximin_candidates(
+    pool: Sequence[Mapping[str, Any]],
+    *,
+    count: int,
+    selected_keys: set[str],
+) -> list[Mapping[str, Any]]:
+    selected: list[Mapping[str, Any]] = []
+    local_selected_keys: set[str] = set()
+    while len(selected) < int(count):
+        remaining = [
+            candidate
+            for candidate in pool
+            if _candidate_key(candidate) not in selected_keys
+            and _candidate_key(candidate) not in local_selected_keys
+        ]
+        if not remaining:
+            break
+        if not selected:
+            best = _highest_entropy_candidates(
+                remaining,
+                count=1,
+                selected_keys=set(),
+            )[0]
+        else:
+            best = max(
+                remaining,
+                key=lambda candidate: (
+                    _min_behavior_distance(candidate, selected),
+                    _candidate_entropy(candidate),
+                    -_candidate_max_action_ratio(candidate),
+                    -_candidate_pool_id(candidate),
+                ),
+            )
+        selected.append(best)
+        local_selected_keys.add(_candidate_key(best))
+    return selected
+
+
+def _append_selected(
+    selected: list[dict[str, Any]],
+    selected_keys: set[str],
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    stratum: str,
+    reason: str,
+) -> None:
+    for candidate in candidates:
+        key = _candidate_key(candidate)
+        if key in selected_keys:
+            continue
+        item = dict(candidate)
+        item["selection_stratum"] = str(stratum)
+        item["selection_reason"] = str(reason)
+        selected.append(item)
+        selected_keys.add(key)
+
+
+def _fill_stratified_fallback(
+    selected: list[dict[str, Any]],
+    selected_keys: set[str],
+    pool: Sequence[Mapping[str, Any]],
+    *,
+    select_size: int,
+    stratum: str,
+    reason: str,
+    fallbacks: list[dict[str, object]],
+) -> None:
+    if len(selected) >= int(select_size):
+        return
+    before = len(selected)
+    while len(selected) < int(select_size):
+        remaining = [
+            candidate
+            for candidate in pool
+            if _candidate_key(candidate) not in selected_keys
+        ]
+        if not remaining:
+            break
+        best = max(
+            remaining,
+            key=lambda candidate: (
+                _min_behavior_distance(candidate, selected),
+                _candidate_entropy(candidate),
+                -_candidate_max_action_ratio(candidate),
+                -_candidate_pool_id(candidate),
+            ),
+        )
+        _append_selected(
+            selected,
+            selected_keys,
+            [best],
+            stratum=stratum,
+            reason=reason,
+        )
+    added = len(selected) - before
+    if added:
+        fallbacks.append(
+            {
+                "stage": reason,
+                "added": int(added),
+            }
+        )
 
 
 def _min_behavior_distance(
@@ -940,76 +1337,6 @@ def _most_balanced_candidate(
     )
 
 
-def _passes_behavior_selection_caps(
-    candidate: Mapping[str, Any],
-    selected: Sequence[Mapping[str, Any]],
-    *,
-    max_stop_ratio: float,
-    max_per_dominant_family: int,
-) -> bool:
-    dominant_family = str(candidate["dominant_action_family"])
-    dominant_count = sum(
-        1
-        for item in selected
-        if str(item["dominant_action_family"]) == dominant_family
-    )
-    if dominant_count >= int(max_per_dominant_family):
-        return False
-    if (
-        dominant_family == CONTINUOUS_ACTION_STOP
-        and float(candidate["summary"]["continuous_stop_ratio"]) > float(max_stop_ratio)
-    ):
-        stop_heavy_count = sum(
-            1
-            for item in selected
-            if str(item["dominant_action_family"]) == CONTINUOUS_ACTION_STOP
-            and float(item["summary"]["continuous_stop_ratio"]) > float(max_stop_ratio)
-        )
-        if stop_heavy_count >= 1:
-            return False
-    return True
-
-
-def _is_behavior_covering_candidate(candidate: Mapping[str, Any]) -> bool:
-    return str(candidate["candidate_info"]["sample_origin"]) == (
-        "continuous_beta_behavior_covering"
-    )
-
-
-def _is_partial_rich(candidate: Mapping[str, Any]) -> bool:
-    summary = candidate["summary"]
-    return (
-        float(summary["continuous_partial_keep_suffix_ratio"])
-        + float(summary["continuous_partial_generate_suffix_ratio"])
-    ) >= 0.20
-
-
-def _is_generate_rich(candidate: Mapping[str, Any]) -> bool:
-    summary = candidate["summary"]
-    return (
-        float(summary["continuous_generate_full_suffix_ratio"])
-        + float(summary["continuous_partial_generate_suffix_ratio"])
-    ) >= 0.20 or float(summary["generate_ratio_non_stop"]) >= 0.20
-
-
-def _is_mixed_behavior(candidate: Mapping[str, Any]) -> bool:
-    summary = candidate["summary"]
-    active = sum(
-        1
-        for action_name in ACTION_COLUMNS
-        if float(summary[f"{action_name}_ratio"]) >= 0.10
-    )
-    return active >= 2
-
-
-def _partial_candidate_count(candidates: Sequence[Mapping[str, Any]]) -> int:
-    return sum(1 for candidate in candidates if _is_partial_rich(candidate))
-
-
-def _generate_candidate_count(candidates: Sequence[Mapping[str, Any]]) -> int:
-    return sum(1 for candidate in candidates if _is_generate_rich(candidate))
-
-
 def _dominant_action_family(
     summary: Mapping[str, object],
 ) -> tuple[str, float]:
@@ -1024,13 +1351,16 @@ def _behavior_pool_summary_row(
     candidate: Mapping[str, Any],
     *,
     selected_entry: tuple[int, Mapping[str, Any]] | None,
+    behavior_config: BehaviorAwareSelectionConfig,
+    balanced_pool_keys: set[str],
 ) -> dict[str, object]:
     summary = candidate["summary"]
     info = candidate["candidate_info"]
     selected_rank = "" if selected_entry is None else int(selected_entry[0])
-    selected_key = "" if selected_entry is None else f"selected_cand{selected_entry[0]}"
+    selected_key = "" if selected_entry is None else str(candidate["pool_candidate_key"])
     vector = [float(value) for value in candidate["behavior_vector"]]
     parameter_vector = [float(value) for value in info["parameter_vector"]]
+    stats = _with_behavior_stats(candidate)["behavior_stats"]
     return {
         "pool_candidate_key": str(candidate["pool_candidate_key"]),
         "selected": bool(selected_entry is not None),
@@ -1043,6 +1373,17 @@ def _behavior_pool_summary_row(
         "parameter_vector_json": json.dumps(parameter_vector),
         "dominant_action_family": str(candidate["dominant_action_family"]),
         "dominant_action_ratio": float(candidate["dominant_action_ratio"]),
+        "max_action_ratio_overall": float(stats["max_action_ratio_overall"]),
+        "entropy_overall": float(stats["entropy_overall"]),
+        "max_action_ratio_behavior_vector": float(
+            stats["max_action_ratio_behavior_vector"]
+        ),
+        "entropy_behavior_vector": float(stats["entropy_behavior_vector"]),
+        "behavior_selection_pool": _behavior_selection_pool_label(
+            candidate,
+            behavior_config=behavior_config,
+            balanced_pool_keys=balanced_pool_keys,
+        ),
         "behavior_vector_json": json.dumps(vector),
         "stop_ratio": float(summary["continuous_stop_ratio"]),
         "full_suffix_ratio": float(summary["continuous_keep_full_suffix_ratio"])
@@ -1066,6 +1407,38 @@ def _behavior_pool_summary_row(
     }
 
 
+def _behavior_selection_pool_label(
+    candidate: Mapping[str, Any],
+    *,
+    behavior_config: BehaviorAwareSelectionConfig,
+    balanced_pool_keys: set[str],
+) -> str:
+    if (
+        str(behavior_config.mode).strip().lower()
+        != BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1
+    ):
+        return "unclassified"
+    key = _candidate_key(candidate)
+    if key in balanced_pool_keys:
+        return "balanced_candidate"
+    max_ratio = _candidate_max_action_ratio(_with_behavior_stats(candidate))
+    if max_ratio > float(behavior_config.reject_max_action_ratio_above):
+        return "rejected_overcollapsed"
+    if (
+        float(behavior_config.extreme_max_action_ratio_min)
+        <= max_ratio
+        <= float(behavior_config.extreme_max_action_ratio_max)
+    ):
+        return "extreme"
+    if (
+        float(behavior_config.moderate_max_action_ratio_min)
+        <= max_ratio
+        < float(behavior_config.moderate_max_action_ratio_max)
+    ):
+        return "moderate"
+    return "fallback_only"
+
+
 def _behavior_selected_candidate_payload(
     candidate: Mapping[str, Any],
     *,
@@ -1075,16 +1448,26 @@ def _behavior_selected_candidate_payload(
     policy = info["policy"]
     if not isinstance(policy, ContinuousBetaPolicy):
         raise TypeError("candidate_info['policy'] must be a ContinuousBetaPolicy.")
+    stats = _with_behavior_stats(candidate)["behavior_stats"]
     return {
-        "selected_candidate_key": f"selected_cand{int(selected_rank)}",
-        "pool_candidate_key": str(candidate["pool_candidate_key"]),
         "selected_rank": int(selected_rank),
+        "candidate_key": str(candidate["pool_candidate_key"]),
+        "pool_candidate_key": str(candidate["pool_candidate_key"]),
+        "source_pool_candidate_key": str(candidate["pool_candidate_key"]),
+        "selection_stratum": str(candidate.get("selection_stratum", "")),
+        "selection_reason": str(candidate.get("selection_reason", "")),
+        "max_action_ratio_overall": float(stats["max_action_ratio_overall"]),
+        "entropy_overall": float(stats["entropy_overall"]),
         "sample_origin": str(info["sample_origin"]),
         "prototype_name": str(info.get("prototype_name", "")),
+        "parameterization": str(policy.parameterization),
         "policy": policy.to_dict(),
         "parameter_vector": [float(value) for value in info["parameter_vector"]],
         "dominant_action_family": str(candidate["dominant_action_family"]),
         "behavior_vector": [float(value) for value in candidate["behavior_vector"]],
+        "min_distance_to_previous_selected": float(
+            candidate.get("min_distance_to_previous_selected", 0.0)
+        ),
     }
 
 
@@ -1094,11 +1477,20 @@ def _selected_candidate_info(
     selected_rank: int,
 ) -> dict[str, object]:
     info = dict(candidate["candidate_info"])
-    info["candidate_key"] = f"selected_cand{int(selected_rank)}"
-    info["candidate_id"] = int(selected_rank)
+    info["candidate_key"] = str(candidate["pool_candidate_key"])
+    info["candidate_id"] = int(candidate.get("pool_candidate_id", selected_rank))
+    info["selected_rank"] = int(selected_rank)
+    info["source_pool_candidate_key"] = str(candidate["pool_candidate_key"])
+    info["selection_stratum"] = str(candidate.get("selection_stratum", ""))
+    info["selection_reason"] = str(candidate.get("selection_reason", ""))
+    stats = _with_behavior_stats(candidate)["behavior_stats"]
+    info["max_action_ratio_overall"] = float(stats["max_action_ratio_overall"])
+    info["entropy_overall"] = float(stats["entropy_overall"])
     sample_metadata = dict(info.get("sample_metadata", {}))
     sample_metadata["pool_candidate_key"] = str(candidate["pool_candidate_key"])
     sample_metadata["selected_rank"] = int(selected_rank)
+    sample_metadata["selection_stratum"] = str(candidate.get("selection_stratum", ""))
+    sample_metadata["selection_reason"] = str(candidate.get("selection_reason", ""))
     info["sample_metadata"] = sample_metadata
     return info
 
@@ -1108,45 +1500,59 @@ def _behavior_selection_config_payload(
     *,
     default_select_size: int,
     selected_count: int,
+    fallbacks_used: Sequence[Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
+    mode = str(behavior_config.mode).strip().lower()
     return {
         "behavior_aware_select": True,
+        "mode": mode,
         "behavior_pool_size": int(behavior_config.pool_size),
         "behavior_select_size": int(
             behavior_config.resolved_select_size(default_select_size)
         ),
         "behavior_selected_count": int(selected_count),
-        "behavior_distance": str(behavior_config.distance),
-        "behavior_max_stop_ratio": float(behavior_config.max_stop_ratio),
-        "behavior_max_per_dominant_family": int(
-            behavior_config.max_per_dominant_family
+        "selection_method": mode,
+        "behavior_vector": (
+            "overall_plus_suffix_1_suffix_2_suffix_3plus_action_ratios"
         ),
-        "behavior_min_partial_candidates": int(
-            behavior_config.min_partial_candidates
+        "distance": str(behavior_config.distance),
+        "behavior_min_distance": float(behavior_config.min_behavior_distance),
+        "extreme_count": int(behavior_config.extreme_count),
+        "moderate_count": int(behavior_config.moderate_count),
+        "balanced_count": int(behavior_config.balanced_count),
+        "extreme_max_action_ratio_min": float(
+            behavior_config.extreme_max_action_ratio_min
         ),
-        "behavior_min_generate_candidates": int(
-            behavior_config.min_generate_candidates
+        "extreme_max_action_ratio_max": float(
+            behavior_config.extreme_max_action_ratio_max
         ),
+        "moderate_max_action_ratio_min": float(
+            behavior_config.moderate_max_action_ratio_min
+        ),
+        "moderate_max_action_ratio_max": float(
+            behavior_config.moderate_max_action_ratio_max
+        ),
+        "reject_max_action_ratio_above": float(
+            behavior_config.reject_max_action_ratio_above
+        ),
+        "fallbacks_used": [dict(item) for item in (fallbacks_used or [])],
+        "uses_action_specific_quotas": False,
+        "uses_action_specific_caps": False,
+        "candidate_key_policy": "preserve_pool_candidate_key_with_selected_rank",
     }
 
 
-def _warn_if_behavior_soft_targets_missed(
+def _attach_selected_min_distances(
     selected: Sequence[Mapping[str, Any]],
-    *,
-    behavior_config: BehaviorAwareSelectionConfig,
-) -> None:
-    partial_count = _partial_candidate_count(selected)
-    generate_count = _generate_candidate_count(selected)
-    if partial_count < int(behavior_config.min_partial_candidates):
-        print(
-            "[continuous-beta-init-diagnostic] warning: behavior-aware selection "
-            f"found only {partial_count} partial-rich candidates."
+) -> list[dict[str, Any]]:
+    attached: list[dict[str, Any]] = []
+    for candidate in selected:
+        item = dict(candidate)
+        item["min_distance_to_previous_selected"] = (
+            0.0 if not attached else _min_behavior_distance(candidate, attached)
         )
-    if generate_count < int(behavior_config.min_generate_candidates):
-        print(
-            "[continuous-beta-init-diagnostic] warning: behavior-aware selection "
-            f"found only {generate_count} generate-rich candidates."
-        )
+        attached.append(item)
+    return attached
 
 
 def _rounding_variant_rows(
@@ -1230,12 +1636,23 @@ def _session_sample_row(
 
 
 def _candidate_base_row(candidate_info: Mapping[str, object]) -> dict[str, object]:
-    return {
+    row = {
         "candidate_key": str(candidate_info["candidate_key"]),
         "candidate_id": int(candidate_info["candidate_id"]),
         "sample_origin": str(candidate_info["sample_origin"]),
         "prototype_name": str(candidate_info.get("prototype_name", "")),
     }
+    for field_name in (
+        "selected_rank",
+        "source_pool_candidate_key",
+        "selection_stratum",
+        "selection_reason",
+        "max_action_ratio_overall",
+        "entropy_overall",
+    ):
+        if field_name in candidate_info:
+            row[field_name] = candidate_info[field_name]
+    return row
 
 
 def _parameter_row(candidate_info: Mapping[str, object]) -> dict[str, object]:
@@ -1334,6 +1751,15 @@ def _ratio(numerator: int, denominator: int) -> float:
     return 0.0 if int(denominator) <= 0 else float(numerator) / float(denominator)
 
 
+def _normalized_entropy(values: Sequence[float | int]) -> float:
+    positives = [float(value) for value in values if float(value) > 0.0]
+    total = float(sum(positives))
+    if total <= 0.0 or len(values) <= 1:
+        return 0.0
+    entropy = -sum((value / total) * math.log(value / total) for value in positives)
+    return float(entropy / math.log(float(len(values))))
+
+
 def _mean(values: Sequence[float | int]) -> float:
     return 0.0 if not values else float(sum(float(value) for value in values)) / float(len(values))
 
@@ -1389,13 +1815,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--sample-sessions", type=int, default=200)
     parser.add_argument("--include-rounding-variants", action="store_true")
     parser.add_argument("--behavior-aware-select", action="store_true")
+    parser.add_argument(
+        "--behavior-selection-mode",
+        default=BEHAVIOR_SELECTION_MODE_GREEDY_MAXIMIN,
+        choices=[
+            BEHAVIOR_SELECTION_MODE_GREEDY_MAXIMIN,
+            BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1,
+        ],
+    )
     parser.add_argument("--behavior-pool-size", type=int, default=256)
     parser.add_argument("--behavior-select-size", type=int, default=None)
     parser.add_argument("--behavior-distance", default="l1")
-    parser.add_argument("--behavior-max-stop-ratio", type=float, default=0.90)
-    parser.add_argument("--behavior-max-per-dominant-family", type=int, default=3)
-    parser.add_argument("--behavior-min-partial-candidates", type=int, default=2)
-    parser.add_argument("--behavior-min-generate-candidates", type=int, default=2)
+    parser.add_argument("--behavior-min-distance", type=float, default=1e-9)
+    parser.add_argument("--behavior-max-stop-ratio", type=float, default=None)
+    parser.add_argument("--behavior-max-per-dominant-family", type=int, default=None)
+    parser.add_argument("--behavior-min-partial-candidates", type=int, default=None)
+    parser.add_argument("--behavior-min-generate-candidates", type=int, default=None)
+    parser.add_argument("--behavior-extreme-count", type=int, default=6)
+    parser.add_argument("--behavior-moderate-count", type=int, default=9)
+    parser.add_argument("--behavior-balanced-count", type=int, default=1)
+    parser.add_argument("--behavior-extreme-max-ratio-min", type=float, default=0.70)
+    parser.add_argument("--behavior-extreme-max-ratio-max", type=float, default=0.90)
+    parser.add_argument("--behavior-moderate-max-ratio-min", type=float, default=0.35)
+    parser.add_argument("--behavior-moderate-max-ratio-max", type=float, default=0.70)
+    parser.add_argument("--behavior-reject-max-ratio-above", type=float, default=0.95)
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
@@ -1407,13 +1850,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         sample_sessions=args.sample_sessions,
         include_rounding_variants=bool(args.include_rounding_variants),
         behavior_aware_select=bool(args.behavior_aware_select),
+        behavior_selection_mode=str(args.behavior_selection_mode),
         behavior_pool_size=int(args.behavior_pool_size),
         behavior_select_size=args.behavior_select_size,
         behavior_distance=str(args.behavior_distance),
-        behavior_max_stop_ratio=float(args.behavior_max_stop_ratio),
-        behavior_max_per_dominant_family=int(args.behavior_max_per_dominant_family),
-        behavior_min_partial_candidates=int(args.behavior_min_partial_candidates),
-        behavior_min_generate_candidates=int(args.behavior_min_generate_candidates),
+        behavior_min_distance=float(args.behavior_min_distance),
+        behavior_max_stop_ratio=args.behavior_max_stop_ratio,
+        behavior_max_per_dominant_family=args.behavior_max_per_dominant_family,
+        behavior_min_partial_candidates=args.behavior_min_partial_candidates,
+        behavior_min_generate_candidates=args.behavior_min_generate_candidates,
+        behavior_extreme_count=int(args.behavior_extreme_count),
+        behavior_moderate_count=int(args.behavior_moderate_count),
+        behavior_balanced_count=int(args.behavior_balanced_count),
+        behavior_extreme_max_ratio_min=float(args.behavior_extreme_max_ratio_min),
+        behavior_extreme_max_ratio_max=float(args.behavior_extreme_max_ratio_max),
+        behavior_moderate_max_ratio_min=float(args.behavior_moderate_max_ratio_min),
+        behavior_moderate_max_ratio_max=float(args.behavior_moderate_max_ratio_max),
+        behavior_reject_max_ratio_above=float(args.behavior_reject_max_ratio_above),
     )
     print(f"[continuous-beta-init-diagnostic] output_dir={result.output_dir}")
     return 0
@@ -1425,10 +1878,17 @@ if __name__ == "__main__":
 
 __all__ = [
     "BEHAVIOR_POOL_SUMMARY_COLUMNS",
+    "BEHAVIOR_SELECTED_BY_SUFFIX_COLUMNS",
+    "BEHAVIOR_SELECTED_DISTRIBUTION_COLUMNS",
+    "BEHAVIOR_SELECTED_METADATA_COLUMNS",
+    "BEHAVIOR_SELECTION_MODE_GREEDY_MAXIMIN",
+    "BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1",
     "BehaviorAwareSelectionConfig",
     "ContinuousInitDiagnosticResult",
+    "behavior_statistics",
     "build_behavior_vector",
     "run_continuous_beta_init_diagnostic",
     "select_behavior_aware_candidates",
+    "select_behavior_stratified_space_filling_candidates",
     "main",
 ]

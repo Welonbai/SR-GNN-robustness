@@ -79,10 +79,6 @@ def test_behavior_aware_selection_prefers_diverse_candidates_over_first_n() -> N
     selected = select_behavior_aware_candidates(
         pool,
         select_size=4,
-        max_stop_ratio=0.9,
-        max_per_dominant_family=2,
-        min_partial_candidates=1,
-        min_generate_candidates=1,
     )
 
     selected_families = {str(candidate["dominant_action_family"]) for candidate in selected}
@@ -93,6 +89,30 @@ def test_behavior_aware_selection_prefers_diverse_candidates_over_first_n() -> N
         CONTINUOUS_ACTION_PARTIAL_KEEP_SUFFIX in selected_families
         or CONTINUOUS_ACTION_PARTIAL_GENERATE_SUFFIX in selected_families
     )
+
+
+def test_behavior_aware_selection_ignores_deprecated_action_quota_arguments() -> None:
+    pool = [
+        _fake_behavior_candidate("pool_cand0", [0.2, 0.2, 0.2, 0.2, 0.2], "mixed"),
+        _fake_behavior_candidate("pool_cand1", [1, 0, 0, 0, 0], CONTINUOUS_ACTION_KEEP_FULL_SUFFIX),
+        _fake_behavior_candidate("pool_cand2", [0, 1, 0, 0, 0], CONTINUOUS_ACTION_GENERATE_FULL_SUFFIX),
+        _fake_behavior_candidate("pool_cand3", [0, 0, 1, 0, 0], CONTINUOUS_ACTION_PARTIAL_KEEP_SUFFIX),
+        _fake_behavior_candidate("pool_cand4", [0, 0, 0, 1, 0], CONTINUOUS_ACTION_PARTIAL_GENERATE_SUFFIX),
+    ]
+
+    baseline = select_behavior_aware_candidates(pool, select_size=3)
+    with_deprecated_kwargs = select_behavior_aware_candidates(
+        pool,
+        select_size=3,
+        max_stop_ratio=0.0,
+        max_per_dominant_family=1,
+        min_partial_candidates=99,
+        min_generate_candidates=99,
+    )
+
+    assert [candidate["pool_candidate_key"] for candidate in baseline] == [
+        candidate["pool_candidate_key"] for candidate in with_deprecated_kwargs
+    ]
 
 
 def test_behavior_aware_diagnostic_cli_writes_selection_artifacts(
@@ -161,12 +181,32 @@ def test_behavior_aware_diagnostic_cli_writes_selection_artifacts(
     assert len(pool_rows) == 8
     assert sum(1 for row in pool_rows if row["selected"] == "True") == 4
 
+    selection_config = json.loads(
+        (output_dir / "behavior_selection_config.json").read_text(encoding="utf-8")
+    )
+    assert selection_config["selection_method"] == "behavior_space_greedy_maximin"
+    assert selection_config["uses_action_specific_quotas"] is False
+    assert selection_config["uses_action_specific_caps"] is False
+    assert selection_config["candidate_key_policy"] == (
+        "preserve_pool_candidate_key_with_selected_rank"
+    )
+
     selected = json.loads(
         (output_dir / "behavior_selected_candidates.json").read_text(encoding="utf-8")
     )
     assert len(selected) == 4
-    assert selected[0]["selected_candidate_key"] == "selected_cand0"
-    assert selected[0]["pool_candidate_key"].startswith("pool_cand")
+    assert selected[0]["selected_rank"] == 0
+    assert selected[0]["candidate_key"].startswith("pool_cand")
+    assert selected[0]["pool_candidate_key"] == selected[0]["candidate_key"]
+    assert "selected_candidate_key" not in selected[0]
+    assert "min_distance_to_previous_selected" in selected[0]
+
+    selected_summary_rows = _read_csv(
+        output_dir / "behavior_selected_distribution_summary.csv"
+    )
+    assert {row["candidate_key"] for row in selected_summary_rows} == {
+        item["candidate_key"] for item in selected
+    }
 
 
 def _fake_behavior_candidate(
