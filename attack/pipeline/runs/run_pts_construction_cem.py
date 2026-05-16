@@ -578,6 +578,7 @@ def _build_continuous_beta_cem_config(
         ),
         initial_std=float(continuous.initial_std),
         min_std=float(continuous.min_std),
+        smoothing_epsilon=float(continuous.smoothing_epsilon),
         deterministic_sampling=bool(continuous.deterministic_sampling),
         initialization_mode=continuous.initialization.mode,
         gaussian_fill=bool(continuous.initialization.gaussian_fill),
@@ -880,6 +881,7 @@ def _continuous_pts_construction_identity_payload(
             },
             "initial_std": float(continuous.initial_std),
             "min_std": float(continuous.min_std),
+            "smoothing_epsilon": float(continuous.smoothing_epsilon),
             "deterministic_sampling": bool(continuous.deterministic_sampling),
             "initialization": {
                 "mode": continuous.initialization.mode,
@@ -2635,6 +2637,7 @@ def _pts_method_metadata_payload(
                 },
                 "initial_std": float(continuous.initial_std),
                 "min_std": float(continuous.min_std),
+                "smoothing_epsilon": float(continuous.smoothing_epsilon),
                 "deterministic_sampling": bool(continuous.deterministic_sampling),
                 "initialization": {
                     "mode": continuous.initialization.mode,

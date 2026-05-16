@@ -55,6 +55,8 @@ CONTINUOUS_BETA_SOURCE_TAG = "pts_continuous_beta_source"
 CONTINUOUS_BETA_SHARED_PREFIX_TAG = "pts_continuous_shared_prefix"
 CONTINUOUS_BETA_NORMALIZED_SAMPLER = "gaussian_parameter_space_v1"
 CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1 = "behavior_covering_v1"
+CONTINUOUS_BETA_SMOOTHING_DECISION_TAG = "pts_continuous_beta_smoothing_decision"
+CONTINUOUS_BETA_SMOOTHING_UNIFORM_TAG = "pts_continuous_beta_smoothing_uniform"
 
 
 @dataclass(frozen=True)
@@ -62,10 +64,12 @@ class ContinuousBetaPolicy:
     parameter_values: tuple[float, ...]
     parameterization: str = CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA
     parameter_bounds: tuple[float, float] = CONTINUOUS_BETA_DEFAULT_BOUNDS
+    smoothing_epsilon: float = 0.0
 
     def __post_init__(self) -> None:
         bounds = _coerce_bounds(self.parameter_bounds)
         parameterization = normalize_parameterization(self.parameterization)
+        smoothing_epsilon = validate_smoothing_epsilon(self.smoothing_epsilon)
         names = parameter_names_for_parameterization(parameterization)
         values = tuple(float(value) for value in self.parameter_values)
         if len(values) != len(names):
@@ -76,6 +80,7 @@ class ContinuousBetaPolicy:
         object.__setattr__(self, "parameter_values", clipped)
         object.__setattr__(self, "parameterization", parameterization)
         object.__setattr__(self, "parameter_bounds", bounds)
+        object.__setattr__(self, "smoothing_epsilon", smoothing_epsilon)
         for name, value in zip(names, clipped):
             object.__setattr__(self, name, float(value))
 
@@ -89,6 +94,7 @@ class ContinuousBetaPolicy:
         *,
         parameter_bounds: tuple[float, float] = CONTINUOUS_BETA_DEFAULT_BOUNDS,
         parameterization: str = CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA,
+        smoothing_epsilon: float = 0.0,
     ) -> "ContinuousBetaPolicy":
         parameterization = normalize_parameterization(parameterization)
         names = parameter_names_for_parameterization(parameterization)
@@ -104,6 +110,7 @@ class ContinuousBetaPolicy:
             tuple(clipped),
             parameterization=parameterization,
             parameter_bounds=bounds,
+            smoothing_epsilon=float(smoothing_epsilon),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -119,6 +126,7 @@ class ContinuousBetaPolicy:
                 "min": float(self.parameter_bounds[0]),
                 "max": float(self.parameter_bounds[1]),
             },
+            "smoothing_epsilon": float(self.smoothing_epsilon),
             "parameters": {
                 name: float(getattr(self, name))
                 for name in names
@@ -147,6 +155,7 @@ class ContinuousBetaPolicy:
                 raw_vector,
                 parameter_bounds=bounds,
                 parameterization=parameterization,
+                smoothing_epsilon=float(payload.get("smoothing_epsilon", 0.0)),
             )
         raw_parameters = payload.get("parameters")
         if not isinstance(raw_parameters, Mapping):
@@ -155,6 +164,7 @@ class ContinuousBetaPolicy:
             [float(raw_parameters[name]) for name in names],
             parameter_bounds=bounds,
             parameterization=parameterization,
+            smoothing_epsilon=float(payload.get("smoothing_epsilon", 0.0)),
         )
 
     def beta_params(self, q: float) -> tuple[float, float]:
@@ -184,11 +194,11 @@ class ContinuousBetaPolicy:
     def p_generate(self, q: float, rho: float) -> float:
         q_value = _clamp_unit(float(q))
         rho_value = _clamp_unit(float(rho))
-        return float(
-            stable_sigmoid(
-                float(self.c0) + float(self.c1) * q_value + float(self.c2) * rho_value
-            )
+        raw_p = stable_sigmoid(
+            float(self.c0) + float(self.c1) * q_value + float(self.c2) * rho_value
         )
+        epsilon = float(self.smoothing_epsilon)
+        return float(epsilon + (1.0 - 2.0 * epsilon) * float(raw_p))
 
 
 def normalize_parameterization(parameterization: str) -> str:
@@ -229,6 +239,33 @@ def sample_beta(alpha: float, beta: float, *, seed: int) -> float:
     return float(random.Random(int(seed)).betavariate(float(alpha), float(beta)))
 
 
+def sample_smoothed_beta_ratio(
+    *,
+    alpha: float,
+    beta: float,
+    epsilon: float,
+    seed: int,
+) -> float:
+    epsilon = validate_smoothing_epsilon(epsilon)
+    if epsilon == 0.0:
+        return sample_beta(alpha, beta, seed=int(seed))
+    # smoothing_epsilon is an action-agnostic exploration floor.  It mixes the
+    # learned Beta consume distribution with a small Uniform component, matching
+    # the spirit of bounded probabilities in grouped PTS-CEM.
+    decision_seed = _salted_seed(int(seed), CONTINUOUS_BETA_SMOOTHING_DECISION_TAG)
+    if random.Random(decision_seed).random() < float(epsilon):
+        uniform_seed = _salted_seed(int(seed), CONTINUOUS_BETA_SMOOTHING_UNIFORM_TAG)
+        return float(random.Random(uniform_seed).random())
+    return sample_beta(alpha, beta, seed=int(seed))
+
+
+def validate_smoothing_epsilon(epsilon: float) -> float:
+    value = float(epsilon)
+    if not 0.0 <= value < 0.5:
+        raise ValueError("smoothing_epsilon must satisfy 0.0 <= epsilon < 0.5.")
+    return value
+
+
 def deterministic_unit_interval(
     *,
     base_seed: int,
@@ -259,6 +296,11 @@ def deterministic_policy_seed(
         f"{int(base_seed)}|{int(target_item)}|{str(candidate_key)}|"
         f"{int(fake_session_index)}|{str(tag)}"
     )
+    return int(hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16], 16)
+
+
+def _salted_seed(seed: int, tag: str) -> int:
+    payload = f"{int(seed)}|{str(tag)}"
     return int(hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16], 16)
 
 
@@ -314,6 +356,8 @@ __all__ = [
     "CONTINUOUS_BETA_POLICY_TYPE",
     "CONTINUOUS_BETA_RHO_TAG",
     "CONTINUOUS_BETA_SHARED_PREFIX_TAG",
+    "CONTINUOUS_BETA_SMOOTHING_DECISION_TAG",
+    "CONTINUOUS_BETA_SMOOTHING_UNIFORM_TAG",
     "CONTINUOUS_BETA_SOURCE_POLICY",
     "CONTINUOUS_BETA_SOURCE_TAG",
     "CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES",
@@ -324,5 +368,7 @@ __all__ = [
     "normalize_parameterization",
     "parameter_names_for_parameterization",
     "sample_beta",
+    "sample_smoothed_beta_ratio",
     "stable_sigmoid",
+    "validate_smoothing_epsilon",
 ]

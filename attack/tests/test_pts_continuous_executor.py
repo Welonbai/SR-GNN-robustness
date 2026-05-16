@@ -124,6 +124,48 @@ def test_continuous_summary_excludes_stop_from_source_probability_mean(monkeypat
     )
 
 
+def test_continuous_executor_applies_smoothing_and_keeps_stop_probability_none(
+    monkeypatch,
+) -> None:
+    rho_values = iter([1.0, 0.0])
+    monkeypatch.setattr(
+        "attack.pts.continuous_executor.sample_beta",
+        lambda *args, **kwargs: next(rho_values),
+    )
+    monkeypatch.setattr(
+        "attack.pts.continuous_executor.deterministic_unit_interval",
+        lambda **kwargs: 1.0,
+    )
+    result = apply_pts_continuous_beta_construction_batch(
+        session_contexts=[
+            _context([3, 4]),
+            PTSContinuousSessionContext(
+                fake_session_index=1,
+                template_session=[10, 11, 12, 13],
+                anchor_position=2,
+                prefix=[10, 11],
+                residual_suffix=[12, 13],
+                suffix_length_percentile=0.5,
+            ),
+        ],
+        target_item=99,
+        policy=ContinuousBetaPolicy.from_vector(
+            [0, 0, 0, 0, 100, 0, 0],
+            parameter_bounds=(-200.0, 200.0),
+            smoothing_epsilon=0.1,
+        ),
+        base_seed=7,
+        candidate_key="iter0_cand1",
+    )
+
+    stop_record, non_stop_record = result.per_session_records
+    assert stop_record["source_generate_probability"] is None
+    assert stop_record["smoothing_epsilon"] == 0.1
+    assert non_stop_record["source_generate_probability"] == 0.9
+    assert 0.1 <= non_stop_record["source_generate_probability"] <= 0.9
+    assert non_stop_record["consume_smoothing"] == "beta_uniform_mixture"
+
+
 def test_continuous_executor_generate_branch_uses_remaining_length(monkeypatch) -> None:
     monkeypatch.setattr("attack.pts.continuous_executor.sample_beta", lambda *a, **k: 0.25)
     monkeypatch.setattr(

@@ -62,6 +62,7 @@ attack:
         max: 5.0
       initial_std: 2.0
       min_std: 0.25
+      smoothing_epsilon: 0.1
       deterministic_sampling: true
       initialization:
         mode: behavior_covering_v1

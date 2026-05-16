@@ -89,6 +89,8 @@ def test_continuous_init_diagnostic_writes_summary_files(
     diagnostic_config = load_json(result.paths["diagnostic_config"])
     assert diagnostic_config["rounding_mode"] == "half_up"
     assert diagnostic_config["materialize_generated_suffix"] is False
+    assert diagnostic_config["smoothing_epsilon"] == 0.0
+    assert diagnostic_config["consume_smoothing"] == "beta_uniform_mixture"
 
     candidates = load_json(result.paths["initial_candidates"])
     assert len(candidates) == 4
@@ -98,6 +100,7 @@ def test_continuous_init_diagnostic_writes_summary_files(
     assert len(candidate_rows) == 4
     assert set(CANDIDATE_DISTRIBUTION_COLUMNS).issubset(candidate_rows[0])
     assert "continuous_stop_ratio" in candidate_rows[0]
+    assert candidate_rows[0]["smoothing_epsilon"] == "0.0"
 
     by_suffix_rows = _read_csv(result.paths["candidate_by_suffix_len_summary"])
     assert by_suffix_rows

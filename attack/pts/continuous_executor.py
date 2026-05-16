@@ -18,6 +18,7 @@ from attack.pts.continuous_policy import (
     deterministic_policy_seed,
     deterministic_unit_interval,
     sample_beta,
+    sample_smoothed_beta_ratio,
 )
 from attack.pts.executor import PTSConstructionBatchResult
 from attack.pts.metadata import build_pts_batch_summary
@@ -130,7 +131,12 @@ def apply_pts_continuous_beta_construction_batch(
             fake_session_index=int(context.fake_session_index),
             tag=str(rho_sampling_tag),
         )
-        rho = sample_beta(alpha, beta, seed=rho_seed)
+        rho = _sample_executor_smoothed_beta_ratio(
+            alpha=alpha,
+            beta=beta,
+            epsilon=float(policy.smoothing_epsilon),
+            seed=rho_seed,
+        )
         consume_count = compute_half_up_consume_count(rho, residual_suffix_len)
         prefix_through_target = prefix + [target]
         generated_suffix: list[int] = []
@@ -216,6 +222,10 @@ def apply_pts_continuous_beta_construction_batch(
             "continuous_policy": policy.to_dict(),
             "beta_alpha": float(alpha),
             "beta_beta": float(beta),
+            "smoothing_epsilon": float(policy.smoothing_epsilon),
+            "consume_smoothing_epsilon": float(policy.smoothing_epsilon),
+            "consume_smoothing": "beta_uniform_mixture",
+            "source_probability_floor": float(policy.smoothing_epsilon),
             "consume_ratio": float(rho),
             "consume_count": int(consume_count),
             "source_generate_probability": (
@@ -252,6 +262,23 @@ def apply_pts_continuous_beta_construction_batch(
         final_sessions=final_sessions,
         per_session_records=records,
         summary=build_pts_batch_summary(records),
+    )
+
+
+def _sample_executor_smoothed_beta_ratio(
+    *,
+    alpha: float,
+    beta: float,
+    epsilon: float,
+    seed: int,
+) -> float:
+    if float(epsilon) == 0.0:
+        return sample_beta(float(alpha), float(beta), seed=int(seed))
+    return sample_smoothed_beta_ratio(
+        alpha=float(alpha),
+        beta=float(beta),
+        epsilon=float(epsilon),
+        seed=int(seed),
     )
 
 

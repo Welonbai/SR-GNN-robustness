@@ -22,6 +22,8 @@ from attack.pts.continuous_policy import (
     deterministic_policy_seed,
     parameter_names_for_parameterization,
     sample_beta,
+    sample_smoothed_beta_ratio,
+    validate_smoothing_epsilon,
 )
 from attack.pts.artifacts import write_pts_cem_artifacts
 from attack.pts.cem import (
@@ -135,7 +137,9 @@ __all__ = [
     "lookup_spec_by_name",
     "parameter_names_for_parameterization",
     "sample_beta",
+    "sample_smoothed_beta_ratio",
     "select_anchor_position",
     "select_internal_uniform_anchor",
+    "validate_smoothing_epsilon",
     "write_pts_cem_artifacts",
 ]

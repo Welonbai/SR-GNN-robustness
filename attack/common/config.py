@@ -1409,6 +1409,7 @@ class PTSContinuousBetaConfig:
     )
     initial_std: float = 2.0
     min_std: float = 0.25
+    smoothing_epsilon: float = 0.0
     deterministic_sampling: bool = True
     initialization: PTSContinuousInitializationConfig = field(
         default_factory=PTSContinuousInitializationConfig
@@ -1466,6 +1467,15 @@ class PTSContinuousBetaConfig:
             raise ValueError(
                 "attack.pts_construction.continuous_beta.min_std must be positive."
             )
+        smoothing_epsilon = _as_float(
+            self.smoothing_epsilon,
+            "attack.pts_construction.continuous_beta.smoothing_epsilon",
+        )
+        if not 0.0 <= smoothing_epsilon < 0.5:
+            raise ValueError(
+                "attack.pts_construction.continuous_beta.smoothing_epsilon "
+                "must satisfy 0.0 <= epsilon < 0.5."
+            )
         deterministic_sampling = _as_bool(
             self.deterministic_sampling,
             "attack.pts_construction.continuous_beta.deterministic_sampling",
@@ -1481,6 +1491,7 @@ class PTSContinuousBetaConfig:
         object.__setattr__(self, "parameter_bounds", parameter_bounds)
         object.__setattr__(self, "initial_std", initial_std)
         object.__setattr__(self, "min_std", min_std)
+        object.__setattr__(self, "smoothing_epsilon", smoothing_epsilon)
         object.__setattr__(self, "deterministic_sampling", deterministic_sampling)
         object.__setattr__(self, "initialization", initialization)
 

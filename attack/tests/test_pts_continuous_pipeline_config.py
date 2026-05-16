@@ -46,11 +46,19 @@ def _with_pts(config, pts_config):
     return replace(config, attack=replace(config.attack, pts_construction=pts_config))
 
 
-def _continuous_pts(*, sampler_type: str = PTS_CEM_SAMPLER_GAUSSIAN, initial_std: float = 2.0):
+def _continuous_pts(
+    *,
+    sampler_type: str = PTS_CEM_SAMPLER_GAUSSIAN,
+    initial_std: float = 2.0,
+    smoothing_epsilon: float = 0.0,
+):
     return PTSConstructionConfig(
         enabled=True,
         method=PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
-        continuous_beta=PTSContinuousBetaConfig(initial_std=initial_std),
+        continuous_beta=PTSContinuousBetaConfig(
+            initial_std=initial_std,
+            smoothing_epsilon=smoothing_epsilon,
+        ),
         cem=PTSCEMRuntimeConfig(
             iterations=2,
             population_schedule=(4, 2),
@@ -64,6 +72,13 @@ def test_continuous_pts_config_validates_without_grouping_or_actions() -> None:
     continuous_config = _with_pts(config, _continuous_pts())
 
     _validate_pts_construction_run_config(continuous_config)
+
+
+def test_continuous_smoothing_epsilon_validation() -> None:
+    assert PTSContinuousBetaConfig(smoothing_epsilon=0.1).smoothing_epsilon == 0.1
+    for value in (-0.1, 0.5, 1.0):
+        with pytest.raises(ValueError, match="smoothing_epsilon"):
+            PTSContinuousBetaConfig(smoothing_epsilon=value)
 
 
 def test_continuous_sample_yaml_loads_without_grouped_fields() -> None:
@@ -98,6 +113,7 @@ def test_continuous_tiny_mlp_sample_yaml_loads() -> None:
         == PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2
     )
     assert pts.continuous_beta.source_policy == "q_and_rho_logistic"
+    assert pts.continuous_beta.smoothing_epsilon == 0.1
     assert config.targets.mode == "explicit_list"
     assert config.targets.explicit_list == (5334,)
     _validate_pts_construction_run_config(config)

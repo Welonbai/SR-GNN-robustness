@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -15,6 +17,7 @@ from attack.pts.continuous_policy import (
     build_suffix_length_percentile_lookup,
     deterministic_policy_seed,
     sample_beta,
+    sample_smoothed_beta_ratio,
 )
 
 
@@ -87,6 +90,57 @@ def test_continuous_policy_sampling_seed_is_deterministic() -> None:
         tag="rho",
     )
     assert sample_beta(2.0, 3.0, seed=seed) == sample_beta(2.0, 3.0, seed=seed)
+
+
+def test_continuous_policy_source_probability_smoothing() -> None:
+    low = ContinuousBetaPolicy.from_vector(
+        [0, 0, 0, 0, -100, 0, 0],
+        parameter_bounds=(-200.0, 200.0),
+        smoothing_epsilon=0.1,
+    )
+    high = ContinuousBetaPolicy.from_vector(
+        [0, 0, 0, 0, 100, 0, 0],
+        parameter_bounds=(-200.0, 200.0),
+        smoothing_epsilon=0.1,
+    )
+    mid = ContinuousBetaPolicy.from_vector(
+        [0, 0, 0, 0, 0, 0, 0],
+        smoothing_epsilon=0.1,
+    )
+    unsmoothed_low = ContinuousBetaPolicy.from_vector(
+        [0, 0, 0, 0, -100, 0, 0],
+        parameter_bounds=(-200.0, 200.0),
+    )
+
+    assert low.p_generate(0.5, 0.5) == pytest.approx(0.1)
+    assert high.p_generate(0.5, 0.5) == pytest.approx(0.9)
+    assert mid.p_generate(0.5, 0.5) == pytest.approx(0.5)
+    assert unsmoothed_low.p_generate(0.5, 0.5) < 1e-20
+    assert ContinuousBetaPolicy.from_dict(low.to_dict()).smoothing_epsilon == 0.1
+
+
+def test_smoothed_beta_sampling_is_deterministic_and_preserves_epsilon_zero() -> None:
+    seed = 12345
+
+    assert sample_smoothed_beta_ratio(
+        alpha=2.0,
+        beta=3.0,
+        epsilon=0.1,
+        seed=seed,
+    ) == sample_smoothed_beta_ratio(
+        alpha=2.0,
+        beta=3.0,
+        epsilon=0.1,
+        seed=seed,
+    )
+    assert sample_smoothed_beta_ratio(
+        alpha=2.0,
+        beta=3.0,
+        epsilon=0.0,
+        seed=seed,
+    ) == sample_beta(2.0, 3.0, seed=seed)
+    with pytest.raises(ValueError, match="smoothing_epsilon"):
+        sample_smoothed_beta_ratio(alpha=2.0, beta=3.0, epsilon=0.5, seed=seed)
 
 
 def test_suffix_length_percentile_lookup_is_midpoint_empirical_cdf() -> None:

@@ -42,6 +42,7 @@ class PTSContinuousBetaCEMConfig:
     parameter_bounds: tuple[float, float] = CONTINUOUS_BETA_DEFAULT_BOUNDS
     initial_std: float = 2.0
     min_std: float = 0.25
+    smoothing_epsilon: float = 0.0
     deterministic_sampling: bool = True
     initialization_mode: str = CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1
     gaussian_fill: bool = True
@@ -95,6 +96,8 @@ class PTSContinuousBetaCEMTrainer:
             raise ValueError("continuous_beta.initial_std must be positive.")
         if float(self.continuous_config.min_std) <= 0.0:
             raise ValueError("continuous_beta.min_std must be positive.")
+        if not 0.0 <= float(self.continuous_config.smoothing_epsilon) < 0.5:
+            raise ValueError("continuous_beta.smoothing_epsilon must be in [0, 0.5).")
 
     def train(
         self,
@@ -146,6 +149,7 @@ class PTSContinuousBetaCEMTrainer:
                     sample_spec.vector,
                     parameter_bounds=self.continuous_config.parameter_bounds,
                     parameterization=self.parameterization,
+                    smoothing_epsilon=float(self.continuous_config.smoothing_epsilon),
                 )
                 construction_result = apply_pts_continuous_beta_construction_batch(
                     session_contexts=session_contexts,
@@ -435,6 +439,7 @@ class PTSContinuousBetaCEMTrainer:
                 mean,
                 parameter_bounds=self.continuous_config.parameter_bounds,
                 parameterization=self.parameterization,
+                smoothing_epsilon=float(self.continuous_config.smoothing_epsilon),
             ).to_dict(),
             "parameter_bounds": {
                 "min": float(self.continuous_config.parameter_bounds[0]),
@@ -442,6 +447,7 @@ class PTSContinuousBetaCEMTrainer:
             },
             "initial_std": float(self.continuous_config.initial_std),
             "min_std": float(self.continuous_config.min_std),
+            "smoothing_epsilon": float(self.continuous_config.smoothing_epsilon),
             "initialization_mode": self.continuous_config.initialization_mode,
             "gaussian_fill": bool(self.continuous_config.gaussian_fill),
         }
