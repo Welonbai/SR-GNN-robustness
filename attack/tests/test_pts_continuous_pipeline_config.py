@@ -17,6 +17,7 @@ from attack.common.config import (
     PTSContinuousBetaConfig,
     PTSCEMRuntimeConfig,
     PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+    PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
     PTS_CEM_SAMPLER_GAUSSIAN,
     load_config,
 )
@@ -32,6 +33,12 @@ TEST_CONFIG_DIR = REPO_ROOT / "attack" / "tests" / "fixtures" / "configs"
 CONTINUOUS_CONFIG_PATH = (
     TEST_CONFIG_DIR
     / "diginetica_valbest_attack_pts_construction_continuous_beta_cem_ratio1_srgnn_partial4_target5334.yaml"
+)
+CONTINUOUS_MLP_H2_CONFIG_PATH = (
+    REPO_ROOT
+    / "attack"
+    / "configs"
+    / "diginetica_valbest_attack_pts_construction_continuous_beta_mlp_h2_cem_ratio1_srgnn_partial4_target5334.yaml"
 )
 
 
@@ -73,6 +80,26 @@ def test_continuous_sample_yaml_loads_without_grouped_fields() -> None:
     assert pts.cem.sampler.type == PTS_CEM_SAMPLER_GAUSSIAN
     assert pts.continuous_beta.input == "suffix_length_percentile"
     assert pts.continuous_beta.initialization.mode == "behavior_covering_v1"
+    _validate_pts_construction_run_config(config)
+
+
+def test_continuous_tiny_mlp_sample_yaml_loads() -> None:
+    config = load_config(CONTINUOUS_MLP_H2_CONFIG_PATH)
+    pts = config.attack.pts_construction
+
+    assert pts is not None
+    assert config.experiment.name == (
+        "valbest_attack_pts_construction_continuous_beta_mlp_h2_cem_ratio1_srgnn_partial4_target5334"
+    )
+    assert pts.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1
+    assert pts.cem.sampler.type == PTS_CEM_SAMPLER_GAUSSIAN
+    assert (
+        pts.continuous_beta.parameterization
+        == PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2
+    )
+    assert pts.continuous_beta.source_policy == "q_and_rho_logistic"
+    assert config.targets.mode == "explicit_list"
+    assert config.targets.explicit_list == (5334,)
     _validate_pts_construction_run_config(config)
 
 
