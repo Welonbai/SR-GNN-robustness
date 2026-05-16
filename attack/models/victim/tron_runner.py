@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
-import subprocess
 from typing import Any
 
 from attack.common.config import Config
 from attack.models.victim.base_runner import VictimRunnerBase
 from attack.models.victim.registry import register_victim
+from attack.models.victim.subprocess_progress import run_subprocess_with_epoch_progress
 
 
 class TRONRunner(VictimRunnerBase):
@@ -39,6 +39,7 @@ class TRONRunner(VictimRunnerBase):
         topk = kwargs.get("topk")
         max_epochs = kwargs.get("max_epochs")
         victim_train_seed = kwargs.get("victim_train_seed")
+        target_item = kwargs.get("target_item")
         if (
             export_root is None
             or dataset_name is None
@@ -59,6 +60,7 @@ class TRONRunner(VictimRunnerBase):
             victim_train_seed=(
                 int(victim_train_seed) if victim_train_seed is not None else None
             ),
+            target_item=(int(target_item) if target_item is not None else None),
         )
 
     def evaluate(self, *args, **kwargs):
@@ -99,6 +101,7 @@ class TRONRunner(VictimRunnerBase):
         max_epochs: int | None = None,
         victim_train_seed: int | None = None,
         diagnostic_summary_path: Path | None = None,
+        target_item: int | None = None,
     ) -> dict[str, str | int | bool | None]:
         if not self.repo_root.exists():
             raise FileNotFoundError(f"TRON repository not found: {self.repo_root}")
@@ -138,10 +141,6 @@ class TRONRunner(VictimRunnerBase):
             checkpoint_protocol = "validation_best"
             validation_enabled = True
             export_model = "last"
-        if checkpoint_protocol == "fixed_epoch" and not validation_enabled:
-            print(
-                "TRON fixed-epoch fast mode: validation disabled, checkpoint monitor disabled, exporting last model."
-            )
         config["max_epochs"] = int(effective_epochs)
         config["checkpoint_protocol"] = checkpoint_protocol
         config["validation_enabled"] = bool(validation_enabled)
@@ -180,20 +179,15 @@ class TRONRunner(VictimRunnerBase):
         else:
             env.pop("CUDA_VISIBLE_DEVICES", None)
 
-        print(f"[VictimRunner] launching {self.name}")
-        print(f"python_executable={self.python_executable}")
-        print(f"repo_root={self.repo_root}")
-        print(f"working_dir={self.working_dir}")
-        print(f"[tron] Starting subprocess. Log: {log_path}")
-        with log_path.open("w", encoding="utf-8") as handle:
-            result = subprocess.run(
-                cmd,
-                cwd=run_dir,
-                env=env,
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
+        result = run_subprocess_with_epoch_progress(
+            cmd,
+            cwd=run_dir,
+            env=env,
+            log_path=log_path,
+            model_name=self.name,
+            target_item=target_item,
+            total_epochs=int(effective_epochs),
+        )
 
         _remove_checkpoints(run_dir)
 
@@ -208,7 +202,6 @@ class TRONRunner(VictimRunnerBase):
                 f"Missing: {export_topk_path}"
             )
 
-        print(f"[tron] Completed. Predictions: {export_topk_path}")
         selected_checkpoint_epoch = (
             None if checkpoint_protocol == "validation_best" else int(effective_epochs)
         )

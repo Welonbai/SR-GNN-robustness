@@ -597,6 +597,20 @@ def sync_run_coverage_materialized_prefix(run_coverage: dict[str, Any]) -> bool:
     return True
 
 
+def _coverage_has_completed_victim_cells(
+    cells_payload: Mapping[str, Any],
+    *,
+    victim_name: str,
+) -> bool:
+    for target_cells in cells_payload.values():
+        if not isinstance(target_cells, Mapping):
+            continue
+        cell = target_cells.get(victim_name)
+        if isinstance(cell, Mapping) and cell.get("status") == "completed":
+            return True
+    return False
+
+
 def load_or_init_run_coverage(
     config: Config,
     *,
@@ -695,12 +709,20 @@ def load_or_init_run_coverage(
             victim_entry["victim_prediction_key"] = expected_key
             changed = True
         elif stored_key != expected_key:
-            raise RuntimeError(
-                "Existing run_coverage.json victim registry is incompatible with the "
-                f"currently requested victim configuration for '{victim_name}'. "
-                f"Existing victim_prediction_key={stored_key}, "
-                f"requested victim_prediction_key={expected_key}."
-            )
+            if not _coverage_has_completed_victim_cells(
+                cells_payload,
+                victim_name=victim_name,
+            ):
+                victim_entry["previous_victim_prediction_key"] = stored_key
+                victim_entry["victim_prediction_key"] = expected_key
+                changed = True
+            else:
+                raise RuntimeError(
+                    "Existing run_coverage.json victim registry is incompatible with the "
+                    f"currently requested victim configuration for '{victim_name}'. "
+                    f"Existing victim_prediction_key={stored_key}, "
+                    f"requested victim_prediction_key={expected_key}."
+                )
         victim_entry["last_requested_at"] = now
 
     registry_ordered_targets = _registry_ordered_targets(target_registry)

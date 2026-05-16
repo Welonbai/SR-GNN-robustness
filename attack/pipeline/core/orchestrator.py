@@ -1840,20 +1840,8 @@ def _maybe_reuse_or_execute_victim(
         predictions_path=predictions_path,
     )
     if reused is not None:
-        if victim_attack_identity_context is not None:
-            print(
-                f"[victim-cache] target={int(target_item)} victim={victim_name} reuse"
-            )
-        else:
-            print(
-                f"[victim:{victim_name}] target={int(target_item)} reuse predictions"
-            )
+        print(f"[victim] target={int(target_item)} model={victim_name} reuse")
         return reused, True
-
-    if victim_attack_identity_context is not None:
-        print(
-            f"[victim-cache] target={int(target_item)} victim={victim_name} train"
-        )
 
     victim_result = execute_single_victim(
         config,

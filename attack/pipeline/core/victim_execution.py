@@ -150,7 +150,6 @@ def execute_single_victim(
 
     if victim_name == "miasrec":
         export_root = run_dir / "export" / "miasrec"
-        print(f"[victim:miasrec] Exporting dataset to {export_root}")
         miasrec_export = MiaSRecExporter()
         export_result = miasrec_export.export_with_poisoned_train(
             canonical_dataset,
@@ -161,7 +160,6 @@ def execute_single_victim(
         )
         runner = get_victim_runner(victim_name)(config)
         raw_predictions_path = run_dir / "miasrec_topk_raw.json"
-        print(f"[victim:miasrec] Running MiaSRec, log at {run_dir / 'miasrec_stdout.log'}")
         victim_train_config = _require_victim_train_config(config, victim_name)
         pipeline_injected = {
             "export_root": export_root,
@@ -186,6 +184,7 @@ def execute_single_victim(
             topk=max_topk,
             max_epochs=int(victim_train_config["epochs"]),
             victim_train_seed=int(victim_stage_seed),
+            target_item=int(target_item),
         )
         _write_victim_resolved_config(
             config,
@@ -195,7 +194,6 @@ def execute_single_victim(
         )
         _save_miasrec_history(run_dir, Path(run_info["log_path"]))
         rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=max_topk)
-        print(f"[victim:miasrec] Completed. Predictions: {raw_predictions_path}")
         if predictions_path is not None:
             save_predictions(
                 predictions_path,
@@ -216,7 +214,6 @@ def execute_single_victim(
 
     if victim_name == "tron":
         export_root = run_dir / "export" / "tron"
-        print(f"[victim:tron] Exporting dataset to {export_root}")
         tron_export = TRONExporter()
         export_result = tron_export.export_with_poisoned_train(
             canonical_dataset,
@@ -227,7 +224,6 @@ def execute_single_victim(
         )
         runner = get_victim_runner(victim_name)(config)
         raw_predictions_path = run_dir / "tron_topk_raw.json"
-        print(f"[victim:tron] Running TRON, log at {run_dir / 'tron_stdout.log'}")
         victim_train_config = _require_victim_train_config(config, victim_name)
         pipeline_injected = {
             "export_root": export_root,
@@ -253,6 +249,7 @@ def execute_single_victim(
             topk=max_topk,
             max_epochs=int(victim_train_config["max_epochs"]),
             victim_train_seed=int(victim_stage_seed),
+            target_item=int(target_item),
         )
         _write_victim_resolved_config(
             config,
@@ -262,7 +259,6 @@ def execute_single_victim(
         )
         _save_tron_history(run_dir, Path(run_info["log_dir"]))
         rankings = runner.predict_topk(predictions_path=raw_predictions_path, topk=max_topk)
-        print(f"[victim:tron] Completed. Predictions: {raw_predictions_path}")
         if predictions_path is not None:
             save_predictions(
                 predictions_path,

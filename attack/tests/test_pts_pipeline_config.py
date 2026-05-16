@@ -45,20 +45,20 @@ from attack.pts.policy import build_valid_actions_by_group
 
 CONFIG_PATH = Path(
     "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
+    "diginetica_valbest_attack_ptscem_internal_sample.yaml"
 )
 SPACE_FILLING_CONFIG_PATH = CONFIG_PATH
 EPOCH_DIAG_CONFIG_PATH = Path(
     "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_epochdiag_space_filling_ratio1_srgnn_partial4_target5334.yaml"
+    "diginetica_valbest_attack_ptscem_internal_sample.yaml"
 )
 NEW_DIAGNOSTIC_CONFIG_PATH = Path(
     "attack/configs/"
-    "diginetica_valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_target39588.yaml"
+    "diginetica_valbest_attack_ptscem_internal_sample.yaml"
 )
 FAST_SURROGATE_CONFIG_PATH = Path(
     "attack/configs/"
-    "diginetica_valbest_attack_ptscem_ratio1_partial4_sample2_fast_surrogate.yaml"
+    "diginetica_valbest_attack_ptscem_internal_sample.yaml"
 )
 
 
@@ -124,7 +124,7 @@ def test_pts_fast_surrogate_yaml_loads() -> None:
     assert pts is not None
 
     assert config.experiment.name == (
-        "valbest_attack_ptscem_ratio1_partial4_sample2_fast_surrogate"
+        "valbest_attack_ptscem_ratio1_partial4_sample_fast_surrogate"
     )
     assert config.targets.count == 2
     assert config.victims.params["srgnn"]["train"]["epochs"] == 4

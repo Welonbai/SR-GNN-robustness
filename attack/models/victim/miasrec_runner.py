@@ -4,12 +4,12 @@ import os
 from pathlib import Path
 import json
 import shutil
-import subprocess
 from typing import Any
 
 from attack.common.config import Config
 from attack.models.victim.base_runner import VictimRunnerBase
 from attack.models.victim.registry import register_victim
+from attack.models.victim.subprocess_progress import run_subprocess_with_epoch_progress
 
 
 class MiaSRecRunner(VictimRunnerBase):
@@ -40,6 +40,7 @@ class MiaSRecRunner(VictimRunnerBase):
         topk = kwargs.get("topk")
         max_epochs = kwargs.get("max_epochs")
         victim_train_seed = kwargs.get("victim_train_seed")
+        target_item = kwargs.get("target_item")
         if (
             export_root is None
             or dataset_name is None
@@ -60,6 +61,7 @@ class MiaSRecRunner(VictimRunnerBase):
             victim_train_seed=(
                 int(victim_train_seed) if victim_train_seed is not None else None
             ),
+            target_item=(int(target_item) if target_item is not None else None),
         )
 
     def evaluate(self, *args, **kwargs):
@@ -101,6 +103,7 @@ class MiaSRecRunner(VictimRunnerBase):
         victim_train_seed: int | None = None,
         diagnostic_epoch_metrics_path: Path | None = None,
         diagnostic_summary_path: Path | None = None,
+        target_item: int | None = None,
     ) -> dict[str, str | int | bool | None]:
         if not self.repo_root.exists():
             raise FileNotFoundError(f"MiaSRec repository not found: {self.repo_root}")
@@ -139,10 +142,6 @@ class MiaSRecRunner(VictimRunnerBase):
             validation_enabled = True
             export_model = "best"
         used_best_checkpoint_for_export = export_model == "best"
-        if checkpoint_protocol == "fixed_epoch" and not validation_enabled:
-            print(
-                "MiaSRec fixed-epoch fast mode: validation disabled, exporting last model."
-            )
         requested_gpu_id = _resolve_requested_gpu_id(self.device_config)
         effective_seed = (
             int(victim_train_seed)
@@ -208,20 +207,15 @@ class MiaSRecRunner(VictimRunnerBase):
         else:
             env.pop("CUDA_VISIBLE_DEVICES", None)
 
-        print(f"[VictimRunner] launching {self.name}")
-        print(f"python_executable={self.python_executable}")
-        print(f"repo_root={self.repo_root}")
-        print(f"working_dir={self.working_dir}")
-        print(f"[miasrec] Starting subprocess. Log: {log_path}")
-        with log_path.open("w", encoding="utf-8") as handle:
-            result = subprocess.run(
-                cmd,
-                cwd=self.working_dir,
-                env=env,
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                check=False,
-            )
+        result = run_subprocess_with_epoch_progress(
+            cmd,
+            cwd=self.working_dir,
+            env=env,
+            log_path=log_path,
+            model_name=self.name,
+            target_item=target_item,
+            total_epochs=int(effective_epochs),
+        )
 
         if checkpoint_dir.exists():
             shutil.rmtree(checkpoint_dir)
@@ -241,7 +235,6 @@ class MiaSRecRunner(VictimRunnerBase):
                 f"Missing: {export_topk_path}"
             )
 
-        print(f"[miasrec] Completed. Predictions: {export_topk_path}")
         validation_metrics_recorded = bool(validation_enabled)
         selected_checkpoint_epoch = (
             None if checkpoint_protocol == "validation_best" else int(effective_epochs)

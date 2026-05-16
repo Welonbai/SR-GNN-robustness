@@ -8,9 +8,6 @@ import json
 from .config import (
     Config,
     COVERAGE_AWARE_LOCAL_POSITION_SCORER,
-    VICTIM_EXPORT_BEST,
-    VICTIM_EXPORT_LAST,
-    VICTIM_VALIDATION_BEST_PROTOCOL,
 )
 from .srgnn_training_protocol import (
     SRGNN_VALIDATION_BEST_PROTOCOL,
@@ -499,19 +496,53 @@ _VICTIM_IDENTITY_EXCLUDED_PARAM_KEYS = frozenset(
         "validation_enabled",
     }
 )
+_EXTERNAL_VICTIM_IDENTITY_EXCLUDED_PARAM_KEYS = frozenset(
+    {
+        "checkpoint_protocol",
+        "export_model",
+    }
+)
 
 
-def _victim_identity_params(value: Any) -> Any:
+def _victim_identity_params(
+    value: Any,
+    *,
+    exclude_external_protocol: bool = False,
+) -> Any:
     if isinstance(value, Mapping):
         return {
-            key: _victim_identity_params(inner_value)
+            key: _victim_identity_params(
+                inner_value,
+                exclude_external_protocol=exclude_external_protocol,
+            )
             for key, inner_value in value.items()
             if key not in _VICTIM_IDENTITY_EXCLUDED_PARAM_KEYS
+            and not (
+                exclude_external_protocol
+                and key in _EXTERNAL_VICTIM_IDENTITY_EXCLUDED_PARAM_KEYS
+            )
+            and not (
+                exclude_external_protocol
+                and key == "epochs"
+                and "max_epochs" in value
+            )
         }
     if isinstance(value, list):
-        return [_victim_identity_params(item) for item in value]
+        return [
+            _victim_identity_params(
+                item,
+                exclude_external_protocol=exclude_external_protocol,
+            )
+            for item in value
+        ]
     if isinstance(value, tuple):
-        return [_victim_identity_params(item) for item in value]
+        return [
+            _victim_identity_params(
+                item,
+                exclude_external_protocol=exclude_external_protocol,
+            )
+            for item in value
+        ]
     return value
 
 
@@ -548,16 +579,16 @@ def victim_prediction_key_payload(
     # Victim prediction identity excludes runtime-only fields and batch-size
     # tuning knobs so append/retry can keep reusing victim state across
     # resource-only batch-size adjustments.
-    victim_params = _victim_identity_params(config.victims.params[victim_name])
+    victim_params = _victim_identity_params(
+        config.victims.params[victim_name],
+        exclude_external_protocol=victim_name in {"miasrec", "tron"},
+    )
     payload = {
         **base_context,
         "victim_name": victim_name,
         "victim_train_seed": int(config.seeds.victim_train_seed),
         "victim_params": victim_params,
     }
-    training_protocol = _external_victim_training_protocol_identity(config, victim_name)
-    if training_protocol is not None:
-        payload["victim_training_protocol"] = training_protocol
     if victim_effective_train_seed is not None:
         payload["victim_effective_train_seed"] = int(victim_effective_train_seed)
     if victim_name == "srgnn":
@@ -570,33 +601,6 @@ def victim_prediction_key_payload(
                 srgnn_validation_protocol_identity(train_config, prefix="victim_srgnn")
             )
     return payload
-
-
-def _external_victim_training_protocol_identity(
-    config: Config,
-    victim_name: str,
-) -> dict[str, Any] | None:
-    if victim_name not in {"miasrec", "tron"}:
-        return None
-    train_config = config.victims.params[victim_name].get("train", {})
-    if not isinstance(train_config, Mapping):
-        return None
-    epochs = train_config.get("epochs", train_config.get("max_epochs"))
-    if epochs is None:
-        return None
-    return {
-        "checkpoint_protocol": str(
-            train_config.get("checkpoint_protocol", VICTIM_VALIDATION_BEST_PROTOCOL)
-        ),
-        "export_model": str(
-            train_config.get(
-                "export_model",
-                VICTIM_EXPORT_BEST if victim_name == "miasrec" else VICTIM_EXPORT_LAST,
-            )
-        ),
-        "epochs": int(epochs),
-    }
-
 
 def victim_prediction_key(
     config: Config,

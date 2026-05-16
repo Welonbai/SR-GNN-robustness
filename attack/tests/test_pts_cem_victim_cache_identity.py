@@ -31,7 +31,7 @@ CONFIG_PATH = (
     Path(__file__).resolve().parents[2]
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_ptscem_ratio1_partial4_sample.yaml"
+    / "diginetica_valbest_attack_ptscem_internal_sample.yaml"
 )
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_TYPE = PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE
