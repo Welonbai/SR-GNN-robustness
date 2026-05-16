@@ -8,7 +8,6 @@ from typing import Any, Mapping, Sequence
 
 from attack.common.artifact_io import save_json
 from attack.pts.cem import PTSCEMCandidateResult, PTSCEMResult
-from attack.pts.policy import GroupActionPolicy
 
 
 def write_pts_cem_artifacts(
@@ -202,7 +201,7 @@ def _best_policy_payload(
     )
 
 
-def _policy_payload(policy: GroupActionPolicy) -> dict[str, Any]:
+def _policy_payload(policy: Any) -> dict[str, Any]:
     return _to_jsonable(policy.to_dict())
 
 
@@ -336,7 +335,7 @@ def _write_jsonl(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
 
 
 def _to_jsonable(value: Any) -> Any:
-    if isinstance(value, GroupActionPolicy):
+    if hasattr(value, "to_dict") and callable(value.to_dict):
         return _to_jsonable(value.to_dict())
     if isinstance(value, dict):
         return {str(key): _to_jsonable(item) for key, item in value.items()}

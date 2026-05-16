@@ -61,7 +61,7 @@ def build_pts_batch_summary(
         )
     )
 
-    return {
+    summary = {
         "fake_session_count": total,
         "action_counts": action_counts,
         "action_ratios": ratio_dict(action_counts, total=total),
@@ -133,6 +133,49 @@ def build_pts_batch_summary(
             ),
         },
     }
+    if any("consume_ratio" in record for record in records):
+        continuous_records = [
+            record for record in records if "consume_ratio" in record
+        ]
+        generated_source_count = int(
+            sum(
+                1
+                for record in continuous_records
+                if str(record.get("continuation_source")) == "generate"
+            )
+        )
+        summary["continuous"] = {
+            "consume_count_distribution": integer_count_distribution(
+                [int(record.get("consume_count", 0)) for record in continuous_records]
+            ),
+            "consume_ratio_mean": _float_mean(
+                [float(record.get("consume_ratio", 0.0)) for record in continuous_records]
+            ),
+            "consume_ratio_min": _float_min(
+                [float(record.get("consume_ratio", 0.0)) for record in continuous_records]
+            ),
+            "consume_ratio_max": _float_max(
+                [float(record.get("consume_ratio", 0.0)) for record in continuous_records]
+            ),
+            "source_generate_probability_mean": _float_mean(
+                [
+                    float(record.get("source_generate_probability", 0.0))
+                    for record in continuous_records
+                ]
+            ),
+            "generated_source_count": generated_source_count,
+            "generated_source_ratio": _ratio(
+                generated_source_count,
+                int(len(continuous_records)),
+            ),
+            "suffix_length_percentile_mean": _float_mean(
+                [
+                    float(record.get("suffix_length_percentile", 0.0))
+                    for record in continuous_records
+                ]
+            ),
+        }
+    return summary
 
 
 def _action_counts_by_group(
@@ -167,6 +210,24 @@ def _mean(values: Sequence[int]) -> float:
     if not values:
         return 0.0
     return float(sum(int(value) for value in values)) / float(len(values))
+
+
+def _float_mean(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    return float(sum(float(value) for value in values)) / float(len(values))
+
+
+def _float_min(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    return float(min(float(value) for value in values))
+
+
+def _float_max(values: Sequence[float]) -> float:
+    if not values:
+        return 0.0
+    return float(max(float(value) for value in values))
 
 
 __all__ = [

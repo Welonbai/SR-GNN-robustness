@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 try:
     import numpy as np
@@ -160,7 +160,7 @@ class PTSCEMCandidateResult:
     iteration: int
     candidate_id: int
     candidate_seed: int
-    policy: GroupActionPolicy
+    policy: Any
     reward: float
     reward_metrics: dict[str, float]
     evaluator_metadata: dict[str, object]
@@ -197,7 +197,7 @@ class PTSCEMIterationResult:
 @dataclass(frozen=True)
 class PTSCEMResult:
     best_candidate: PTSCEMCandidateResult
-    final_policy: GroupActionPolicy
+    final_policy: Any
     policy_history: list[dict[str, object]]
     iteration_results: list[PTSCEMIterationResult]
     top_candidates: list[PTSCEMCandidateResult]

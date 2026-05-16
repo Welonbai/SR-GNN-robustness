@@ -2,6 +2,22 @@ from attack.pts.executor import (
     PTSConstructionBatchResult,
     apply_pts_construction_batch,
 )
+from attack.pts.continuous_cem import (
+    PTSContinuousBetaCEMConfig,
+    PTSContinuousBetaCEMTrainer,
+)
+from attack.pts.continuous_executor import (
+    PTSContinuousSessionContext,
+    apply_pts_continuous_beta_construction_batch,
+    build_continuous_shared_session_contexts,
+)
+from attack.pts.continuous_policy import (
+    CONTINUOUS_BETA_PARAMETER_NAMES,
+    ContinuousBetaPolicy,
+    build_suffix_length_percentile_lookup,
+    deterministic_policy_seed,
+    sample_beta,
+)
 from attack.pts.artifacts import write_pts_cem_artifacts
 from attack.pts.cem import (
     PTSCEMCandidateResult,
@@ -69,6 +85,8 @@ __all__ = [
     "GroupActionPolicy",
     "KEEP_RESIDUAL_SUFFIX_ACTION_NAME",
     "MANDATORY_VERTEX_NAMES",
+    "CONTINUOUS_BETA_PARAMETER_NAMES",
+    "ContinuousBetaPolicy",
     "PTSCEMCandidateResult",
     "PTSCEMConfig",
     "PTSCEMEvaluationResult",
@@ -80,9 +98,12 @@ __all__ = [
     "PTSCEMUpdateConfig",
     "PTSSpaceFillingConfig",
     "PTSSpaceFillingSample",
+    "PTSContinuousBetaCEMConfig",
+    "PTSContinuousBetaCEMTrainer",
     "PTSConstructionBatchResult",
     "PTSConstructionResult",
     "PTSConstructionSpec",
+    "PTSContinuousSessionContext",
     "PTSGroupedCEMTrainer",
     "PolicySampleResult",
     "PrefixSelectorSpec",
@@ -90,15 +111,20 @@ __all__ = [
     "SuffixConstructionSpec",
     "SuffixLengthBucket",
     "apply_pts_construction_batch",
+    "apply_pts_continuous_beta_construction_batch",
     "apply_suffix_construction",
     "assign_suffix_length_group",
+    "build_continuous_shared_session_contexts",
+    "build_suffix_length_percentile_lookup",
     "build_valid_actions_by_group",
     "build_vertex_stratified_initial_population",
     "candidate_key",
     "default_suffix_length_buckets",
+    "deterministic_policy_seed",
     "get_default_pts_v1_specs",
     "initial_population_size_for_space_filling",
     "lookup_spec_by_name",
+    "sample_beta",
     "select_anchor_position",
     "select_internal_uniform_anchor",
     "write_pts_cem_artifacts",

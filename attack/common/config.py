@@ -115,6 +115,7 @@ _ALLOWED_ANCHOR_ASSIGNMENT_STRATEGIES = {
     ANCHOR_CONSTRUCTION_STRATEGY_ROUND_ROBIN,
 }
 PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1 = "grouped_cem_v1"
+PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1 = "continuous_beta_cem_v1"
 PTS_PREFIX_RANGE_INTERNAL = "internal"
 PTS_PREFIX_SAMPLER_UNIFORM = "uniform"
 PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH = "residual_suffix_length"
@@ -123,6 +124,7 @@ PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20 = "raw_lowk_mrr_recall_10_20"
 PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE = "global_best_candidate"
 PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED = "position_opt_seed"
 PTS_CEM_SAMPLER_DIRICHLET = "dirichlet"
+PTS_CEM_SAMPLER_GAUSSIAN = "gaussian"
 PTS_CEM_INIT_UNIFORM = "uniform"
 PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING = "vertex_stratified_space_filling"
 PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST = "validation_best"
@@ -144,6 +146,10 @@ _ALLOWED_PTS_V1_ACTIONS = {
     "consume_one_generate_continuation",
     "consume_all_stop",
 }
+PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE = "suffix_length_percentile"
+PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA = "linear_log_beta"
+PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC = "q_and_rho_logistic"
+PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1 = "behavior_covering_v1"
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -929,8 +935,11 @@ class PTSCEMSamplerRuntimeConfig:
 
     def __post_init__(self) -> None:
         sampler_type = _as_str(self.type, "attack.pts_construction.cem.sampler.type").strip().lower()
-        if sampler_type != PTS_CEM_SAMPLER_DIRICHLET:
-            raise ValueError("attack.pts_construction.cem.sampler.type must be 'dirichlet'.")
+        if sampler_type not in {PTS_CEM_SAMPLER_DIRICHLET, PTS_CEM_SAMPLER_GAUSSIAN}:
+            raise ValueError(
+                "attack.pts_construction.cem.sampler.type must be "
+                "'dirichlet' or 'gaussian'."
+            )
         concentration_scale = _as_float(
             self.concentration_scale,
             "attack.pts_construction.cem.sampler.concentration_scale",
@@ -1341,6 +1350,138 @@ class PTSCEMRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class PTSContinuousParameterBoundsConfig:
+    min: float = -5.0
+    max: float = 5.0
+
+    def __post_init__(self) -> None:
+        minimum = _as_float(
+            self.min,
+            "attack.pts_construction.continuous_beta.parameter_bounds.min",
+        )
+        maximum = _as_float(
+            self.max,
+            "attack.pts_construction.continuous_beta.parameter_bounds.max",
+        )
+        if not minimum < maximum:
+            raise ValueError(
+                "attack.pts_construction.continuous_beta.parameter_bounds "
+                "must satisfy min < max."
+            )
+        object.__setattr__(self, "min", minimum)
+        object.__setattr__(self, "max", maximum)
+
+
+@dataclass(frozen=True)
+class PTSContinuousInitializationConfig:
+    mode: str = PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1
+    gaussian_fill: bool = True
+
+    def __post_init__(self) -> None:
+        mode = _as_str(
+            self.mode,
+            "attack.pts_construction.continuous_beta.initialization.mode",
+        ).strip().lower()
+        if mode != PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1:
+            raise ValueError(
+                "attack.pts_construction.continuous_beta.initialization.mode "
+                "must be 'behavior_covering_v1'."
+            )
+        object.__setattr__(self, "mode", mode)
+        object.__setattr__(
+            self,
+            "gaussian_fill",
+            _as_bool(
+                self.gaussian_fill,
+                "attack.pts_construction.continuous_beta.initialization.gaussian_fill",
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class PTSContinuousBetaConfig:
+    input: str = PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE
+    parameterization: str = PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA
+    source_policy: str = PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC
+    parameter_bounds: PTSContinuousParameterBoundsConfig = field(
+        default_factory=PTSContinuousParameterBoundsConfig
+    )
+    initial_std: float = 2.0
+    min_std: float = 0.25
+    deterministic_sampling: bool = True
+    initialization: PTSContinuousInitializationConfig = field(
+        default_factory=PTSContinuousInitializationConfig
+    )
+
+    def __post_init__(self) -> None:
+        input_name = _as_str(
+            self.input,
+            "attack.pts_construction.continuous_beta.input",
+        ).strip().lower()
+        if input_name != PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE:
+            raise ValueError(
+                "attack.pts_construction.continuous_beta.input must be "
+                "'suffix_length_percentile'."
+            )
+        parameterization = _as_str(
+            self.parameterization,
+            "attack.pts_construction.continuous_beta.parameterization",
+        ).strip().lower()
+        if parameterization != PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA:
+            raise ValueError(
+                "attack.pts_construction.continuous_beta.parameterization "
+                "must be 'linear_log_beta'."
+            )
+        source_policy = _as_str(
+            self.source_policy,
+            "attack.pts_construction.continuous_beta.source_policy",
+        ).strip().lower()
+        if source_policy != PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC:
+            raise ValueError(
+                "attack.pts_construction.continuous_beta.source_policy "
+                "must be 'q_and_rho_logistic'."
+            )
+        parameter_bounds = _coerce_pts_dataclass(
+            self.parameter_bounds,
+            PTSContinuousParameterBoundsConfig,
+            "attack.pts_construction.continuous_beta.parameter_bounds",
+        )
+        initial_std = _as_float(
+            self.initial_std,
+            "attack.pts_construction.continuous_beta.initial_std",
+        )
+        if initial_std <= 0.0:
+            raise ValueError(
+                "attack.pts_construction.continuous_beta.initial_std must be positive."
+            )
+        min_std = _as_float(
+            self.min_std,
+            "attack.pts_construction.continuous_beta.min_std",
+        )
+        if min_std <= 0.0:
+            raise ValueError(
+                "attack.pts_construction.continuous_beta.min_std must be positive."
+            )
+        deterministic_sampling = _as_bool(
+            self.deterministic_sampling,
+            "attack.pts_construction.continuous_beta.deterministic_sampling",
+        )
+        initialization = _coerce_pts_dataclass(
+            self.initialization,
+            PTSContinuousInitializationConfig,
+            "attack.pts_construction.continuous_beta.initialization",
+        )
+        object.__setattr__(self, "input", input_name)
+        object.__setattr__(self, "parameterization", parameterization)
+        object.__setattr__(self, "source_policy", source_policy)
+        object.__setattr__(self, "parameter_bounds", parameter_bounds)
+        object.__setattr__(self, "initial_std", initial_std)
+        object.__setattr__(self, "min_std", min_std)
+        object.__setattr__(self, "deterministic_sampling", deterministic_sampling)
+        object.__setattr__(self, "initialization", initialization)
+
+
+@dataclass(frozen=True)
 class PTSRewardConfig:
     target_summary: str = PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20
     enable_gt_penalty: bool = False
@@ -1453,6 +1594,7 @@ class PTSConstructionConfig:
     grouping: PTSGroupingConfig = field(default_factory=PTSGroupingConfig)
     actions: PTSActionsConfig = field(default_factory=PTSActionsConfig)
     generation: PTSGenerationConfig = field(default_factory=PTSGenerationConfig)
+    continuous_beta: PTSContinuousBetaConfig = field(default_factory=PTSContinuousBetaConfig)
     cem: PTSCEMRuntimeConfig = field(default_factory=PTSCEMRuntimeConfig)
     reward: PTSRewardConfig = field(default_factory=PTSRewardConfig)
     artifacts: PTSArtifactsConfig = field(default_factory=PTSArtifactsConfig)
@@ -1461,9 +1603,13 @@ class PTSConstructionConfig:
     def __post_init__(self) -> None:
         enabled = _as_bool(self.enabled, "attack.pts_construction.enabled")
         method = _as_str(self.method, "attack.pts_construction.method").strip().lower()
-        if method != PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1:
+        if method not in {
+            PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
+            PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+        }:
             raise ValueError(
-                "attack.pts_construction.method currently supports only 'grouped_cem_v1'."
+                "attack.pts_construction.method must be 'grouped_cem_v1' or "
+                "'continuous_beta_cem_v1'."
             )
         object.__setattr__(self, "enabled", enabled)
         object.__setattr__(self, "method", method)
@@ -1505,6 +1651,15 @@ class PTSConstructionConfig:
         )
         object.__setattr__(
             self,
+            "continuous_beta",
+            _coerce_pts_dataclass(
+                self.continuous_beta,
+                PTSContinuousBetaConfig,
+                "attack.pts_construction.continuous_beta",
+            ),
+        )
+        object.__setattr__(
+            self,
             "cem",
             _coerce_pts_dataclass(
                 self.cem,
@@ -1540,7 +1695,16 @@ class PTSConstructionConfig:
             ),
         )
         if (
-            self.cem.init.mode == PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING
+            method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1
+            and self.cem.sampler.type != PTS_CEM_SAMPLER_DIRICHLET
+        ):
+            raise ValueError(
+                "attack.pts_construction.cem.sampler.type must be 'dirichlet' "
+                "for method='grouped_cem_v1'."
+            )
+        if (
+            method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1
+            and self.cem.init.mode == PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING
             and bool(self.cem.init.mandatory_enabled)
             and "consume_one_generate_continuation" not in set(self.actions.enabled)
         ):
@@ -3540,11 +3704,20 @@ __all__ = [
     "PTSCEMSamplerRuntimeConfig",
     "PTSCEMSurrogateRetrainRuntimeConfig",
     "PTSCEMUpdateRuntimeConfig",
+    "PTSContinuousBetaConfig",
+    "PTSContinuousInitializationConfig",
+    "PTSContinuousParameterBoundsConfig",
     "PTSConstructionConfig",
+    "PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1",
     "PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1",
+    "PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1",
+    "PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE",
+    "PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA",
+    "PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC",
     "PTS_CEM_INIT_UNIFORM",
     "PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING",
     "PTS_CEM_SAMPLER_DIRICHLET",
+    "PTS_CEM_SAMPLER_GAUSSIAN",
     "PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED",
     "PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST",
     "PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST",

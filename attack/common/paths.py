@@ -426,11 +426,31 @@ def _pts_construction_identity_payload(config: Config) -> Any:
         config.to_primitive()["attack"]["pts_construction"]
     )
     if isinstance(payload, dict):
+        method = payload.get("method")
+        if method == "grouped_cem_v1":
+            payload = dict(payload)
+            payload.pop("continuous_beta", None)
+        elif method == "continuous_beta_cem_v1":
+            payload = dict(payload)
+            payload.pop("grouping", None)
+            payload.pop("actions", None)
+            continuous = payload.get("continuous_beta")
+            if isinstance(continuous, dict):
+                payload["continuous_beta"] = dict(continuous)
         cem = payload.get("cem")
         if isinstance(cem, dict):
             cem = dict(cem)
             cem.pop("epoch_reward_diagnostics", None)
             cem.pop("surrogate_retrain", None)
+            if method == "continuous_beta_cem_v1":
+                sampler = cem.get("sampler")
+                if isinstance(sampler, dict):
+                    cem["sampler"] = {"type": "gaussian_parameter_space_v1"}
+                update = cem.get("update")
+                if isinstance(update, dict):
+                    cem["update"] = {"smoothing": update.get("smoothing")}
+                cem.pop("init", None)
+                cem.pop("resampling", None)
             payload = dict(payload)
             payload["cem"] = cem
     return payload

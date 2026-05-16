@@ -16,7 +16,9 @@ if __package__ is None or __package__ == "":
 
 from attack.common.config import (
     Config,
+    PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
     PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
+    PTS_CEM_SAMPLER_DIRICHLET,
     PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED,
     PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST,
     PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST,
@@ -72,6 +74,14 @@ from attack.pts.cem import (
     PTSCEMSamplerConfig,
     PTSCEMUpdateConfig,
     PTSGroupedCEMTrainer,
+)
+from attack.pts.continuous_cem import (
+    PTSContinuousBetaCEMConfig,
+    PTSContinuousBetaCEMTrainer,
+)
+from attack.pts.continuous_policy import (
+    CONTINUOUS_BETA_NORMALIZED_SAMPLER,
+    CONTINUOUS_BETA_SHARED_PREFIX_TAG,
 )
 from attack.pts.grouping import SuffixLengthBucket
 from attack.pts.specs import (
@@ -142,8 +152,16 @@ def run_pts_construction_grouped_cem(
     )
     context = RunContext.from_shared(shared)
     pts_config = _require_pts_config(config)
-    specs = _build_pts_specs_from_config(pts_config)
-    suffix_length_buckets = _build_suffix_length_buckets_from_config(pts_config)
+    specs = (
+        _build_pts_specs_from_config(pts_config)
+        if pts_config.method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1
+        else ()
+    )
+    suffix_length_buckets = (
+        _build_suffix_length_buckets_from_config(pts_config)
+        if pts_config.method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1
+        else ()
+    )
     cem_config = _build_pts_cem_config_from_config(config)
     attack_identity_context = build_pts_construction_attack_identity_context(config)
 
@@ -155,7 +173,7 @@ def run_pts_construction_grouped_cem(
         f"{_LOG_PREFIX} method={pts_config.method} "
         f"iterations={int(cem_config.iterations)} "
         f"population_schedule={cem_config.population_schedule or cem_config.population_size} "
-        f"actions={list(pts_config.actions.enabled)}"
+        f"{_pts_construction_log_method_detail(pts_config)}"
     )
 
     def build_poisoned(target_item: int) -> TargetPoisonOutput:
@@ -265,16 +283,27 @@ def run_pts_construction_grouped_cem(
             )
 
         evaluator_context = _build_candidate_evaluator_context(config, shared)
-        trainer = PTSGroupedCEMTrainer(
-            cem_config=cem_config,
-            specs=specs,
-            suffix_length_buckets=suffix_length_buckets,
-            disable_consume_one_when_suffix_len_leq_1=(
-                pts_config.actions.dynamic_masks.disable_consume_one_when_suffix_len_leq_1
-            ),
-            generation_topk=int(pts_config.generation.topk),
-            generation_rng_tag="pts_generated_suffix",
-        )
+        if pts_config.method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1:
+            trainer = PTSGroupedCEMTrainer(
+                cem_config=cem_config,
+                specs=specs,
+                suffix_length_buckets=suffix_length_buckets,
+                disable_consume_one_when_suffix_len_leq_1=(
+                    pts_config.actions.dynamic_masks.disable_consume_one_when_suffix_len_leq_1
+                ),
+                generation_topk=int(pts_config.generation.topk),
+                generation_rng_tag="pts_generated_suffix",
+            )
+        elif pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
+            trainer = PTSContinuousBetaCEMTrainer(
+                cem_config=cem_config,
+                continuous_config=_build_continuous_beta_cem_config(pts_config),
+                generation_topk=int(pts_config.generation.topk),
+                generation_rng_tag="pts_generated_suffix",
+                shared_prefix_rng_tag=CONTINUOUS_BETA_SHARED_PREFIX_TAG,
+            )
+        else:
+            raise ValueError(f"Unsupported PTS-CEM method {pts_config.method!r}.")
 
         def evaluator_fn(
             *,
@@ -391,23 +420,40 @@ def _require_pts_config(config: Config) -> PTSConstructionConfig:
     return pts_config
 
 
+def _pts_construction_log_method_detail(pts_config: PTSConstructionConfig) -> str:
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
+        return "continuous_params=7"
+    return f"actions={list(pts_config.actions.enabled)}"
+
+
 def _validate_pts_construction_run_config(config: Config) -> None:
     if not bool(config.data.poison_train_only):
         raise ValueError("PTS-CEM runner requires data.poison_train_only == true.")
     pts_config = _require_pts_config(config)
     if not bool(pts_config.enabled):
         raise ValueError("PTS-CEM runner requires attack.pts_construction.enabled == true.")
-    if pts_config.method != PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1:
-        raise ValueError("PTS-CEM runner supports only method='grouped_cem_v1'.")
+    if pts_config.method not in {
+        PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
+        PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+    }:
+        raise ValueError(
+            "PTS-CEM runner supports method='grouped_cem_v1' or "
+            "method='continuous_beta_cem_v1'."
+        )
     if (
         pts_config.prefix_selector.range != PTS_PREFIX_RANGE_INTERNAL
         or pts_config.prefix_selector.sampler != PTS_PREFIX_SAMPLER_UNIFORM
     ):
         raise ValueError("PTS-CEM Phase 3 supports only internal/uniform prefix selection.")
-    if pts_config.grouping.mode != PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH:
-        raise ValueError("PTS-CEM Phase 3 supports only residual_suffix_length grouping.")
-    _build_pts_specs_from_config(pts_config)
-    _build_suffix_length_buckets_from_config(pts_config)
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1:
+        if pts_config.cem.sampler.type != PTS_CEM_SAMPLER_DIRICHLET:
+            raise ValueError("Grouped PTS-CEM requires cem.sampler.type='dirichlet'.")
+        if pts_config.grouping.mode != PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH:
+            raise ValueError("PTS-CEM Phase 3 supports only residual_suffix_length grouping.")
+        _build_pts_specs_from_config(pts_config)
+        _build_suffix_length_buckets_from_config(pts_config)
+    else:
+        _build_continuous_beta_cem_config(pts_config)
     if (
         pts_config.generation.length_policy
         != PTS_GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX
@@ -513,6 +559,27 @@ def _build_pts_cem_config_from_config(config: Config) -> PTSCEMConfig:
         base_seed=_resolve_pts_cem_base_seed(config),
         candidate_seed_stride=int(cem.candidate_seed_stride),
         save_top_k_candidates=int(cem.save_top_k_candidates),
+    )
+
+
+def _build_continuous_beta_cem_config(
+    pts_config: PTSConstructionConfig,
+) -> PTSContinuousBetaCEMConfig:
+    continuous = pts_config.continuous_beta
+    if not bool(continuous.deterministic_sampling):
+        raise ValueError(
+            "Continuous PTS-CEM requires continuous_beta.deterministic_sampling=true."
+        )
+    return PTSContinuousBetaCEMConfig(
+        parameter_bounds=(
+            float(continuous.parameter_bounds.min),
+            float(continuous.parameter_bounds.max),
+        ),
+        initial_std=float(continuous.initial_std),
+        min_std=float(continuous.min_std),
+        deterministic_sampling=bool(continuous.deterministic_sampling),
+        initialization_mode=continuous.initialization.mode,
+        gaussian_fill=bool(continuous.initialization.gaussian_fill),
     )
 
 
@@ -680,6 +747,22 @@ def build_pts_construction_attack_identity_context(config: Config) -> dict[str, 
     pts_config = _require_pts_config(config)
     cem = pts_config.cem
     resolved_cem_base_seed = _resolve_pts_cem_base_seed(config)
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
+        return {
+            "pts_construction": {
+                **_continuous_pts_construction_identity_payload(
+                    config,
+                    target_item=None,
+                ),
+                "runtime_seeds": {
+                    "position_opt_seed": int(config.seeds.position_opt_seed),
+                    "surrogate_train_seed": int(config.seeds.surrogate_train_seed),
+                    "victim_train_seed": int(config.seeds.victim_train_seed),
+                    "resolved_cem_base_seed": int(resolved_cem_base_seed),
+                    "surrogate_seed_alignment": _pts_cem_seed_alignment_identity(config),
+                },
+            }
+        }
     return {
         "pts_construction": {
             "method": pts_config.method,
@@ -765,6 +848,94 @@ def build_pts_construction_attack_identity_context(config: Config) -> dict[str, 
             },
         }
     }
+
+
+def _continuous_pts_construction_identity_payload(
+    config: Config,
+    *,
+    target_item: int | None,
+) -> dict[str, object]:
+    pts_config = _require_pts_config(config)
+    cem = pts_config.cem
+    continuous = pts_config.continuous_beta
+    payload: dict[str, object] = {
+        "method": pts_config.method,
+        "prefix_selector": {
+            "range": pts_config.prefix_selector.range,
+            "sampler": pts_config.prefix_selector.sampler,
+        },
+        "generation": {
+            "topk": int(pts_config.generation.topk),
+            "length_policy": pts_config.generation.length_policy,
+            "generation_rng_tag": "pts_generated_suffix",
+        },
+        "continuous_beta": {
+            "input": continuous.input,
+            "parameterization": continuous.parameterization,
+            "source_policy": continuous.source_policy,
+            "parameter_bounds": {
+                "min": float(continuous.parameter_bounds.min),
+                "max": float(continuous.parameter_bounds.max),
+            },
+            "initial_std": float(continuous.initial_std),
+            "min_std": float(continuous.min_std),
+            "deterministic_sampling": bool(continuous.deterministic_sampling),
+            "initialization": {
+                "mode": continuous.initialization.mode,
+                "gaussian_fill": bool(continuous.initialization.gaussian_fill),
+            },
+        },
+        "shared_prefix_assignment": {
+            "mode": "internal_uniform_per_target_v1",
+            "seed_source": cem.seed_source,
+            "resolved_seed": int(_resolve_pts_cem_base_seed(config)),
+            "rng_tag": CONTINUOUS_BETA_SHARED_PREFIX_TAG,
+        },
+        "cem": {
+            "iterations": int(cem.iterations),
+            "population_schedule": (
+                None
+                if cem.population_schedule is None
+                else [int(value) for value in cem.population_schedule]
+            ),
+            "population_size": (
+                None if cem.population_size is None else int(cem.population_size)
+            ),
+            "elite_ratio": float(cem.elite_ratio),
+            "sampler": {
+                "type": CONTINUOUS_BETA_NORMALIZED_SAMPLER,
+            },
+            "update": {
+                "smoothing": float(cem.update.smoothing),
+            },
+            "seed_source": cem.seed_source,
+            "cem_base_seed": int(_resolve_pts_cem_base_seed(config)),
+            "resolved_cem_base_seed": int(_resolve_pts_cem_base_seed(config)),
+            "candidate_seed_stride": int(cem.candidate_seed_stride),
+        },
+        "sampling": {
+            "beta_seed_fields": [
+                "base_seed",
+                "target_item",
+                "candidate_key",
+                "fake_session_index",
+                "sampling_tag",
+            ],
+            "source_seed_fields": [
+                "base_seed",
+                "target_item",
+                "candidate_key",
+                "fake_session_index",
+                "sampling_tag",
+            ],
+        },
+        "final_selection": {
+            "mode": pts_config.final_selection.mode,
+        },
+    }
+    if target_item is not None:
+        payload["target_item"] = int(target_item)
+    return payload
 
 
 def _pts_construction_artifact_dir(
@@ -873,6 +1044,11 @@ def _pts_construction_shared_identity_payload(
 ) -> dict[str, object]:
     pts_config = _require_pts_config(config)
     cem = pts_config.cem
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
+        return _continuous_pts_construction_identity_payload(
+            config,
+            target_item=int(target_item),
+        )
     return {
         "target_item": int(target_item),
         "method": pts_config.method,
@@ -2440,6 +2616,37 @@ def _epoch_reward_diagnostics_metadata_payload(
     return payload
 
 
+def _pts_method_metadata_payload(
+    pts_config: PTSConstructionConfig,
+) -> dict[str, object]:
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
+        continuous = pts_config.continuous_beta
+        return {
+            "pts_actions_enabled": [],
+            "pts_grouping_mode": None,
+            "pts_continuous_beta": {
+                "input": continuous.input,
+                "parameterization": continuous.parameterization,
+                "source_policy": continuous.source_policy,
+                "parameter_bounds": {
+                    "min": float(continuous.parameter_bounds.min),
+                    "max": float(continuous.parameter_bounds.max),
+                },
+                "initial_std": float(continuous.initial_std),
+                "min_std": float(continuous.min_std),
+                "deterministic_sampling": bool(continuous.deterministic_sampling),
+                "initialization": {
+                    "mode": continuous.initialization.mode,
+                    "gaussian_fill": bool(continuous.initialization.gaussian_fill),
+                },
+            },
+        }
+    return {
+        "pts_actions_enabled": list(pts_config.actions.enabled),
+        "pts_grouping_mode": pts_config.grouping.mode,
+    }
+
+
 def _target_metadata(
     *,
     config: Config,
@@ -2465,6 +2672,7 @@ def _target_metadata(
         config,
         target_item=int(target_item),
     )
+    method_metadata = _pts_method_metadata_payload(pts_config)
     return {
         "pts_cem_trace_path": artifact_paths.get("pts_cem_trace"),
         "pts_policy_history_path": artifact_paths.get("pts_policy_history"),
@@ -2499,8 +2707,7 @@ def _target_metadata(
             else None
         ),
         "pts_population_size": cem_config.population_size,
-        "pts_actions_enabled": list(pts_config.actions.enabled),
-        "pts_grouping_mode": pts_config.grouping.mode,
+        **method_metadata,
         "pts_reward_target_summary": pts_config.reward.target_summary,
         "pts_candidate_retrain_seed": int(
             seed_alignment["resolved_surrogate_effective_seed"]
@@ -2542,6 +2749,7 @@ def _target_metadata_from_cache(
         config,
         target_item=int(target_item),
     )
+    method_metadata = _pts_method_metadata_payload(pts_config)
     payload: dict[str, object] = {
         "pts_cem_trace_path": artifact_paths.get("pts_cem_trace"),
         "pts_policy_history_path": artifact_paths.get("pts_policy_history"),
@@ -2575,8 +2783,7 @@ def _target_metadata_from_cache(
             else None
         ),
         "pts_population_size": cem_config.population_size,
-        "pts_actions_enabled": list(pts_config.actions.enabled),
-        "pts_grouping_mode": pts_config.grouping.mode,
+        **method_metadata,
         "pts_reward_target_summary": pts_config.reward.target_summary,
         "pts_candidate_retrain_seed": int(
             seed_alignment["resolved_surrogate_effective_seed"]
@@ -2654,7 +2861,7 @@ def _selected_sessions_sha1(
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Run Grouped PTS-CEM construction through the attack pipeline."
+        description="Run PTS-CEM construction through the attack pipeline."
     )
     parser.add_argument(
         "--config",
