@@ -15,6 +15,7 @@ from attack.pts.continuous_executor import (
     PTSContinuousSessionContext,
     apply_pts_continuous_beta_construction_batch,
     build_continuous_shared_session_contexts,
+    compute_half_up_consume_count,
 )
 from attack.pts.continuous_policy import (
     ContinuousBetaPolicy,
@@ -34,6 +35,13 @@ def _context(residual_suffix: list[int]) -> PTSContinuousSessionContext:
     )
 
 
+def test_half_up_consume_count_boundaries_and_clamp() -> None:
+    assert compute_half_up_consume_count(0.125, 4) == 1
+    assert compute_half_up_consume_count(0.625, 4) == 3
+    assert compute_half_up_consume_count(-0.25, 4) == 0
+    assert compute_half_up_consume_count(1.25, 4) == 4
+
+
 def test_continuous_executor_stop_branch(monkeypatch) -> None:
     monkeypatch.setattr("attack.pts.continuous_executor.sample_beta", lambda *a, **k: 1.0)
     result = apply_pts_continuous_beta_construction_batch(
@@ -49,8 +57,10 @@ def test_continuous_executor_stop_branch(monkeypatch) -> None:
     assert record["action"] == CONTINUOUS_ACTION_STOP
     assert record["consume_count"] == 2
     assert record["continuation_source"] == "stop"
+    assert record["source_generate_probability"] is None
     assert record["target_position_final"] == 2
     assert result.summary["action_counts"][CONTINUOUS_ACTION_STOP] == 1
+    assert result.summary["continuous"]["source_generate_probability_count"] == 0
 
 
 def test_continuous_executor_preserve_branch(monkeypatch) -> None:
@@ -72,6 +82,46 @@ def test_continuous_executor_preserve_branch(monkeypatch) -> None:
     assert record["action"] == CONTINUOUS_ACTION_PARTIAL_KEEP_SUFFIX
     assert record["consume_count"] == 1
     assert record["generated_suffix_length"] == 0
+
+
+def test_continuous_summary_excludes_stop_from_source_probability_mean(monkeypatch) -> None:
+    rho_values = iter([1.0, 0.0])
+    monkeypatch.setattr(
+        "attack.pts.continuous_executor.sample_beta",
+        lambda *args, **kwargs: next(rho_values),
+    )
+    monkeypatch.setattr(
+        "attack.pts.continuous_executor.deterministic_unit_interval",
+        lambda **kwargs: 1.0,
+    )
+    result = apply_pts_continuous_beta_construction_batch(
+        session_contexts=[
+            _context([3, 4]),
+            PTSContinuousSessionContext(
+                fake_session_index=1,
+                template_session=[10, 11, 12, 13],
+                anchor_position=2,
+                prefix=[10, 11],
+                residual_suffix=[12, 13],
+                suffix_length_percentile=0.5,
+            ),
+        ],
+        target_item=99,
+        policy=ContinuousBetaPolicy.from_vector([0, 0, 0, 0, 0, 0, 0]),
+        base_seed=7,
+        candidate_key="iter0_cand1",
+    )
+
+    assert result.per_session_records[0]["action"] == CONTINUOUS_ACTION_STOP
+    assert result.per_session_records[0]["source_generate_probability"] is None
+    assert result.per_session_records[1]["source_generate_probability"] == 0.5
+    assert result.summary["action_counts"][CONTINUOUS_ACTION_STOP] == 1
+    assert result.summary["continuous"]["source_generate_probability_count"] == 1
+    assert result.summary["continuous"]["source_generate_probability_mean"] == 0.5
+    assert (
+        result.summary["continuous"]["source_generate_probability_mean_non_stop"]
+        == 0.5
+    )
 
 
 def test_continuous_executor_generate_branch_uses_remaining_length(monkeypatch) -> None:

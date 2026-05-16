@@ -144,6 +144,11 @@ def build_pts_batch_summary(
                 if str(record.get("continuation_source")) == "generate"
             )
         )
+        source_generate_probability_values = [
+            float(record["source_generate_probability"])
+            for record in continuous_records
+            if record.get("source_generate_probability") is not None
+        ]
         summary["continuous"] = {
             "consume_count_distribution": integer_count_distribution(
                 [int(record.get("consume_count", 0)) for record in continuous_records]
@@ -158,10 +163,13 @@ def build_pts_batch_summary(
                 [float(record.get("consume_ratio", 0.0)) for record in continuous_records]
             ),
             "source_generate_probability_mean": _float_mean(
-                [
-                    float(record.get("source_generate_probability", 0.0))
-                    for record in continuous_records
-                ]
+                source_generate_probability_values
+            ),
+            "source_generate_probability_mean_non_stop": _float_mean(
+                source_generate_probability_values
+            ),
+            "source_generate_probability_count": int(
+                len(source_generate_probability_values)
             ),
             "generated_source_count": generated_source_count,
             "generated_source_ratio": _ratio(

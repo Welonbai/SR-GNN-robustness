@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 from typing import Sequence
@@ -28,6 +29,14 @@ CONTINUOUS_ACTION_GENERATE_FULL_SUFFIX = "continuous_generate_full_suffix"
 CONTINUOUS_ACTION_PARTIAL_KEEP_SUFFIX = "continuous_partial_keep_suffix"
 CONTINUOUS_ACTION_PARTIAL_GENERATE_SUFFIX = "continuous_partial_generate_suffix"
 CONTINUOUS_ACTION_STOP = "continuous_stop"
+
+
+def compute_half_up_consume_count(rho: float, residual_suffix_len: int) -> int:
+    suffix_len = int(residual_suffix_len)
+    if suffix_len < 0:
+        raise ValueError("residual_suffix_len must be non-negative.")
+    raw_count = int(math.floor(float(rho) * float(suffix_len) + 0.5))
+    return min(max(raw_count, 0), suffix_len)
 
 
 @dataclass(frozen=True)
@@ -121,13 +130,10 @@ def apply_pts_continuous_beta_construction_batch(
             tag=str(rho_sampling_tag),
         )
         rho = sample_beta(alpha, beta, seed=rho_seed)
-        consume_count = min(
-            max(int(round(float(rho) * float(residual_suffix_len))), 0),
-            residual_suffix_len,
-        )
+        consume_count = compute_half_up_consume_count(rho, residual_suffix_len)
         prefix_through_target = prefix + [target]
         generated_suffix: list[int] = []
-        p_generate = 0.0
+        p_generate: float | None = None
         if consume_count == residual_suffix_len:
             continuation_source = "stop"
             action_name = CONTINUOUS_ACTION_STOP
@@ -208,7 +214,9 @@ def apply_pts_continuous_beta_construction_batch(
             "beta_beta": float(beta),
             "consume_ratio": float(rho),
             "consume_count": int(consume_count),
-            "source_generate_probability": float(p_generate),
+            "source_generate_probability": (
+                None if p_generate is None else float(p_generate)
+            ),
             "action": action_name,
             "consume_policy": "continuous_beta",
             "continuation_source": continuation_source,
@@ -249,4 +257,5 @@ __all__ = [
     "PTSContinuousSessionContext",
     "apply_pts_continuous_beta_construction_batch",
     "build_continuous_shared_session_contexts",
+    "compute_half_up_consume_count",
 ]

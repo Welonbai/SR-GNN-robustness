@@ -10,6 +10,7 @@ from attack.pts.continuous_executor import (
     PTSContinuousSessionContext,
     apply_pts_continuous_beta_construction_batch,
     build_continuous_shared_session_contexts,
+    compute_half_up_consume_count,
 )
 from attack.pts.continuous_policy import (
     CONTINUOUS_BETA_PARAMETER_NAMES,
@@ -119,6 +120,7 @@ __all__ = [
     "build_valid_actions_by_group",
     "build_vertex_stratified_initial_population",
     "candidate_key",
+    "compute_half_up_consume_count",
     "default_suffix_length_buckets",
     "deterministic_policy_seed",
     "get_default_pts_v1_specs",
