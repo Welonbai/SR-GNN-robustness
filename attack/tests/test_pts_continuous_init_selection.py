@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 from dataclasses import replace
 from pathlib import Path
 import sys
@@ -10,7 +11,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from attack.common.artifact_io import load_json
+from attack.common.artifact_io import load_json, save_fake_sessions
 from attack.common.config import (
     ArtifactsConfig,
     PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
@@ -20,9 +21,8 @@ from attack.common.config import (
 from attack.pipeline.runs.run_pts_construction_cem import (
     _build_continuous_beta_cem_config,
     _build_pts_cem_config_from_config,
-)
-from attack.pipeline.runs.run_pts_continuous_init_diagnostic import (
-    run_continuous_init_diagnostic,
+    build_pts_cem_shared_cache_identity,
+    pts_cem_shared_cache_key,
 )
 from attack.pts.cem import (
     PTSCEMConfig,
@@ -35,9 +35,13 @@ from attack.pts.continuous_cem import (
     PTSContinuousBetaCEMTrainer,
 )
 from attack.pts.continuous_init_selection import (
+    CONTINUOUS_MLP_INITIALIZATION_RUN_TYPE,
     build_continuous_mlp_initial_sample_plan,
+    continuous_mlp_init_cache_key,
+    continuous_mlp_init_cache_path,
     continuous_mlp_init_identity_payload,
 )
+from attack.pts.continuous_executor import build_continuous_shared_session_contexts
 from attack.pts.executor import PTSConstructionBatchResult
 
 
@@ -76,6 +80,15 @@ def _small_config(tmp_path: Path):
     )
 
 
+def test_continuous_init_selection_import_does_not_import_diagnostic_runner() -> None:
+    sys.modules.pop("attack.pts.continuous_init_selection", None)
+    sys.modules.pop("attack.pipeline.runs.run_pts_continuous_init_diagnostic", None)
+
+    importlib.import_module("attack.pts.continuous_init_selection")
+
+    assert "attack.pipeline.runs.run_pts_continuous_init_diagnostic" not in sys.modules
+
+
 def test_continuous_mlp_init_cache_records_target_independent_metadata(
     tmp_path: Path,
 ) -> None:
@@ -99,11 +112,44 @@ def test_continuous_mlp_init_cache_records_target_independent_metadata(
     assert payload["identity"]["init"]["init_materialize_generated_suffix"] is False
     assert "target_item" not in json.dumps(payload["identity"])
     assert "per_session_records" not in json.dumps(payload)
+    assert CONTINUOUS_MLP_INITIALIZATION_RUN_TYPE in result.cache_path.parts
+    assert "pts_construction_grouped_cem" not in result.cache_path.parts
     assert [item["candidate_key"] for item in payload["selected_candidates"]] == [
         f"iter0_cand{index}" for index in range(4)
     ]
     assert result.selected_sample_plan[0].sample_metadata["candidate_key"] == "iter0_cand0"
     assert result.selected_sample_plan[0].sample_metadata["pool_candidate_key"]
+
+
+def test_continuous_context_seed_scope_controls_target_dependence() -> None:
+    templates = [[index, index + 1, index + 2, index + 3, index + 4] for index in range(1, 30, 5)]
+    independent_a = build_continuous_shared_session_contexts(
+        template_sessions=templates,
+        target_item=1,
+        base_seed=123,
+        seed_scope="target_independent",
+    )
+    independent_b = build_continuous_shared_session_contexts(
+        template_sessions=templates,
+        target_item=4,
+        base_seed=123,
+        seed_scope="target_independent",
+    )
+    dependent_a = build_continuous_shared_session_contexts(
+        template_sessions=templates,
+        target_item=1,
+        base_seed=123,
+        seed_scope="target_dependent",
+    )
+    dependent_b = build_continuous_shared_session_contexts(
+        template_sessions=templates,
+        target_item=4,
+        base_seed=123,
+        seed_scope="target_dependent",
+    )
+
+    assert independent_a == independent_b
+    assert dependent_a != dependent_b
 
 
 def test_continuous_mlp_init_key_and_vectors_ignore_target_item_only(
@@ -171,6 +217,10 @@ def test_diagnostic_and_formal_initializer_share_selected_vectors(
         generation_topk=10,
         force_rebuild=True,
     )
+    from attack.pipeline.runs.run_pts_continuous_init_diagnostic import (
+        run_continuous_init_diagnostic,
+    )
+
     diagnostic = run_continuous_init_diagnostic(
         config=config,
         config_path=CONTINUOUS_FIXTURE,
@@ -243,3 +293,93 @@ def test_formal_continuous_cem_applies_iter0_candidate_keys(monkeypatch) -> None
     )
 
     assert applied_keys == ["iter0_cand0", "iter0_cand1"]
+
+
+def test_continuous_mlp_init_identity_changes_for_seed_and_init_settings(
+    tmp_path: Path,
+) -> None:
+    config = _small_config(tmp_path)
+    templates = [[1, 2, 3], [4, 5, 6, 7]]
+    base_identity = continuous_mlp_init_identity_payload(
+        config=config,
+        template_sessions=templates,
+    )
+    changed_seed = replace(
+        config,
+        seeds=replace(config.seeds, position_opt_seed=config.seeds.position_opt_seed + 1),
+    )
+    changed_smoothing = replace(
+        config,
+        attack=replace(
+            config.attack,
+            pts_construction=replace(
+                config.attack.pts_construction,
+                continuous_policy=replace(
+                    config.attack.pts_construction.continuous_policy,
+                    smoothing_epsilon=0.2,
+                ),
+            ),
+        ),
+    )
+    changed_init = replace(
+        config,
+        attack=replace(
+            config.attack,
+            pts_construction=replace(
+                config.attack.pts_construction,
+                cem=replace(
+                    config.attack.pts_construction.cem,
+                    init=replace(
+                        config.attack.pts_construction.cem.init,
+                        q_grid_size=7,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    assert base_identity["prefix_assignment"]["seed_source"] == "position_opt_seed"
+    assert "resolved_init_seed" in base_identity["prefix_assignment"]
+    assert continuous_mlp_init_cache_key(base_identity) != continuous_mlp_init_cache_key(
+        continuous_mlp_init_identity_payload(config=changed_seed, template_sessions=templates)
+    )
+    assert continuous_mlp_init_cache_key(base_identity) != continuous_mlp_init_cache_key(
+        continuous_mlp_init_identity_payload(config=changed_smoothing, template_sessions=templates)
+    )
+    assert continuous_mlp_init_cache_key(base_identity) != continuous_mlp_init_cache_key(
+        continuous_mlp_init_identity_payload(config=changed_init, template_sessions=templates)
+    )
+
+
+def test_continuous_construction_identity_includes_target_specific_init_key(
+    tmp_path: Path,
+) -> None:
+    config = _small_config(tmp_path)
+    fake_sessions_path = tmp_path / "fake_sessions.pkl"
+    templates = [[1, 2, 3], [4, 5, 6, 7]]
+    save_fake_sessions(templates, fake_sessions_path)
+    init_identity = continuous_mlp_init_identity_payload(
+        config=config,
+        template_sessions=templates,
+    )
+    init_key = continuous_mlp_init_cache_key(init_identity)
+
+    target_1 = build_pts_cem_shared_cache_identity(
+        config,
+        target_item=5334,
+        fake_sessions_path=fake_sessions_path,
+        poison_model_path=None,
+    )
+    target_2 = build_pts_cem_shared_cache_identity(
+        config,
+        target_item=999999,
+        fake_sessions_path=fake_sessions_path,
+        poison_model_path=None,
+    )
+
+    assert target_1["pts_construction"]["initialization"]["cache_key"] == init_key
+    assert target_1["pts_construction"]["initialization"]["target_independent"] is True
+    assert continuous_mlp_init_cache_path(config, cache_key=init_key).parts[-3] == (
+        CONTINUOUS_MLP_INITIALIZATION_RUN_TYPE
+    )
+    assert pts_cem_shared_cache_key(target_1) != pts_cem_shared_cache_key(target_2)

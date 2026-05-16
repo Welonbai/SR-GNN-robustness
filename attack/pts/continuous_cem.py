@@ -78,12 +78,14 @@ class PTSContinuousBetaCEMTrainer:
         generation_rng_tag: str = "pts_generated_suffix",
         shared_prefix_rng_tag: str = CONTINUOUS_BETA_SHARED_PREFIX_TAG,
         initial_sample_plan: Sequence[_ContinuousCandidateSampleSpec] | None = None,
+        seed_scope: str = "target_dependent",
     ) -> None:
         self.cem_config = cem_config
         self.continuous_config = continuous_config
         self.generation_topk = int(generation_topk)
         self.generation_rng_tag = str(generation_rng_tag)
         self.shared_prefix_rng_tag = str(shared_prefix_rng_tag)
+        self.seed_scope = str(seed_scope)
         self.initial_sample_plan = (
             None if initial_sample_plan is None else list(initial_sample_plan)
         )
@@ -133,6 +135,7 @@ class PTSContinuousBetaCEMTrainer:
             target_item=int(target_item),
             base_seed=int(self.cem_config.base_seed),
             prefix_rng_tag=self.shared_prefix_rng_tag,
+            seed_scope=self.seed_scope,
         )
         current_mean = [0.0 for _ in self.parameter_names]
         current_std = [

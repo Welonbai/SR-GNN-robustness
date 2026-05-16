@@ -454,6 +454,7 @@ def run_continuous_beta_init_diagnostic(
         target_item=resolved_target_item,
         base_seed=int(cem_config.base_seed),
         prefix_rng_tag=CONTINUOUS_BETA_SHARED_PREFIX_TAG,
+        seed_scope="target_independent",
     )
     if pts_config.cem.init.mode == BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING:
         from attack.pts.continuous_init_selection import (

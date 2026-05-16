@@ -7,11 +7,11 @@ import sys
 import pytest
 import yaml
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from attack.common.artifact_io import save_fake_sessions
 from attack.common.config import (
     PTSConstructionConfig,
     PTSContinuousPolicyConfig,
@@ -182,9 +182,10 @@ def test_grouped_validation_does_not_call_continuous_init_selector(monkeypatch) 
     _validate_pts_construction_run_config(config)
 
 
-def test_continuous_cache_identity_normalizes_ignored_sampler_type() -> None:
+def test_continuous_cache_identity_normalizes_ignored_sampler_type(tmp_path: Path) -> None:
     config = load_config(CONFIG_PATH)
-    fake_sessions_path = Path(__file__)
+    fake_sessions_path = tmp_path / "fake_sessions.pkl"
+    save_fake_sessions([[1, 2, 3], [4, 5, 6, 7]], fake_sessions_path)
     gaussian = _with_pts(config, _continuous_pts(sampler_type="gaussian"))
     dirichlet = _with_pts(config, _continuous_pts(sampler_type="dirichlet"))
 
@@ -207,9 +208,12 @@ def test_continuous_cache_identity_normalizes_ignored_sampler_type() -> None:
     )
 
 
-def test_continuous_cache_identity_changes_for_output_affecting_settings() -> None:
+def test_continuous_cache_identity_changes_for_output_affecting_settings(
+    tmp_path: Path,
+) -> None:
     config = load_config(CONFIG_PATH)
-    fake_sessions_path = Path(__file__)
+    fake_sessions_path = tmp_path / "fake_sessions.pkl"
+    save_fake_sessions([[1, 2, 3], [4, 5, 6, 7]], fake_sessions_path)
     base = _with_pts(config, _continuous_pts(initial_std=2.0))
     changed = _with_pts(config, _continuous_pts(initial_std=1.5))
 

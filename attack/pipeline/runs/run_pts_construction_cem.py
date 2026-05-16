@@ -31,7 +31,7 @@ from attack.common.config import (
     PTSConstructionConfig,
     load_config,
 )
-from attack.common.artifact_io import load_json, save_json
+from attack.common.artifact_io import load_fake_sessions, load_json, save_json
 from attack.common.paths import (
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     attack_key,
@@ -79,7 +79,11 @@ from attack.pts.continuous_cem import (
     PTSContinuousBetaCEMConfig,
     PTSContinuousBetaCEMTrainer,
 )
-from attack.pts.continuous_init_selection import build_continuous_mlp_initial_sample_plan
+from attack.pts.continuous_init_selection import (
+    build_continuous_mlp_initial_sample_plan,
+    continuous_mlp_init_cache_key,
+    continuous_mlp_init_identity_payload,
+)
 from attack.pts.continuous_policy import (
     CONTINUOUS_BETA_NORMALIZED_SAMPLER,
     CONTINUOUS_BETA_SHARED_PREFIX_TAG,
@@ -311,6 +315,7 @@ def run_pts_construction_grouped_cem(
                 generation_rng_tag="pts_generated_suffix",
                 shared_prefix_rng_tag=CONTINUOUS_BETA_SHARED_PREFIX_TAG,
                 initial_sample_plan=init_selection.selected_sample_plan,
+                seed_scope="target_independent",
             )
         else:
             raise ValueError(f"Unsupported PTS-CEM method {pts_config.method!r}.")
@@ -868,6 +873,8 @@ def _continuous_pts_construction_identity_payload(
     config: Config,
     *,
     target_item: int | None,
+    initialization_identity: Mapping[str, object] | None = None,
+    initialization_cache_key: str | None = None,
 ) -> dict[str, object]:
     pts_config = _require_pts_config(config)
     cem = pts_config.cem
@@ -912,7 +919,8 @@ def _continuous_pts_construction_identity_payload(
             ),
         },
         "shared_prefix_assignment": {
-            "mode": "internal_uniform_per_target_v1",
+            "mode": "internal_uniform_target_independent_v1",
+            "seed_scope": "target_independent",
             "seed_source": cem.seed_source,
             "resolved_seed": int(_resolve_pts_cem_base_seed(config)),
             "rng_tag": CONTINUOUS_BETA_SHARED_PREFIX_TAG,
@@ -959,6 +967,18 @@ def _continuous_pts_construction_identity_payload(
             "mode": pts_config.final_selection.mode,
         },
     }
+    if initialization_identity is not None and initialization_cache_key is not None:
+        payload["initialization"] = {
+            "cache_key": str(initialization_cache_key),
+            "identity_version": str(initialization_identity.get("identity_version", "")),
+            "identity_hash": str(initialization_cache_key).replace(
+                "continuous_mlp_init_",
+                "",
+                1,
+            ),
+            "target_independent": True,
+            "materialize_generated_suffix": False,
+        }
     if target_item is not None:
         payload["target_item"] = int(target_item)
     return payload
@@ -1037,6 +1057,7 @@ def build_pts_cem_shared_cache_identity(
         "pts_construction": _pts_construction_shared_identity_payload(
             config,
             target_item=int(target_item),
+            fake_sessions_path=fake_sessions_path,
         ),
         "surrogate_reward": {
             "surrogate_model": "srgnn",
@@ -1067,13 +1088,31 @@ def _pts_construction_shared_identity_payload(
     config: Config,
     *,
     target_item: int,
+    fake_sessions_path: Path | None = None,
 ) -> dict[str, object]:
     pts_config = _require_pts_config(config)
     cem = pts_config.cem
     if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
+        if fake_sessions_path is None:
+            raise ValueError(
+                "continuous_mlp_cem construction identity requires fake_sessions_path."
+            )
+        template_sessions = load_fake_sessions(fake_sessions_path)
+        if template_sessions is None:
+            raise FileNotFoundError(
+                "continuous_mlp_cem construction identity requires readable fake sessions: "
+                f"{fake_sessions_path}"
+            )
+        init_identity = continuous_mlp_init_identity_payload(
+            config=config,
+            template_sessions=template_sessions,
+        )
+        init_cache_key = continuous_mlp_init_cache_key(init_identity)
         return _continuous_pts_construction_identity_payload(
             config,
             target_item=int(target_item),
+            initialization_identity=init_identity,
+            initialization_cache_key=init_cache_key,
         )
     return {
         "target_item": int(target_item),
