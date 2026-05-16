@@ -16,7 +16,7 @@ if __package__ is None or __package__ == "":
 
 from attack.common.config import (
     Config,
-    PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+    PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
     PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
     PTS_CEM_SAMPLER_DIRICHLET,
     PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED,
@@ -79,6 +79,7 @@ from attack.pts.continuous_cem import (
     PTSContinuousBetaCEMConfig,
     PTSContinuousBetaCEMTrainer,
 )
+from attack.pts.continuous_init_selection import build_continuous_mlp_initial_sample_plan
 from attack.pts.continuous_policy import (
     CONTINUOUS_BETA_NORMALIZED_SAMPLER,
     CONTINUOUS_BETA_SHARED_PREFIX_TAG,
@@ -294,13 +295,22 @@ def run_pts_construction_grouped_cem(
                 generation_topk=int(pts_config.generation.topk),
                 generation_rng_tag="pts_generated_suffix",
             )
-        elif pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
+        elif pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
+            continuous_config = _build_continuous_beta_cem_config(pts_config)
+            init_selection = build_continuous_mlp_initial_sample_plan(
+                config=config,
+                cem_config=cem_config,
+                continuous_config=continuous_config,
+                template_sessions=shared.template_sessions,
+                generation_topk=int(pts_config.generation.topk),
+            )
             trainer = PTSContinuousBetaCEMTrainer(
                 cem_config=cem_config,
-                continuous_config=_build_continuous_beta_cem_config(pts_config),
+                continuous_config=continuous_config,
                 generation_topk=int(pts_config.generation.topk),
                 generation_rng_tag="pts_generated_suffix",
                 shared_prefix_rng_tag=CONTINUOUS_BETA_SHARED_PREFIX_TAG,
+                initial_sample_plan=init_selection.selected_sample_plan,
             )
         else:
             raise ValueError(f"Unsupported PTS-CEM method {pts_config.method!r}.")
@@ -421,8 +431,8 @@ def _require_pts_config(config: Config) -> PTSConstructionConfig:
 
 
 def _pts_construction_log_method_detail(pts_config: PTSConstructionConfig) -> str:
-    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
-        return "continuous_params=7"
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
+        return "continuous_policy=suffix_length_mlp_h2"
     return f"actions={list(pts_config.actions.enabled)}"
 
 
@@ -434,11 +444,11 @@ def _validate_pts_construction_run_config(config: Config) -> None:
         raise ValueError("PTS-CEM runner requires attack.pts_construction.enabled == true.")
     if pts_config.method not in {
         PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
-        PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+        PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
     }:
         raise ValueError(
             "PTS-CEM runner supports method='grouped_cem_v1' or "
-            "method='continuous_beta_cem_v1'."
+            "method='continuous_mlp_cem'."
         )
     if (
         pts_config.prefix_selector.range != PTS_PREFIX_RANGE_INTERNAL
@@ -453,6 +463,8 @@ def _validate_pts_construction_run_config(config: Config) -> None:
         _build_pts_specs_from_config(pts_config)
         _build_suffix_length_buckets_from_config(pts_config)
     else:
+        if pts_config.cem.sampler.type != "gaussian":
+            raise ValueError("Continuous MLP-CEM requires cem.sampler.type='gaussian'.")
         _build_continuous_beta_cem_config(pts_config)
     if (
         pts_config.generation.length_policy
@@ -565,23 +577,23 @@ def _build_pts_cem_config_from_config(config: Config) -> PTSCEMConfig:
 def _build_continuous_beta_cem_config(
     pts_config: PTSConstructionConfig,
 ) -> PTSContinuousBetaCEMConfig:
-    continuous = pts_config.continuous_beta
+    continuous = pts_config.continuous_policy
     if not bool(continuous.deterministic_sampling):
         raise ValueError(
-            "Continuous PTS-CEM requires continuous_beta.deterministic_sampling=true."
+            "Continuous MLP-CEM requires continuous_policy.deterministic_sampling=true."
         )
     return PTSContinuousBetaCEMConfig(
-        parameterization=continuous.parameterization,
+        parameterization=continuous.internal_parameterization,
         parameter_bounds=(
             float(continuous.parameter_bounds.min),
             float(continuous.parameter_bounds.max),
         ),
-        initial_std=float(continuous.initial_std),
-        min_std=float(continuous.min_std),
+        initial_std=float(pts_config.cem.init.soft_extreme_initial_std),
+        min_std=float(pts_config.cem.update.min_std),
         smoothing_epsilon=float(continuous.smoothing_epsilon),
         deterministic_sampling=bool(continuous.deterministic_sampling),
-        initialization_mode=continuous.initialization.mode,
-        gaussian_fill=bool(continuous.initialization.gaussian_fill),
+        initialization_mode=pts_config.cem.init.mode,
+        gaussian_fill=True,
     )
 
 
@@ -749,7 +761,7 @@ def build_pts_construction_attack_identity_context(config: Config) -> dict[str, 
     pts_config = _require_pts_config(config)
     cem = pts_config.cem
     resolved_cem_base_seed = _resolve_pts_cem_base_seed(config)
-    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
         return {
             "pts_construction": {
                 **_continuous_pts_construction_identity_payload(
@@ -859,7 +871,7 @@ def _continuous_pts_construction_identity_payload(
 ) -> dict[str, object]:
     pts_config = _require_pts_config(config)
     cem = pts_config.cem
-    continuous = pts_config.continuous_beta
+    continuous = pts_config.continuous_policy
     payload: dict[str, object] = {
         "method": pts_config.method,
         "prefix_selector": {
@@ -871,22 +883,33 @@ def _continuous_pts_construction_identity_payload(
             "length_policy": pts_config.generation.length_policy,
             "generation_rng_tag": "pts_generated_suffix",
         },
-        "continuous_beta": {
-            "input": continuous.input,
+        "continuous_policy": {
             "parameterization": continuous.parameterization,
+            "hidden_size": int(continuous.hidden_size),
+            "consume_distribution": continuous.consume_distribution,
             "source_policy": continuous.source_policy,
             "parameter_bounds": {
                 "min": float(continuous.parameter_bounds.min),
                 "max": float(continuous.parameter_bounds.max),
             },
-            "initial_std": float(continuous.initial_std),
-            "min_std": float(continuous.min_std),
             "smoothing_epsilon": float(continuous.smoothing_epsilon),
             "deterministic_sampling": bool(continuous.deterministic_sampling),
-            "initialization": {
-                "mode": continuous.initialization.mode,
-                "gaussian_fill": bool(continuous.initialization.gaussian_fill),
-            },
+        },
+        "init": {
+            "mode": pts_config.cem.init.mode,
+            "soft_extreme_pool_size": int(pts_config.cem.init.soft_extreme_pool_size),
+            "moderate_pool_size": int(pts_config.cem.init.moderate_pool_size),
+            "soft_extreme_select_size": int(pts_config.cem.init.soft_extreme_select_size),
+            "moderate_select_size": int(pts_config.cem.init.moderate_select_size),
+            "soft_extreme_initial_std": float(
+                pts_config.cem.init.soft_extreme_initial_std
+            ),
+            "moderate_initial_std": float(pts_config.cem.init.moderate_initial_std),
+            "q_grid_size": int(pts_config.cem.init.q_grid_size),
+            "behavior_distance": pts_config.cem.init.behavior_distance,
+            "init_materialize_generated_suffix": bool(
+                pts_config.cem.init.init_materialize_generated_suffix
+            ),
         },
         "shared_prefix_assignment": {
             "mode": "internal_uniform_per_target_v1",
@@ -1047,7 +1070,7 @@ def _pts_construction_shared_identity_payload(
 ) -> dict[str, object]:
     pts_config = _require_pts_config(config)
     cem = pts_config.cem
-    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
         return _continuous_pts_construction_identity_payload(
             config,
             target_item=int(target_item),
@@ -2622,27 +2645,22 @@ def _epoch_reward_diagnostics_metadata_payload(
 def _pts_method_metadata_payload(
     pts_config: PTSConstructionConfig,
 ) -> dict[str, object]:
-    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
-        continuous = pts_config.continuous_beta
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
+        continuous = pts_config.continuous_policy
         return {
             "pts_actions_enabled": [],
             "pts_grouping_mode": None,
-            "pts_continuous_beta": {
-                "input": continuous.input,
+            "pts_continuous_policy": {
                 "parameterization": continuous.parameterization,
+                "hidden_size": int(continuous.hidden_size),
+                "consume_distribution": continuous.consume_distribution,
                 "source_policy": continuous.source_policy,
                 "parameter_bounds": {
                     "min": float(continuous.parameter_bounds.min),
                     "max": float(continuous.parameter_bounds.max),
                 },
-                "initial_std": float(continuous.initial_std),
-                "min_std": float(continuous.min_std),
                 "smoothing_epsilon": float(continuous.smoothing_epsilon),
                 "deterministic_sampling": bool(continuous.deterministic_sampling),
-                "initialization": {
-                    "mode": continuous.initialization.mode,
-                    "gaussian_fill": bool(continuous.initialization.gaussian_fill),
-                },
             },
         }
     return {

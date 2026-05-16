@@ -429,20 +429,20 @@ def _pts_construction_identity_payload(config: Config) -> Any:
         method = payload.get("method")
         if method == "grouped_cem_v1":
             payload = dict(payload)
-            payload.pop("continuous_beta", None)
-        elif method == "continuous_beta_cem_v1":
+            payload.pop("continuous_policy", None)
+        elif method == "continuous_mlp_cem":
             payload = dict(payload)
             payload.pop("grouping", None)
             payload.pop("actions", None)
-            continuous = payload.get("continuous_beta")
+            continuous = payload.get("continuous_policy")
             if isinstance(continuous, dict):
-                payload["continuous_beta"] = dict(continuous)
+                payload["continuous_policy"] = dict(continuous)
         cem = payload.get("cem")
         if isinstance(cem, dict):
             cem = dict(cem)
             cem.pop("epoch_reward_diagnostics", None)
             cem.pop("surrogate_retrain", None)
-            if method == "continuous_beta_cem_v1":
+            if method == "continuous_mlp_cem":
                 sampler = cem.get("sampler")
                 if isinstance(sampler, dict):
                     cem["sampler"] = {"type": "gaussian_parameter_space_v1"}

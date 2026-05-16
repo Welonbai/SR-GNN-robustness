@@ -115,7 +115,7 @@ _ALLOWED_ANCHOR_ASSIGNMENT_STRATEGIES = {
     ANCHOR_CONSTRUCTION_STRATEGY_ROUND_ROBIN,
 }
 PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1 = "grouped_cem_v1"
-PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1 = "continuous_beta_cem_v1"
+PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM = "continuous_mlp_cem"
 PTS_PREFIX_RANGE_INTERNAL = "internal"
 PTS_PREFIX_SAMPLER_UNIFORM = "uniform"
 PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH = "residual_suffix_length"
@@ -127,6 +127,9 @@ PTS_CEM_SAMPLER_DIRICHLET = "dirichlet"
 PTS_CEM_SAMPLER_GAUSSIAN = "gaussian"
 PTS_CEM_INIT_UNIFORM = "uniform"
 PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING = "vertex_stratified_space_filling"
+PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING = (
+    "two_pool_behavior_curve_space_filling"
+)
 PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST = "validation_best"
 PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST = "fixed_last"
 PTS_CEM_SURROGATE_REWARD_BEST = "best"
@@ -149,6 +152,8 @@ _ALLOWED_PTS_V1_ACTIONS = {
 PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE = "suffix_length_percentile"
 PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA = "linear_log_beta"
 PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2 = "tiny_mlp_log_beta_h2"
+PTS_CONTINUOUS_POLICY_PARAMETERIZATION_SUFFIX_LENGTH_MLP = "suffix_length_mlp"
+PTS_CONTINUOUS_POLICY_CONSUME_DISTRIBUTION_BETA = "beta"
 PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC = "q_and_rho_logistic"
 PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1 = "behavior_covering_v1"
 _REQUIRED_SRGNN_TRAIN_KEYS = (
@@ -958,6 +963,7 @@ class PTSCEMUpdateRuntimeConfig:
     smoothing: float = 0.3
     min_probability: float = 0.03
     max_probability: float = 0.90
+    min_std: float = 0.25
 
     def __post_init__(self) -> None:
         smoothing = _as_float(self.smoothing, "attack.pts_construction.cem.update.smoothing")
@@ -976,9 +982,13 @@ class PTSCEMUpdateRuntimeConfig:
                 "attack.pts_construction.cem.update min/max probabilities must satisfy "
                 "0 <= min < max <= 1."
             )
+        min_std = _as_float(self.min_std, "attack.pts_construction.cem.update.min_std")
+        if min_std <= 0.0:
+            raise ValueError("attack.pts_construction.cem.update.min_std must be positive.")
         object.__setattr__(self, "smoothing", smoothing)
         object.__setattr__(self, "min_probability", min_probability)
         object.__setattr__(self, "max_probability", max_probability)
+        object.__setattr__(self, "min_std", min_std)
 
 
 @dataclass(frozen=True)
@@ -993,16 +1003,27 @@ class PTSCEMInitRuntimeConfig:
     extreme_alpha: float = 0.3
     moderate_alpha: float = 2.0
     distance: str = "l1"
+    soft_extreme_pool_size: int = 512
+    moderate_pool_size: int = 512
+    soft_extreme_select_size: int = 5
+    moderate_select_size: int = 11
+    soft_extreme_initial_std: float = 1.25
+    moderate_initial_std: float = 0.8
+    q_grid_size: int = 19
+    behavior_distance: str = "l1"
+    init_materialize_generated_suffix: bool = False
 
     def __post_init__(self) -> None:
         mode = _as_str(self.mode, "attack.pts_construction.cem.init.mode").strip().lower()
         if mode not in {
             PTS_CEM_INIT_UNIFORM,
             PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING,
+            PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
         }:
             raise ValueError(
-                "attack.pts_construction.cem.init.mode must be 'uniform' or "
-                "'vertex_stratified_space_filling'."
+                "attack.pts_construction.cem.init.mode must be 'uniform', "
+                "'vertex_stratified_space_filling', or "
+                "'two_pool_behavior_curve_space_filling'."
             )
         mandatory_enabled = _as_bool(
             self.mandatory_enabled,
@@ -1040,6 +1061,42 @@ class PTSCEMInitRuntimeConfig:
             self.distance,
             "attack.pts_construction.cem.init.distance",
         ).strip().lower()
+        soft_extreme_pool_size = _as_int(
+            self.soft_extreme_pool_size,
+            "attack.pts_construction.cem.init.soft_extreme_pool_size",
+        )
+        moderate_pool_size_formal = _as_int(
+            self.moderate_pool_size,
+            "attack.pts_construction.cem.init.moderate_pool_size",
+        )
+        soft_extreme_select_size = _as_int(
+            self.soft_extreme_select_size,
+            "attack.pts_construction.cem.init.soft_extreme_select_size",
+        )
+        moderate_select_size = _as_int(
+            self.moderate_select_size,
+            "attack.pts_construction.cem.init.moderate_select_size",
+        )
+        soft_extreme_initial_std = _as_float(
+            self.soft_extreme_initial_std,
+            "attack.pts_construction.cem.init.soft_extreme_initial_std",
+        )
+        moderate_initial_std = _as_float(
+            self.moderate_initial_std,
+            "attack.pts_construction.cem.init.moderate_initial_std",
+        )
+        q_grid_size = _as_int(
+            self.q_grid_size,
+            "attack.pts_construction.cem.init.q_grid_size",
+        )
+        behavior_distance = _as_str(
+            self.behavior_distance,
+            "attack.pts_construction.cem.init.behavior_distance",
+        ).strip().lower()
+        init_materialize_generated_suffix = _as_bool(
+            self.init_materialize_generated_suffix,
+            "attack.pts_construction.cem.init.init_materialize_generated_suffix",
+        )
         if extreme_count < 0:
             raise ValueError("attack.pts_construction.cem.init.extreme_count must be >= 0.")
         if moderate_count < 0:
@@ -1062,6 +1119,23 @@ class PTSCEMInitRuntimeConfig:
             raise ValueError("attack.pts_construction.cem.init.moderate_alpha must be positive.")
         if distance != "l1":
             raise ValueError("attack.pts_construction.cem.init.distance must be 'l1'.")
+        if soft_extreme_pool_size <= 0 or moderate_pool_size_formal <= 0:
+            raise ValueError("continuous MLP init pool sizes must be positive.")
+        if soft_extreme_select_size < 0 or moderate_select_size < 0:
+            raise ValueError("continuous MLP init select sizes must be non-negative.")
+        if soft_extreme_initial_std <= 0.0 or moderate_initial_std <= 0.0:
+            raise ValueError("continuous MLP init std values must be positive.")
+        if q_grid_size <= 1:
+            raise ValueError("attack.pts_construction.cem.init.q_grid_size must be > 1.")
+        if behavior_distance != "l1":
+            raise ValueError(
+                "attack.pts_construction.cem.init.behavior_distance must be 'l1'."
+            )
+        if bool(init_materialize_generated_suffix):
+            raise ValueError(
+                "attack.pts_construction.cem.init.init_materialize_generated_suffix "
+                "must be false for target-independent initialization."
+            )
         object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "mandatory_enabled", mandatory_enabled)
         object.__setattr__(self, "extreme_count", extreme_count)
@@ -1072,6 +1146,19 @@ class PTSCEMInitRuntimeConfig:
         object.__setattr__(self, "extreme_alpha", extreme_alpha)
         object.__setattr__(self, "moderate_alpha", moderate_alpha)
         object.__setattr__(self, "distance", distance)
+        object.__setattr__(self, "soft_extreme_pool_size", soft_extreme_pool_size)
+        object.__setattr__(self, "moderate_pool_size", moderate_pool_size_formal)
+        object.__setattr__(self, "soft_extreme_select_size", soft_extreme_select_size)
+        object.__setattr__(self, "moderate_select_size", moderate_select_size)
+        object.__setattr__(self, "soft_extreme_initial_std", soft_extreme_initial_std)
+        object.__setattr__(self, "moderate_initial_std", moderate_initial_std)
+        object.__setattr__(self, "q_grid_size", q_grid_size)
+        object.__setattr__(self, "behavior_distance", behavior_distance)
+        object.__setattr__(
+            self,
+            "init_materialize_generated_suffix",
+            init_materialize_generated_suffix,
+        )
 
 
 @dataclass(frozen=True)
@@ -1358,15 +1445,15 @@ class PTSContinuousParameterBoundsConfig:
     def __post_init__(self) -> None:
         minimum = _as_float(
             self.min,
-            "attack.pts_construction.continuous_beta.parameter_bounds.min",
+            "attack.pts_construction.continuous_policy.parameter_bounds.min",
         )
         maximum = _as_float(
             self.max,
-            "attack.pts_construction.continuous_beta.parameter_bounds.max",
+            "attack.pts_construction.continuous_policy.parameter_bounds.max",
         )
         if not minimum < maximum:
             raise ValueError(
-                "attack.pts_construction.continuous_beta.parameter_bounds "
+                "attack.pts_construction.continuous_policy.parameter_bounds "
                 "must satisfy min < max."
             )
         object.__setattr__(self, "min", minimum)
@@ -1374,126 +1461,82 @@ class PTSContinuousParameterBoundsConfig:
 
 
 @dataclass(frozen=True)
-class PTSContinuousInitializationConfig:
-    mode: str = PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1
-    gaussian_fill: bool = True
-
-    def __post_init__(self) -> None:
-        mode = _as_str(
-            self.mode,
-            "attack.pts_construction.continuous_beta.initialization.mode",
-        ).strip().lower()
-        if mode != PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1:
-            raise ValueError(
-                "attack.pts_construction.continuous_beta.initialization.mode "
-                "must be 'behavior_covering_v1'."
-            )
-        object.__setattr__(self, "mode", mode)
-        object.__setattr__(
-            self,
-            "gaussian_fill",
-            _as_bool(
-                self.gaussian_fill,
-                "attack.pts_construction.continuous_beta.initialization.gaussian_fill",
-            ),
-        )
-
-
-@dataclass(frozen=True)
-class PTSContinuousBetaConfig:
-    input: str = PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE
-    parameterization: str = PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA
+class PTSContinuousPolicyConfig:
+    parameterization: str = PTS_CONTINUOUS_POLICY_PARAMETERIZATION_SUFFIX_LENGTH_MLP
+    hidden_size: int = 2
+    consume_distribution: str = PTS_CONTINUOUS_POLICY_CONSUME_DISTRIBUTION_BETA
+    smoothing_epsilon: float = 0.0
     source_policy: str = PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC
     parameter_bounds: PTSContinuousParameterBoundsConfig = field(
         default_factory=PTSContinuousParameterBoundsConfig
     )
-    initial_std: float = 2.0
-    min_std: float = 0.25
-    smoothing_epsilon: float = 0.0
     deterministic_sampling: bool = True
-    initialization: PTSContinuousInitializationConfig = field(
-        default_factory=PTSContinuousInitializationConfig
-    )
 
     def __post_init__(self) -> None:
-        input_name = _as_str(
-            self.input,
-            "attack.pts_construction.continuous_beta.input",
-        ).strip().lower()
-        if input_name != PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE:
-            raise ValueError(
-                "attack.pts_construction.continuous_beta.input must be "
-                "'suffix_length_percentile'."
-            )
         parameterization = _as_str(
             self.parameterization,
-            "attack.pts_construction.continuous_beta.parameterization",
+            "attack.pts_construction.continuous_policy.parameterization",
         ).strip().lower()
-        if parameterization not in {
-            PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA,
-            PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
-        }:
+        if parameterization != PTS_CONTINUOUS_POLICY_PARAMETERIZATION_SUFFIX_LENGTH_MLP:
             raise ValueError(
-                "attack.pts_construction.continuous_beta.parameterization "
-                "must be 'linear_log_beta' or 'tiny_mlp_log_beta_h2'."
+                "attack.pts_construction.continuous_policy.parameterization "
+                "must be 'suffix_length_mlp'."
+            )
+        hidden_size = _as_int(
+            self.hidden_size,
+            "attack.pts_construction.continuous_policy.hidden_size",
+        )
+        if hidden_size != 2:
+            raise ValueError(
+                "attack.pts_construction.continuous_policy.hidden_size must be 2."
+            )
+        consume_distribution = _as_str(
+            self.consume_distribution,
+            "attack.pts_construction.continuous_policy.consume_distribution",
+        ).strip().lower()
+        if consume_distribution != PTS_CONTINUOUS_POLICY_CONSUME_DISTRIBUTION_BETA:
+            raise ValueError(
+                "attack.pts_construction.continuous_policy.consume_distribution "
+                "must be 'beta'."
             )
         source_policy = _as_str(
             self.source_policy,
-            "attack.pts_construction.continuous_beta.source_policy",
+            "attack.pts_construction.continuous_policy.source_policy",
         ).strip().lower()
         if source_policy != PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC:
             raise ValueError(
-                "attack.pts_construction.continuous_beta.source_policy "
+                "attack.pts_construction.continuous_policy.source_policy "
                 "must be 'q_and_rho_logistic'."
+            )
+        smoothing_epsilon = _as_float(
+            self.smoothing_epsilon,
+            "attack.pts_construction.continuous_policy.smoothing_epsilon",
+        )
+        if not 0.0 <= smoothing_epsilon < 0.5:
+            raise ValueError(
+                "attack.pts_construction.continuous_policy.smoothing_epsilon "
+                "must satisfy 0.0 <= epsilon < 0.5."
             )
         parameter_bounds = _coerce_pts_dataclass(
             self.parameter_bounds,
             PTSContinuousParameterBoundsConfig,
-            "attack.pts_construction.continuous_beta.parameter_bounds",
+            "attack.pts_construction.continuous_policy.parameter_bounds",
         )
-        initial_std = _as_float(
-            self.initial_std,
-            "attack.pts_construction.continuous_beta.initial_std",
-        )
-        if initial_std <= 0.0:
-            raise ValueError(
-                "attack.pts_construction.continuous_beta.initial_std must be positive."
-            )
-        min_std = _as_float(
-            self.min_std,
-            "attack.pts_construction.continuous_beta.min_std",
-        )
-        if min_std <= 0.0:
-            raise ValueError(
-                "attack.pts_construction.continuous_beta.min_std must be positive."
-            )
-        smoothing_epsilon = _as_float(
-            self.smoothing_epsilon,
-            "attack.pts_construction.continuous_beta.smoothing_epsilon",
-        )
-        if not 0.0 <= smoothing_epsilon < 0.5:
-            raise ValueError(
-                "attack.pts_construction.continuous_beta.smoothing_epsilon "
-                "must satisfy 0.0 <= epsilon < 0.5."
-            )
         deterministic_sampling = _as_bool(
             self.deterministic_sampling,
-            "attack.pts_construction.continuous_beta.deterministic_sampling",
+            "attack.pts_construction.continuous_policy.deterministic_sampling",
         )
-        initialization = _coerce_pts_dataclass(
-            self.initialization,
-            PTSContinuousInitializationConfig,
-            "attack.pts_construction.continuous_beta.initialization",
-        )
-        object.__setattr__(self, "input", input_name)
         object.__setattr__(self, "parameterization", parameterization)
+        object.__setattr__(self, "hidden_size", hidden_size)
+        object.__setattr__(self, "consume_distribution", consume_distribution)
+        object.__setattr__(self, "smoothing_epsilon", smoothing_epsilon)
         object.__setattr__(self, "source_policy", source_policy)
         object.__setattr__(self, "parameter_bounds", parameter_bounds)
-        object.__setattr__(self, "initial_std", initial_std)
-        object.__setattr__(self, "min_std", min_std)
-        object.__setattr__(self, "smoothing_epsilon", smoothing_epsilon)
         object.__setattr__(self, "deterministic_sampling", deterministic_sampling)
-        object.__setattr__(self, "initialization", initialization)
+
+    @property
+    def internal_parameterization(self) -> str:
+        return PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2
 
 
 @dataclass(frozen=True)
@@ -1609,7 +1652,9 @@ class PTSConstructionConfig:
     grouping: PTSGroupingConfig = field(default_factory=PTSGroupingConfig)
     actions: PTSActionsConfig = field(default_factory=PTSActionsConfig)
     generation: PTSGenerationConfig = field(default_factory=PTSGenerationConfig)
-    continuous_beta: PTSContinuousBetaConfig = field(default_factory=PTSContinuousBetaConfig)
+    continuous_policy: PTSContinuousPolicyConfig = field(
+        default_factory=PTSContinuousPolicyConfig
+    )
     cem: PTSCEMRuntimeConfig = field(default_factory=PTSCEMRuntimeConfig)
     reward: PTSRewardConfig = field(default_factory=PTSRewardConfig)
     artifacts: PTSArtifactsConfig = field(default_factory=PTSArtifactsConfig)
@@ -1620,11 +1665,11 @@ class PTSConstructionConfig:
         method = _as_str(self.method, "attack.pts_construction.method").strip().lower()
         if method not in {
             PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
-            PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+            PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
         }:
             raise ValueError(
                 "attack.pts_construction.method must be 'grouped_cem_v1' or "
-                "'continuous_beta_cem_v1'."
+                "'continuous_mlp_cem'."
             )
         object.__setattr__(self, "enabled", enabled)
         object.__setattr__(self, "method", method)
@@ -1666,11 +1711,11 @@ class PTSConstructionConfig:
         )
         object.__setattr__(
             self,
-            "continuous_beta",
+            "continuous_policy",
             _coerce_pts_dataclass(
-                self.continuous_beta,
-                PTSContinuousBetaConfig,
-                "attack.pts_construction.continuous_beta",
+                self.continuous_policy,
+                PTSContinuousPolicyConfig,
+                "attack.pts_construction.continuous_policy",
             ),
         )
         object.__setattr__(
@@ -3719,11 +3764,10 @@ __all__ = [
     "PTSCEMSamplerRuntimeConfig",
     "PTSCEMSurrogateRetrainRuntimeConfig",
     "PTSCEMUpdateRuntimeConfig",
-    "PTSContinuousBetaConfig",
-    "PTSContinuousInitializationConfig",
     "PTSContinuousParameterBoundsConfig",
+    "PTSContinuousPolicyConfig",
     "PTSConstructionConfig",
-    "PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1",
+    "PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM",
     "PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1",
     "PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1",
     "PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE",
@@ -3731,6 +3775,7 @@ __all__ = [
     "PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2",
     "PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC",
     "PTS_CEM_INIT_UNIFORM",
+    "PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING",
     "PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING",
     "PTS_CEM_SAMPLER_DIRICHLET",
     "PTS_CEM_SAMPLER_GAUSSIAN",

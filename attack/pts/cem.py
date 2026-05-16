@@ -60,10 +60,14 @@ class PTSCEMInitConfig:
 
     def __post_init__(self) -> None:
         mode = str(self.mode).strip().lower()
-        if mode not in {"uniform", "vertex_stratified_space_filling"}:
+        if mode not in {
+            "uniform",
+            "vertex_stratified_space_filling",
+            "two_pool_behavior_curve_space_filling",
+        }:
             raise ValueError(
-                "init.mode must be 'uniform' or "
-                "'vertex_stratified_space_filling'."
+                "init.mode must be 'uniform', 'vertex_stratified_space_filling', "
+                "or 'two_pool_behavior_curve_space_filling'."
             )
         if int(self.extreme_count) < 0:
             raise ValueError("init.extreme_count must be >= 0.")

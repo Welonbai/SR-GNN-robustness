@@ -35,6 +35,11 @@ from attack.pts.continuous_policy import (
     parameter_names_for_parameterization,
 )
 
+CONTINUOUS_MLP_CEM_METHOD = "continuous_mlp_cem"
+CONTINUOUS_MLP_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING = (
+    "two_pool_behavior_curve_space_filling"
+)
+
 
 @dataclass(frozen=True)
 class PTSContinuousBetaCEMConfig:
@@ -60,6 +65,9 @@ class _ContinuousCandidateSampleSpec:
     parent_rank_among_elites: int | None = None
 
 
+ContinuousCandidateSampleSpec = _ContinuousCandidateSampleSpec
+
+
 class PTSContinuousBetaCEMTrainer:
     def __init__(
         self,
@@ -69,12 +77,16 @@ class PTSContinuousBetaCEMTrainer:
         generation_topk: int = 100,
         generation_rng_tag: str = "pts_generated_suffix",
         shared_prefix_rng_tag: str = CONTINUOUS_BETA_SHARED_PREFIX_TAG,
+        initial_sample_plan: Sequence[_ContinuousCandidateSampleSpec] | None = None,
     ) -> None:
         self.cem_config = cem_config
         self.continuous_config = continuous_config
         self.generation_topk = int(generation_topk)
         self.generation_rng_tag = str(generation_rng_tag)
         self.shared_prefix_rng_tag = str(shared_prefix_rng_tag)
+        self.initial_sample_plan = (
+            None if initial_sample_plan is None else list(initial_sample_plan)
+        )
         self.parameterization = normalize_parameterization(
             self.continuous_config.parameterization
         )
@@ -85,12 +97,21 @@ class PTSContinuousBetaCEMTrainer:
             raise ValueError("generation_topk must be positive.")
         if not bool(self.continuous_config.deterministic_sampling):
             raise ValueError("continuous_beta.deterministic_sampling=false is not supported.")
-        if self.continuous_config.initialization_mode != (
-            CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1
+        if self.continuous_config.initialization_mode not in {
+            CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1,
+            CONTINUOUS_MLP_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
+        }:
+            raise ValueError(
+                "continuous initialization_mode must be 'behavior_covering_v1' or "
+                "'two_pool_behavior_curve_space_filling'."
+            )
+        if (
+            self.continuous_config.initialization_mode
+            == CONTINUOUS_MLP_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING
+            and self.initial_sample_plan is None
         ):
             raise ValueError(
-                "continuous_beta.initialization.mode must be "
-                "'behavior_covering_v1'."
+                "two_pool_behavior_curve_space_filling requires an initial_sample_plan."
             )
         if float(self.continuous_config.initial_std) <= 0.0:
             raise ValueError("continuous_beta.initial_std must be positive.")
@@ -311,6 +332,10 @@ class PTSContinuousBetaCEMTrainer:
         return self._initial_sample_plan(population_size=int(population_size))
 
     def _initial_sample_plan(self, *, population_size: int) -> list[_ContinuousCandidateSampleSpec]:
+        if self.initial_sample_plan is not None:
+            if len(self.initial_sample_plan) < int(population_size):
+                raise ValueError("initial_sample_plan is smaller than population_size.")
+            return list(self.initial_sample_plan[: int(population_size)])
         prototypes = _behavior_covering_prototypes(self.parameterization)
         selected: list[_ContinuousCandidateSampleSpec] = []
         for name, vector in prototypes[: int(population_size)]:
@@ -429,7 +454,7 @@ class PTSContinuousBetaCEMTrainer:
         payload: dict[str, object] = {
             "type": "continuous_beta_cem_search_distribution",
             "label": str(label),
-            "method": "continuous_beta_cem_v1",
+            "method": CONTINUOUS_MLP_CEM_METHOD,
             "normalized_sampler": CONTINUOUS_BETA_NORMALIZED_SAMPLER,
             "parameterization": self.parameterization,
             "parameter_names": list(self.parameter_names),
@@ -464,7 +489,7 @@ class PTSContinuousBetaCEMTrainer:
         distribution_std: Sequence[float],
     ) -> dict[str, object]:
         return {
-            "method": "continuous_beta_cem_v1",
+            "method": CONTINUOUS_MLP_CEM_METHOD,
             "parameterization": self.parameterization,
             "parameter_names": list(self.parameter_names),
             "parameter_vector": [float(value) for value in vector],
@@ -602,6 +627,9 @@ def build_continuous_beta_initial_sample_plan(
 
 
 __all__ = [
+    "ContinuousCandidateSampleSpec",
+    "CONTINUOUS_MLP_CEM_METHOD",
+    "CONTINUOUS_MLP_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING",
     "build_continuous_beta_initial_sample_plan",
     "PTSContinuousBetaCEMConfig",
     "PTSContinuousBetaCEMTrainer",

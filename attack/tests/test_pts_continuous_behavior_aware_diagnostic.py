@@ -16,7 +16,7 @@ from attack.common.paths import (
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     shared_artifact_paths,
 )
-from attack.pipeline.runs.run_pts_continuous_beta_init_diagnostic import (
+from attack.pipeline.runs.run_pts_continuous_init_diagnostic import (
     build_behavior_vector,
     main as diagnostic_main,
     select_behavior_aware_candidates,
@@ -36,7 +36,7 @@ CONTINUOUS_FIXTURE = (
     / "tests"
     / "fixtures"
     / "configs"
-    / "diginetica_valbest_attack_pts_construction_continuous_beta_cem_ratio1_srgnn_partial4_target5334.yaml"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334.yaml"
 )
 
 

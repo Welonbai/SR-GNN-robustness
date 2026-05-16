@@ -1,5 +1,5 @@
 experiment:
-  name: valbest_attack_pts_construction_continuous_beta_mlp_h2_cem_ratio1_srgnn_partial4_target5334
+  name: valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334
 
 data:
   dataset_name: diginetica
@@ -43,7 +43,7 @@ attack:
 
   pts_construction:
     enabled: true
-    method: continuous_beta_cem_v1
+    method: continuous_mlp_cem
 
     prefix_selector:
       range: internal
@@ -53,20 +53,16 @@ attack:
       topk: 100
       length_policy: same_as_residual_suffix
 
-    continuous_beta:
-      input: suffix_length_percentile
-      parameterization: tiny_mlp_log_beta_h2
+    continuous_policy:
+      parameterization: suffix_length_mlp
+      hidden_size: 2
+      consume_distribution: beta
       source_policy: q_and_rho_logistic
       parameter_bounds:
         min: -5.0
         max: 5.0
-      initial_std: 2.0
-      min_std: 0.25
-      smoothing_epsilon: 0.1
+      smoothing_epsilon: 0.0
       deterministic_sampling: true
-      initialization:
-        mode: behavior_covering_v1
-        gaussian_fill: true
 
     cem:
       iterations: 3
@@ -79,6 +75,18 @@ attack:
         smoothing: 0.3
         min_probability: 0.03
         max_probability: 0.90
+        min_std: 0.25
+      init:
+        mode: two_pool_behavior_curve_space_filling
+        soft_extreme_pool_size: 32
+        moderate_pool_size: 32
+        soft_extreme_select_size: 5
+        moderate_select_size: 11
+        soft_extreme_initial_std: 1.25
+        moderate_initial_std: 0.8
+        q_grid_size: 7
+        behavior_distance: l1
+        init_materialize_generated_suffix: false
       seed_source: position_opt_seed
       candidate_seed_stride: 1000
       save_top_k_candidates: 3

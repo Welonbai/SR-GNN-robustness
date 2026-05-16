@@ -14,10 +14,13 @@ if str(REPO_ROOT) not in sys.path:
 
 from attack.common.config import (
     PTSConstructionConfig,
-    PTSContinuousBetaConfig,
+    PTSContinuousPolicyConfig,
+    PTSCEMInitRuntimeConfig,
     PTSCEMRuntimeConfig,
-    PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+    PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
+    PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
     PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
+    PTS_CONTINUOUS_POLICY_PARAMETERIZATION_SUFFIX_LENGTH_MLP,
     PTS_CEM_SAMPLER_GAUSSIAN,
     load_config,
 )
@@ -30,15 +33,19 @@ from attack.pipeline.runs.run_pts_construction_cem import (
 
 CONFIG_PATH = Path("attack/configs/diginetica_valbest_attack_ptscem_internal_sample.yaml")
 TEST_CONFIG_DIR = REPO_ROOT / "attack" / "tests" / "fixtures" / "configs"
+GROUPED_CONFIG_PATH = (
+    TEST_CONFIG_DIR
+    / "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
+)
 CONTINUOUS_CONFIG_PATH = (
     TEST_CONFIG_DIR
-    / "diginetica_valbest_attack_pts_construction_continuous_beta_cem_ratio1_srgnn_partial4_target5334.yaml"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334.yaml"
 )
-CONTINUOUS_MLP_H2_CONFIG_PATH = (
+CONTINUOUS_MLP_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_pts_construction_continuous_beta_mlp_h2_cem_ratio1_srgnn_partial4_target5334.yaml"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334.yaml"
 )
 
 
@@ -54,15 +61,23 @@ def _continuous_pts(
 ):
     return PTSConstructionConfig(
         enabled=True,
-        method=PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
-        continuous_beta=PTSContinuousBetaConfig(
-            initial_std=initial_std,
+        method=PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
+        continuous_policy=PTSContinuousPolicyConfig(
             smoothing_epsilon=smoothing_epsilon,
         ),
         cem=PTSCEMRuntimeConfig(
             iterations=2,
             population_schedule=(4, 2),
             sampler={"type": sampler_type, "concentration_scale": 20.0},
+            init=PTSCEMInitRuntimeConfig(
+                mode=PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
+                soft_extreme_initial_std=initial_std,
+                soft_extreme_pool_size=8,
+                moderate_pool_size=8,
+                soft_extreme_select_size=2,
+                moderate_select_size=2,
+                q_grid_size=7,
+            ),
         ),
     )
 
@@ -75,10 +90,10 @@ def test_continuous_pts_config_validates_without_grouping_or_actions() -> None:
 
 
 def test_continuous_smoothing_epsilon_validation() -> None:
-    assert PTSContinuousBetaConfig(smoothing_epsilon=0.1).smoothing_epsilon == 0.1
+    assert PTSContinuousPolicyConfig(smoothing_epsilon=0.1).smoothing_epsilon == 0.1
     for value in (-0.1, 0.5, 1.0):
         with pytest.raises(ValueError, match="smoothing_epsilon"):
-            PTSContinuousBetaConfig(smoothing_epsilon=value)
+            PTSContinuousPolicyConfig(smoothing_epsilon=value)
 
 
 def test_continuous_sample_yaml_loads_without_grouped_fields() -> None:
@@ -91,32 +106,45 @@ def test_continuous_sample_yaml_loads_without_grouped_fields() -> None:
     pts = config.attack.pts_construction
 
     assert pts is not None
-    assert pts.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1
+    assert pts.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM
     assert pts.cem.sampler.type == PTS_CEM_SAMPLER_GAUSSIAN
-    assert pts.continuous_beta.input == "suffix_length_percentile"
-    assert pts.continuous_beta.initialization.mode == "behavior_covering_v1"
+    assert pts.continuous_policy.parameterization == "suffix_length_mlp"
+    assert pts.continuous_policy.hidden_size == 2
+    assert pts.cem.init.mode == "two_pool_behavior_curve_space_filling"
+    assert pts.cem.init.init_materialize_generated_suffix is False
     _validate_pts_construction_run_config(config)
 
 
-def test_continuous_tiny_mlp_sample_yaml_loads() -> None:
-    config = load_config(CONTINUOUS_MLP_H2_CONFIG_PATH)
+def test_continuous_mlp_sample_yaml_loads() -> None:
+    config = load_config(CONTINUOUS_MLP_CONFIG_PATH)
     pts = config.attack.pts_construction
 
     assert pts is not None
     assert config.experiment.name == (
-        "valbest_attack_pts_construction_continuous_beta_mlp_h2_cem_ratio1_srgnn_partial4_target5334"
+        "valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334"
     )
-    assert pts.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1
+    assert pts.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM
     assert pts.cem.sampler.type == PTS_CEM_SAMPLER_GAUSSIAN
     assert (
-        pts.continuous_beta.parameterization
-        == PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2
+        pts.continuous_policy.parameterization
+        == PTS_CONTINUOUS_POLICY_PARAMETERIZATION_SUFFIX_LENGTH_MLP
     )
-    assert pts.continuous_beta.source_policy == "q_and_rho_logistic"
-    assert pts.continuous_beta.smoothing_epsilon == 0.1
+    assert pts.continuous_policy.internal_parameterization == (
+        PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2
+    )
+    assert pts.continuous_policy.source_policy == "q_and_rho_logistic"
+    assert pts.continuous_policy.smoothing_epsilon == 0.1
     assert config.targets.mode == "explicit_list"
     assert config.targets.explicit_list == (5334,)
     _validate_pts_construction_run_config(config)
+
+
+def test_legacy_continuous_beta_method_is_rejected() -> None:
+    with pytest.raises(ValueError, match="continuous_mlp_cem"):
+        PTSConstructionConfig(
+            enabled=True,
+            method="continuous_beta_cem_v1",
+        )
 
 
 def test_grouped_pts_config_still_rejects_non_dirichlet_sampler() -> None:
@@ -138,6 +166,20 @@ def test_grouped_pts_config_still_rejects_non_dirichlet_sampler() -> None:
                 ),
             ),
         )
+
+
+def test_grouped_validation_does_not_call_continuous_init_selector(monkeypatch) -> None:
+    def fail_selector(*args, **kwargs):
+        raise AssertionError("grouped CEM must not call continuous init selector")
+
+    monkeypatch.setattr(
+        "attack.pipeline.runs.run_pts_construction_cem."
+        "build_continuous_mlp_initial_sample_plan",
+        fail_selector,
+    )
+    config = load_config(GROUPED_CONFIG_PATH)
+
+    _validate_pts_construction_run_config(config)
 
 
 def test_continuous_cache_identity_normalizes_ignored_sampler_type() -> None:

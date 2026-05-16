@@ -17,7 +17,7 @@ from attack.common.paths import (
     shared_artifact_paths,
 )
 from attack.pipeline.runs.run_pts_continuous_init_diagnostic import (
-    BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1,
+    BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
     build_behavior_curve_profile,
     main as diagnostic_main,
     select_behavior_curve_two_pool_candidates,
@@ -37,7 +37,7 @@ CONTINUOUS_FIXTURE = (
     / "tests"
     / "fixtures"
     / "configs"
-    / "diginetica_valbest_attack_pts_construction_continuous_beta_cem_ratio1_srgnn_partial4_target5334.yaml"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334.yaml"
 )
 
 
@@ -140,7 +140,7 @@ def test_two_pool_mode_ignores_action_specific_deprecated_flags(
             str(output_dir),
             "--behavior-aware-select",
             "--behavior-selection-mode",
-            BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1,
+            BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
             "--soft-extreme-pool-size",
             "8",
             "--moderate-pool-size",
@@ -198,7 +198,7 @@ def test_two_pool_mode_ignores_action_specific_deprecated_flags(
     )
     assert (
         selection_config["selection_mode"]
-        == BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1
+        == BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING
     )
     assert selection_config["soft_extreme_select_size"] == 2
     assert selection_config["moderate_select_size"] == 3

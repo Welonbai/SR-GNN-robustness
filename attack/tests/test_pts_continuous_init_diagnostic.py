@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import replace
 from pathlib import Path
 import sys
 
@@ -17,11 +16,11 @@ from attack.common.paths import (
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     shared_artifact_paths,
 )
-from attack.pipeline.runs.run_pts_continuous_beta_init_diagnostic import (
+from attack.pipeline.runs.run_pts_continuous_init_diagnostic import (
     CANDIDATE_DISTRIBUTION_COLUMNS,
     _candidate_summary_row,
     main as diagnostic_main,
-    run_continuous_beta_init_diagnostic,
+    run_continuous_init_diagnostic,
 )
 from attack.pts.continuous_executor import (
     CONTINUOUS_ACTION_GENERATE_FULL_SUFFIX,
@@ -36,7 +35,7 @@ CONTINUOUS_FIXTURE = (
     / "tests"
     / "fixtures"
     / "configs"
-    / "diginetica_valbest_attack_pts_construction_continuous_beta_cem_ratio1_srgnn_partial4_target5334.yaml"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334.yaml"
 )
 
 
@@ -64,7 +63,7 @@ def test_continuous_init_diagnostic_writes_summary_files(
     )
     config = load_config(CONTINUOUS_FIXTURE)
 
-    result = run_continuous_beta_init_diagnostic(
+    result = run_continuous_init_diagnostic(
         config=config,
         config_path=CONTINUOUS_FIXTURE,
         output_dir=tmp_path,
@@ -89,12 +88,15 @@ def test_continuous_init_diagnostic_writes_summary_files(
     diagnostic_config = load_json(result.paths["diagnostic_config"])
     assert diagnostic_config["rounding_mode"] == "half_up"
     assert diagnostic_config["materialize_generated_suffix"] is False
+    assert diagnostic_config["init_materialize_generated_suffix"] is False
     assert diagnostic_config["smoothing_epsilon"] == 0.0
     assert diagnostic_config["consume_smoothing"] == "beta_uniform_mixture"
 
     candidates = load_json(result.paths["initial_candidates"])
     assert len(candidates) == 4
-    assert candidates[0]["sample_origin"] == "continuous_beta_behavior_covering"
+    assert candidates[0]["candidate_key"] == "iter0_cand0"
+    assert candidates[0]["sample_origin"] == "continuous_mlp_two_pool_behavior_curve"
+    assert candidates[0]["sample_metadata"]["pool_candidate_key"]
 
     candidate_rows = _read_csv(result.paths["candidate_distribution_summary"])
     assert len(candidate_rows) == 4
@@ -145,18 +147,11 @@ def test_continuous_init_diagnostic_supports_tiny_mlp_parameterization(
     config = load_config(CONTINUOUS_FIXTURE)
     pts_config = config.attack.pts_construction
     assert pts_config is not None
-    tiny_continuous = replace(
-        pts_config.continuous_beta,
-        parameterization="tiny_mlp_log_beta_h2",
-    )
-    tiny_pts = replace(pts_config, continuous_beta=tiny_continuous)
-    tiny_config = replace(
-        config,
-        attack=replace(config.attack, pts_construction=tiny_pts),
-    )
+    assert pts_config.continuous_policy.parameterization == "suffix_length_mlp"
+    assert pts_config.continuous_policy.hidden_size == 2
 
-    result = run_continuous_beta_init_diagnostic(
-        config=tiny_config,
+    result = run_continuous_init_diagnostic(
+        config=config,
         config_path=CONTINUOUS_FIXTURE,
         output_dir=tmp_path,
         max_candidates=3,
@@ -166,13 +161,14 @@ def test_continuous_init_diagnostic_supports_tiny_mlp_parameterization(
     )
 
     diagnostic_config = load_json(result.paths["diagnostic_config"])
-    assert diagnostic_config["parameterization"] == "tiny_mlp_log_beta_h2"
+    assert diagnostic_config["continuous_policy"]["parameterization"] == "suffix_length_mlp"
+    assert diagnostic_config["continuous_policy"]["hidden_size"] == 2
 
     candidates = load_json(result.paths["initial_candidates"])
     assert len(candidates) == 3
     assert candidates[0]["policy"]["parameterization"] == "tiny_mlp_log_beta_h2"
     assert len(candidates[0]["parameter_vector"]) == 13
-    assert candidates[0]["sample_metadata"]["prototype_name"].startswith("tiny_")
+    assert candidates[0]["sample_metadata"]["pool_candidate_key"]
 
     candidate_rows = _read_csv(result.paths["candidate_distribution_summary"])
     assert candidate_rows

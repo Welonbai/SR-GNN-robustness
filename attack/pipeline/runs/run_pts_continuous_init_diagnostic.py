@@ -18,7 +18,8 @@ if __package__ is None or __package__ == "":
 from attack.common.artifact_io import load_fake_sessions, save_json
 from attack.common.config import (
     Config,
-    PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+    PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
+    PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1,
     load_config,
 )
 from attack.common.paths import (
@@ -76,6 +77,9 @@ BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1 = (
 )
 BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1 = (
     "behavior_curve_two_pool_space_filling_v1"
+)
+BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING = (
+    "two_pool_behavior_curve_space_filling"
 )
 
 CANDIDATE_DISTRIBUTION_COLUMNS = (
@@ -275,6 +279,7 @@ class BehaviorAwareSelectionConfig:
             BEHAVIOR_SELECTION_MODE_GREEDY_MAXIMIN,
             BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1,
             BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1,
+            BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
         }:
             raise ValueError(f"Unsupported behavior_selection_mode: {self.mode}")
         if int(self.pool_size) <= 0:
@@ -284,7 +289,10 @@ class BehaviorAwareSelectionConfig:
             raise ValueError("behavior_distance currently supports only 'l1'.")
         if float(self.min_behavior_distance) < 0.0:
             raise ValueError("behavior_min_distance must be non-negative.")
-        if mode == BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1:
+        if mode in {
+            BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1,
+            BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
+        }:
             if int(self.soft_extreme_pool_size) <= 0:
                 raise ValueError("soft_extreme_pool_size must be positive.")
             if int(self.moderate_pool_size) <= 0:
@@ -447,11 +455,25 @@ def run_continuous_beta_init_diagnostic(
         base_seed=int(cem_config.base_seed),
         prefix_rng_tag=CONTINUOUS_BETA_SHARED_PREFIX_TAG,
     )
-    sample_plan = build_continuous_beta_initial_sample_plan(
-        cem_config=cem_config,
-        continuous_config=continuous_config,
-        population_size=first_population_size,
-    )[:candidate_limit]
+    if pts_config.cem.init.mode == BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING:
+        from attack.pts.continuous_init_selection import (
+            build_continuous_mlp_initial_sample_plan,
+        )
+
+        init_selection = build_continuous_mlp_initial_sample_plan(
+            config=config,
+            cem_config=cem_config,
+            continuous_config=continuous_config,
+            template_sessions=templates,
+            generation_topk=int(pts_config.generation.topk),
+        )
+        sample_plan = init_selection.selected_sample_plan[:candidate_limit]
+    else:
+        sample_plan = build_continuous_beta_initial_sample_plan(
+            cem_config=cem_config,
+            continuous_config=continuous_config,
+            population_size=first_population_size,
+        )[:candidate_limit]
 
     candidate_rows: list[dict[str, object]] = []
     by_suffix_rows: list[dict[str, object]] = []
@@ -598,7 +620,10 @@ def _write_behavior_aware_artifacts(
 ) -> None:
     if (
         str(behavior_config.mode).strip().lower()
-        == BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1
+        in {
+            BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1,
+            BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
+        }
     ):
         _write_behavior_curve_two_pool_artifacts(
             output_path=output_path,
@@ -923,6 +948,14 @@ def _build_behavior_candidate_pool(
         if initial_std is None
         else replace(continuous_config, initial_std=float(initial_std))
     )
+    if (
+        effective_continuous_config.initialization_mode
+        == BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING
+    ):
+        effective_continuous_config = replace(
+            effective_continuous_config,
+            initialization_mode=PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1,
+        )
     sample_plan = build_continuous_beta_initial_sample_plan(
         cem_config=cem_config,
         continuous_config=effective_continuous_config,
@@ -988,10 +1021,10 @@ def _build_behavior_candidate_pool(
 
 def _validate_continuous_config(config: Config) -> None:
     pts_config = _require_pts_config(config)
-    if pts_config.method != PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1:
+    if pts_config.method != PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
         raise ValueError(
-            "Continuous beta init diagnostic requires "
-            "attack.pts_construction.method='continuous_beta_cem_v1'."
+            "Continuous init diagnostic requires "
+            "attack.pts_construction.method='continuous_mlp_cem'."
         )
     _validate_pts_construction_run_config(config)
 
@@ -1041,8 +1074,16 @@ def _diagnostic_config_payload(
         "config_path": None if config_path is None else str(config_path),
         "target_item": int(target_item),
         "dataset": config.data.dataset_name,
-        "method": PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+        "method": PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
         "parameterization": continuous_config.parameterization,
+        "continuous_policy": {
+            "parameterization": "suffix_length_mlp",
+            "hidden_size": 2,
+            "consume_distribution": "beta",
+            "smoothing_epsilon": float(continuous_config.smoothing_epsilon),
+            "source_policy": "q_and_rho_logistic",
+            "deterministic_sampling": bool(continuous_config.deterministic_sampling),
+        },
         "population_size": int(population_size),
         "candidate_count": int(candidate_count),
         "initialization_mode": continuous_config.initialization_mode,
@@ -1060,6 +1101,7 @@ def _diagnostic_config_payload(
         "shared_prefix_assignment_tag": CONTINUOUS_BETA_SHARED_PREFIX_TAG,
         "rounding_mode": "half_up",
         "materialize_generated_suffix": False,
+        "init_materialize_generated_suffix": False,
     }
 
 
@@ -2608,6 +2650,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         choices=[
             BEHAVIOR_SELECTION_MODE_GREEDY_MAXIMIN,
             BEHAVIOR_SELECTION_MODE_STRATIFIED_SPACE_FILLING_V1,
+            BEHAVIOR_SELECTION_MODE_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
             BEHAVIOR_SELECTION_MODE_CURVE_TWO_POOL_SPACE_FILLING_V1,
         ],
     )

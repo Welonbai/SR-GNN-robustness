@@ -60,15 +60,23 @@ def build_continuous_shared_session_contexts(
     target_item: int,
     base_seed: int,
     prefix_rng_tag: str = CONTINUOUS_BETA_SHARED_PREFIX_TAG,
+    seed_scope: str = "target_dependent",
 ) -> tuple[PTSContinuousSessionContext, ...]:
+    scope = str(seed_scope).strip().lower()
+    if scope not in {"target_dependent", "target_independent"}:
+        raise ValueError("seed_scope must be 'target_dependent' or 'target_independent'.")
     partial: list[tuple[int, list[int], int, list[int], list[int]]] = []
     residual_lengths: list[int] = []
     for index, session in enumerate(template_sessions):
         template = [int(item) for item in session]
         seed = deterministic_policy_seed(
             base_seed=int(base_seed),
-            target_item=int(target_item),
-            candidate_key="shared_prefix_assignment",
+            target_item=(int(target_item) if scope == "target_dependent" else 0),
+            candidate_key=(
+                "shared_prefix_assignment"
+                if scope == "target_dependent"
+                else "shared_prefix_assignment_target_independent"
+            ),
             fake_session_index=int(index),
             tag=str(prefix_rng_tag),
         )

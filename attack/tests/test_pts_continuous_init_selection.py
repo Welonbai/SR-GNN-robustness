@@ -1,0 +1,245 @@
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+import sys
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from attack.common.artifact_io import load_json
+from attack.common.config import (
+    ArtifactsConfig,
+    PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
+    TargetsConfig,
+    load_config,
+)
+from attack.pipeline.runs.run_pts_construction_cem import (
+    _build_continuous_beta_cem_config,
+    _build_pts_cem_config_from_config,
+)
+from attack.pipeline.runs.run_pts_continuous_init_diagnostic import (
+    run_continuous_init_diagnostic,
+)
+from attack.pts.cem import (
+    PTSCEMConfig,
+    PTSCEMEvaluationResult,
+    PTSCEMInitConfig,
+)
+from attack.pts.continuous_cem import (
+    ContinuousCandidateSampleSpec,
+    PTSContinuousBetaCEMConfig,
+    PTSContinuousBetaCEMTrainer,
+)
+from attack.pts.continuous_init_selection import (
+    build_continuous_mlp_initial_sample_plan,
+    continuous_mlp_init_identity_payload,
+)
+from attack.pts.executor import PTSConstructionBatchResult
+
+
+CONTINUOUS_FIXTURE = (
+    REPO_ROOT
+    / "attack"
+    / "tests"
+    / "fixtures"
+    / "configs"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334.yaml"
+)
+
+
+def _small_config(tmp_path: Path):
+    config = load_config(CONTINUOUS_FIXTURE)
+    pts = config.attack.pts_construction
+    assert pts is not None
+    init = replace(
+        pts.cem.init,
+        mode=PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
+        soft_extreme_pool_size=8,
+        moderate_pool_size=8,
+        soft_extreme_select_size=2,
+        moderate_select_size=2,
+        q_grid_size=5,
+    )
+    cem = replace(pts.cem, init=init)
+    return replace(
+        config,
+        attack=replace(config.attack, pts_construction=replace(pts, cem=cem)),
+        artifacts=ArtifactsConfig(
+            root=str(tmp_path),
+            shared_dir=config.artifacts.shared_dir,
+            runs_dir=config.artifacts.runs_dir,
+        ),
+    )
+
+
+def test_continuous_mlp_init_cache_records_target_independent_metadata(
+    tmp_path: Path,
+) -> None:
+    config = _small_config(tmp_path)
+    templates = [[1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11, 12]]
+    cem_config = _build_pts_cem_config_from_config(config)
+    continuous_config = _build_continuous_beta_cem_config(config.attack.pts_construction)
+
+    result = build_continuous_mlp_initial_sample_plan(
+        config=config,
+        cem_config=cem_config,
+        continuous_config=continuous_config,
+        template_sessions=templates,
+        generation_topk=10,
+        force_rebuild=True,
+    )
+
+    payload = load_json(result.cache_path)
+    assert payload["init_materialize_generated_suffix"] is False
+    assert payload["identity"]["method"] == "continuous_mlp_cem"
+    assert payload["identity"]["init"]["init_materialize_generated_suffix"] is False
+    assert "target_item" not in json.dumps(payload["identity"])
+    assert "per_session_records" not in json.dumps(payload)
+    assert [item["candidate_key"] for item in payload["selected_candidates"]] == [
+        f"iter0_cand{index}" for index in range(4)
+    ]
+    assert result.selected_sample_plan[0].sample_metadata["candidate_key"] == "iter0_cand0"
+    assert result.selected_sample_plan[0].sample_metadata["pool_candidate_key"]
+
+
+def test_continuous_mlp_init_key_and_vectors_ignore_target_item_only(
+    tmp_path: Path,
+) -> None:
+    config = _small_config(tmp_path)
+    changed_target = replace(
+        config,
+        targets=TargetsConfig(
+            mode=config.targets.mode,
+            explicit_list=(999999,),
+            bucket=config.targets.bucket,
+            count=config.targets.count,
+            reuse_saved_targets=config.targets.reuse_saved_targets,
+        ),
+    )
+    templates = [[1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11, 12]]
+    cem_config = _build_pts_cem_config_from_config(config)
+    continuous_config = _build_continuous_beta_cem_config(config.attack.pts_construction)
+
+    base_identity = continuous_mlp_init_identity_payload(
+        config=config,
+        template_sessions=templates,
+    )
+    changed_identity = continuous_mlp_init_identity_payload(
+        config=changed_target,
+        template_sessions=templates,
+    )
+    base = build_continuous_mlp_initial_sample_plan(
+        config=config,
+        cem_config=cem_config,
+        continuous_config=continuous_config,
+        template_sessions=templates,
+        generation_topk=10,
+        force_rebuild=True,
+    )
+    changed = build_continuous_mlp_initial_sample_plan(
+        config=changed_target,
+        cem_config=cem_config,
+        continuous_config=continuous_config,
+        template_sessions=templates,
+        generation_topk=10,
+    )
+
+    assert base_identity == changed_identity
+    assert base.cache_key == changed.cache_key
+    assert [
+        sample.vector for sample in base.selected_sample_plan
+    ] == [sample.vector for sample in changed.selected_sample_plan]
+
+
+def test_diagnostic_and_formal_initializer_share_selected_vectors(
+    tmp_path: Path,
+) -> None:
+    config = _small_config(tmp_path)
+    templates = [[1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11, 12]]
+    cem_config = _build_pts_cem_config_from_config(config)
+    continuous_config = _build_continuous_beta_cem_config(config.attack.pts_construction)
+
+    formal = build_continuous_mlp_initial_sample_plan(
+        config=config,
+        cem_config=cem_config,
+        continuous_config=continuous_config,
+        template_sessions=templates,
+        generation_topk=10,
+        force_rebuild=True,
+    )
+    diagnostic = run_continuous_init_diagnostic(
+        config=config,
+        config_path=CONTINUOUS_FIXTURE,
+        output_dir=tmp_path / "diagnostic",
+        max_candidates=4,
+        sample_sessions=2,
+        template_sessions=templates,
+        target_item=5334,
+    )
+
+    candidates = load_json(diagnostic.paths["initial_candidates"])
+    assert [item["parameter_vector"] for item in candidates] == [
+        sample.vector for sample in formal.selected_sample_plan
+    ]
+    assert [item["candidate_key"] for item in candidates] == [
+        f"iter0_cand{index}" for index in range(4)
+    ]
+
+
+def test_formal_continuous_cem_applies_iter0_candidate_keys(monkeypatch) -> None:
+    applied_keys: list[str] = []
+
+    def fake_apply(**kwargs):
+        applied_keys.append(str(kwargs["candidate_key"]))
+        return PTSConstructionBatchResult(
+            final_sessions=[[1, 2, 3]],
+            per_session_records=[],
+            summary={"num_sessions": 1},
+        )
+
+    monkeypatch.setattr(
+        "attack.pts.continuous_cem.apply_pts_continuous_beta_construction_batch",
+        fake_apply,
+    )
+    cem_config = PTSCEMConfig(
+        iterations=1,
+        population_schedule=[2],
+        elite_ratio=0.5,
+        init=PTSCEMInitConfig(mode=PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING),
+    )
+    continuous_config = PTSContinuousBetaCEMConfig(
+        parameterization="tiny_mlp_log_beta_h2",
+        initialization_mode=PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING,
+    )
+    trainer = PTSContinuousBetaCEMTrainer(
+        cem_config=cem_config,
+        continuous_config=continuous_config,
+        initial_sample_plan=[
+            ContinuousCandidateSampleSpec(
+                vector=[0.0] * 13,
+                sample_origin="continuous_mlp_two_pool_behavior_curve",
+                sample_metadata={"candidate_key": "iter0_cand0"},
+            ),
+            ContinuousCandidateSampleSpec(
+                vector=[0.1] * 13,
+                sample_origin="continuous_mlp_two_pool_behavior_curve",
+                sample_metadata={"candidate_key": "iter0_cand1"},
+            ),
+        ],
+    )
+
+    trainer.train(
+        template_sessions=[[1, 2, 3], [4, 5, 6]],
+        target_item=5334,
+        poison_runner=None,
+        evaluator_fn=lambda **kwargs: PTSCEMEvaluationResult(
+            reward=1.0 - float(kwargs["candidate_id"]),
+            reward_metrics={},
+        ),
+    )
+
+    assert applied_keys == ["iter0_cand0", "iter0_cand1"]
