@@ -1,0 +1,51 @@
+name: mean_targets
+
+input: results/comparisons/diginetica_ptscem_randomnz_clean_sample3/merged_long_table.csv
+output: results/comparisons/diginetica_ptscem_randomnz_clean_sample3/mean_targets
+
+filters:
+  target_item: [11103, 39588, 5334]
+  victim_model: [srgnn, miasrec, tron]
+  attack_method: [clean, random_nonzero_when_possible, cem]
+  poison_model: srgnn
+  target_type: popular
+  attack_size: 0.01
+  metric_name: [recall, mrr]
+  metric_scope: [ground_truth, targeted]
+  k: [10, 20, 30]
+
+split_by: []
+
+rows:
+  - victim_model
+  - attack_method
+
+cols:
+  - metric_name
+  - k
+  - metric_scope
+
+value_col: value
+agg: mean
+auto_context: true
+require_unique_cells: false
+
+ground_truth_relative_to_clean:
+  enabled: true
+  baseline_attack_method: clean
+  ignore_pairing_columns:
+    - run_id
+    - replacement_topk_ratio
+
+mean_completeness:
+  enabled: true
+  complete_over: target_item
+  expected_values: [11103, 39588, 5334]
+  group_by:
+    - victim_model
+    - attack_method
+    - metric_name
+    - metric_scope
+    - k
+  on_missing: error
+  write_missing_report: true

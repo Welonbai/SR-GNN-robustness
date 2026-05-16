@@ -1583,6 +1583,61 @@ def test_renderer_can_identify_best_and_second_best_cells_per_partition() -> Non
     assert highlights.second_best_value_cells == {(2, 0), (5, 0)}
 
 
+def test_renderer_best_value_bolding_can_filter_column_scope() -> None:
+    dataframe = pd.DataFrame(
+        [
+            {
+                "victim_model": "srgnn",
+                "attack_method": "clean",
+                "recall | 10 | ground_truth": 0.20,
+                "recall | 10 | targeted": 0.01,
+            },
+            {
+                "victim_model": "srgnn",
+                "attack_method": "random_nonzero_when_possible",
+                "recall | 10 | ground_truth": 5.0,
+                "recall | 10 | targeted": 0.04,
+            },
+            {
+                "victim_model": "srgnn",
+                "attack_method": "cem",
+                "recall | 10 | ground_truth": 3.0,
+                "recall | 10 | targeted": 0.03,
+            },
+        ]
+    )
+    table_structure = TableStructure(
+        row_levels=["victim_model", "attack_method"],
+        col_levels=["metric_name", "k", "metric_scope"],
+        row_tuples=[
+            ("srgnn", "clean"),
+            ("srgnn", "random_nonzero_when_possible"),
+            ("srgnn", "cem"),
+        ],
+        column_tuples=[
+            ("recall", 10, "ground_truth"),
+            ("recall", 10, "targeted"),
+        ],
+        row_column_names=["victim_model", "attack_method"],
+        value_column_names=["recall | 10 | ground_truth", "recall | 10 | targeted"],
+    )
+
+    highlights = resolve_ranked_value_highlights(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        best_value_bolding=BestValueBoldingSpec(
+            compare_along="rows",
+            mode="max",
+            partition_by_levels=["victim_model"],
+            underline_second_best=False,
+            column_filters={"metric_scope": ["targeted"]},
+        ),
+    )
+
+    assert highlights.best_value_cells == {(1, 1)}
+    assert highlights.second_best_value_cells == set()
+
+
 def test_draw_cell_block_supports_underlined_text() -> None:
     render_spec = parse_render_spec(
         {

@@ -7,7 +7,7 @@ import argparse
 import json
 import string
 from collections.abc import Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from numbers import Integral, Real
 from pathlib import Path
 from typing import Any
@@ -89,6 +89,7 @@ class BestValueBoldingSpec:
     mode: str
     partition_by_levels: list[str]
     underline_second_best: bool
+    column_filters: dict[str, list[Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -1355,6 +1356,12 @@ def resolve_ranked_value_highlights(
     best_cells: set[tuple[int, int]] = set()
     second_best_cells: set[tuple[int, int]] = set()
     for leaf_column_index, value_column_name in enumerate(table_structure.value_column_names):
+        if not column_matches_filters(
+            table_structure=table_structure,
+            leaf_column_index=leaf_column_index,
+            column_filters=best_value_bolding.column_filters,
+        ):
+            continue
         numeric_values = pd.to_numeric(dataframe[value_column_name], errors="coerce")
         numeric_value_list = numeric_values.tolist()
         for row_group in row_groups:
@@ -1386,6 +1393,33 @@ def resolve_ranked_value_highlights(
         best_value_cells=best_cells,
         second_best_value_cells=second_best_cells,
     )
+
+
+def column_matches_filters(
+    *,
+    table_structure: TableStructure,
+    leaf_column_index: int,
+    column_filters: Mapping[str, list[Any]],
+) -> bool:
+    """Return whether one leaf column is eligible for ranked-value highlighting."""
+    if not column_filters:
+        return True
+    column_tuple = table_structure.column_tuples[leaf_column_index]
+    for dimension_name, allowed_values in column_filters.items():
+        if dimension_name not in table_structure.col_levels:
+            raise AnalysisError(
+                "best_value_bolding.column_filters can only reference column levels. "
+                f"Unknown column level '{dimension_name}'. Available levels: {table_structure.col_levels}."
+            )
+        column_value = column_tuple[table_structure.col_levels.index(dimension_name)]
+        normalized_column_value = stringify_alias_lookup_value(normalize_scalar(column_value))
+        normalized_allowed_values = {
+            stringify_alias_lookup_value(normalize_scalar(value))
+            for value in allowed_values
+        }
+        if normalized_column_value not in normalized_allowed_values:
+            return False
+    return True
 
 
 def resolve_best_value_cells(
@@ -2183,7 +2217,28 @@ def normalize_best_value_bolding_spec(value: Any, *, label: str) -> BestValueBol
         mode=mode,
         partition_by_levels=partition_by_levels,
         underline_second_best=underline_second_best,
+        column_filters=normalize_best_value_column_filters(
+            payload.get("column_filters"),
+            label=f"{label}.column_filters",
+        ),
     )
+
+
+def normalize_best_value_column_filters(value: Any, *, label: str) -> dict[str, list[Any]]:
+    """Normalize optional column filters for ranked-value highlighting."""
+    if value is None:
+        return {}
+    mapping = require_mapping(value, label=label)
+    normalized: dict[str, list[Any]] = {}
+    for raw_dimension_name, raw_allowed_values in mapping.items():
+        dimension_name = require_nonempty_string(raw_dimension_name, label=f"{label} dimension")
+        if isinstance(raw_allowed_values, list):
+            if not raw_allowed_values:
+                raise AnalysisError(f"{label}.{dimension_name} must not be an empty list.")
+            normalized[dimension_name] = [normalize_scalar(value) for value in raw_allowed_values]
+        else:
+            normalized[dimension_name] = [normalize_scalar(raw_allowed_values)]
+    return normalized
 
 
 def normalize_second_best_underline_flag(*, payload: Mapping[str, Any], label: str) -> bool:

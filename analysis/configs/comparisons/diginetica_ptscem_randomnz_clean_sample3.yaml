@@ -1,0 +1,6 @@
+comparison_id: diginetica_ptscem_randomnz_clean_sample3
+
+runs:
+  - diginetica_clean_ptscem_randomnz_clean_sample3
+  - diginetica_randomnz_ptscem_randomnz_clean_sample3
+  - diginetica_ptscem_ptscem_randomnz_clean_sample3
