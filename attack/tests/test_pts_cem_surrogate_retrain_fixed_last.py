@@ -33,6 +33,8 @@ from attack.surrogate.srgnn_backend import SRGNNBackend
 CONFIG_PATH = (
     REPO_ROOT
     / "attack"
+    / "tests"
+    / "fixtures"
     / "configs"
     / "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
 )

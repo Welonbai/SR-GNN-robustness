@@ -43,22 +43,23 @@ from attack.pipeline.runs.run_pts_construction_cem import (
 from attack.pts.policy import build_valid_actions_by_group
 
 
+TEST_CONFIG_DIR = REPO_ROOT / "attack" / "tests" / "fixtures" / "configs"
 CONFIG_PATH = Path(
     "attack/configs/"
     "diginetica_valbest_attack_ptscem_internal_sample.yaml"
 )
-SPACE_FILLING_CONFIG_PATH = CONFIG_PATH
-EPOCH_DIAG_CONFIG_PATH = Path(
-    "attack/configs/"
-    "diginetica_valbest_attack_ptscem_internal_sample.yaml"
+EPOCH_DIAG_CONFIG_PATH = (
+    TEST_CONFIG_DIR
+    / "diginetica_valbest_attack_ptscem_diagnostic_ratio1_srgnn_partial4_target39588.yaml"
 )
-NEW_DIAGNOSTIC_CONFIG_PATH = Path(
-    "attack/configs/"
-    "diginetica_valbest_attack_ptscem_internal_sample.yaml"
+NEW_DIAGNOSTIC_CONFIG_PATH = EPOCH_DIAG_CONFIG_PATH
+FAST_SURROGATE_CONFIG_PATH = (
+    TEST_CONFIG_DIR
+    / "diginetica_valbest_attack_ptscem_ratio1_partial4_sample_fast_surrogate.yaml"
 )
-FAST_SURROGATE_CONFIG_PATH = Path(
-    "attack/configs/"
-    "diginetica_valbest_attack_ptscem_internal_sample.yaml"
+SPACE_FILLING_CONFIG_PATH = (
+    TEST_CONFIG_DIR
+    / "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
 )
 
 

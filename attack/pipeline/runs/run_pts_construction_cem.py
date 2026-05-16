@@ -95,7 +95,7 @@ from pytorch_code.utils import Data
 
 DEFAULT_PTS_CONSTRUCTION_CEM_CONFIG_PATH = (
     "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
+    "diginetica_valbest_attack_ptscem_internal_sample.yaml"
 )
 _LOG_PREFIX = "[pts-construction-cem]"
 _PTS_CONSTRUCTION_ARTIFACT_DIR_NAME = "pts_construction_cem"

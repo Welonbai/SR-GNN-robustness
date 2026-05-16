@@ -4,7 +4,13 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 import shutil
+import sys
 from uuid import uuid4
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from attack.common.artifact_io import load_json, save_json
 from attack.common.config import PTSCEMSurrogateRetrainRuntimeConfig, load_config
@@ -28,12 +34,11 @@ from attack.pipeline.core.victim_execution import VictimExecutionResult
 
 
 CONFIG_PATH = (
-    Path(__file__).resolve().parents[2]
+    REPO_ROOT
     / "attack"
     / "configs"
     / "diginetica_valbest_attack_ptscem_internal_sample.yaml"
 )
-REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_TYPE = PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE
 
 

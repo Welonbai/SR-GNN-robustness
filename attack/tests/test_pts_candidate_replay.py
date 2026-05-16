@@ -29,9 +29,13 @@ from attack.pipeline.runs.run_pts_construction_candidate_replay import (
 )
 
 
-CONFIG_PATH = Path(
-    "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
+CONFIG_PATH = (
+    REPO_ROOT
+    / "attack"
+    / "tests"
+    / "fixtures"
+    / "configs"
+    / "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
 )
 
 

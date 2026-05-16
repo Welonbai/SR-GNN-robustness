@@ -43,9 +43,13 @@ from attack.pipeline.runs.run_pts_construction_cem import (
 )
 
 
-CONFIG_PATH = Path(
-    "attack/configs/"
-    "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
+CONFIG_PATH = (
+    REPO_ROOT
+    / "attack"
+    / "tests"
+    / "fixtures"
+    / "configs"
+    / "diginetica_valbest_attack_pts_construction_grouped_cem_space_filling_ratio1_srgnn_partial4_target5334.yaml"
 )
 def _with_pts(config, pts_config):
     return replace(
@@ -192,7 +196,7 @@ def test_runner_help_exits_successfully() -> None:
     )
 
     assert completed.returncode == 0
-    assert "Grouped PTS-CEM" in completed.stdout
+    assert "PTS-CEM construction" in completed.stdout
     assert "--force-recompute-pts-cem" in completed.stdout
 
 
@@ -955,9 +959,11 @@ def test_pts_target_metadata_uses_aligned_surrogate_retrain_seed() -> None:
     class FakeBestCandidate:
         iteration = 2
         candidate_id = 5
+        candidate_key = "iter2_cand5"
         candidate_seed = 20260405
         reward = 0.75
         reward_metrics = {"reward": 0.75}
+        final_sessions = [[1, 2, 5334]]
 
     metadata = run_pts_construction_cem._target_metadata(
         config=config,
