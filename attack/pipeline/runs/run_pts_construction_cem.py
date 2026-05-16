@@ -571,6 +571,7 @@ def _build_continuous_beta_cem_config(
             "Continuous PTS-CEM requires continuous_beta.deterministic_sampling=true."
         )
     return PTSContinuousBetaCEMConfig(
+        parameterization=continuous.parameterization,
         parameter_bounds=(
             float(continuous.parameter_bounds.min),
             float(continuous.parameter_bounds.max),

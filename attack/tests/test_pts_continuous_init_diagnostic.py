@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+from dataclasses import replace
 from pathlib import Path
 import sys
 
@@ -126,6 +127,55 @@ def test_continuous_init_diagnostic_writes_summary_files(
         "remaining_length",
         "action",
     }.issubset(sample)
+
+
+def test_continuous_init_diagnostic_supports_tiny_mlp_parameterization(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr("attack.pts.continuous_executor.sample_beta", lambda *a, **k: 0.25)
+    monkeypatch.setattr(
+        "attack.pts.continuous_executor.deterministic_unit_interval",
+        lambda **kwargs: 0.0,
+    )
+
+    config = load_config(CONTINUOUS_FIXTURE)
+    pts_config = config.attack.pts_construction
+    assert pts_config is not None
+    tiny_continuous = replace(
+        pts_config.continuous_beta,
+        parameterization="tiny_mlp_log_beta_h2",
+    )
+    tiny_pts = replace(pts_config, continuous_beta=tiny_continuous)
+    tiny_config = replace(
+        config,
+        attack=replace(config.attack, pts_construction=tiny_pts),
+    )
+
+    result = run_continuous_beta_init_diagnostic(
+        config=tiny_config,
+        config_path=CONTINUOUS_FIXTURE,
+        output_dir=tmp_path,
+        max_candidates=3,
+        sample_sessions=3,
+        template_sessions=[[1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11, 12]],
+        target_item=5334,
+    )
+
+    diagnostic_config = load_json(result.paths["diagnostic_config"])
+    assert diagnostic_config["parameterization"] == "tiny_mlp_log_beta_h2"
+
+    candidates = load_json(result.paths["initial_candidates"])
+    assert len(candidates) == 3
+    assert candidates[0]["policy"]["parameterization"] == "tiny_mlp_log_beta_h2"
+    assert len(candidates[0]["parameter_vector"]) == 13
+    assert candidates[0]["sample_metadata"]["prototype_name"].startswith("tiny_")
+
+    candidate_rows = _read_csv(result.paths["candidate_distribution_summary"])
+    assert candidate_rows
+    assert candidate_rows[0]["h0_w"] != ""
+    assert candidate_rows[0]["a_h0"] != ""
+    assert candidate_rows[0]["a1"] == ""
 
 
 def test_diagnostic_summary_generate_ratio_non_stop_excludes_stop() -> None:

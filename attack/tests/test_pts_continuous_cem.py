@@ -13,6 +13,11 @@ from attack.pts.cem import PTSCEMConfig, PTSCEMEvaluationResult
 from attack.pts.continuous_cem import (
     PTSContinuousBetaCEMConfig,
     PTSContinuousBetaCEMTrainer,
+    build_continuous_beta_initial_sample_plan,
+)
+from attack.pts.continuous_policy import (
+    CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
+    CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES,
 )
 
 
@@ -69,3 +74,30 @@ def test_continuous_cem_runs_behavior_covering_init_and_uses_global_best(monkeyp
     assert result.top_candidates
     assert "parameter_vector" in result.iteration_results[0].candidates[0].sample_metadata
     json.dumps(result.policy_history)
+
+
+def test_continuous_cem_tiny_mlp_behavior_covering_init_plan() -> None:
+    plan = build_continuous_beta_initial_sample_plan(
+        cem_config=PTSCEMConfig(
+            iterations=1,
+            population_schedule=[4],
+            base_seed=123,
+        ),
+        continuous_config=PTSContinuousBetaCEMConfig(
+            parameterization=CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
+            parameter_bounds=(-5.0, 5.0),
+            initial_std=2.0,
+            min_std=0.25,
+        ),
+        population_size=4,
+    )
+
+    assert len(plan) == 4
+    assert all(sample.sample_origin == "continuous_beta_behavior_covering" for sample in plan)
+    assert all(len(sample.vector) == len(CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES) for sample in plan)
+    assert [sample.sample_metadata["prototype_name"] for sample in plan] == [
+        "tiny_near_zero_consume_preserve",
+        "tiny_near_zero_consume_generate",
+        "tiny_near_one_consume_stop",
+        "tiny_middle_consume_preserve",
+    ]

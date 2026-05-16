@@ -26,14 +26,19 @@ from attack.pts.continuous_policy import (
     CONTINUOUS_BETA_DEFAULT_BOUNDS,
     CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1,
     CONTINUOUS_BETA_NORMALIZED_SAMPLER,
-    CONTINUOUS_BETA_PARAMETER_NAMES,
+    CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA,
+    CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
     CONTINUOUS_BETA_SHARED_PREFIX_TAG,
+    CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES,
     ContinuousBetaPolicy,
+    normalize_parameterization,
+    parameter_names_for_parameterization,
 )
 
 
 @dataclass(frozen=True)
 class PTSContinuousBetaCEMConfig:
+    parameterization: str = CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA
     parameter_bounds: tuple[float, float] = CONTINUOUS_BETA_DEFAULT_BOUNDS
     initial_std: float = 2.0
     min_std: float = 0.25
@@ -69,6 +74,12 @@ class PTSContinuousBetaCEMTrainer:
         self.generation_topk = int(generation_topk)
         self.generation_rng_tag = str(generation_rng_tag)
         self.shared_prefix_rng_tag = str(shared_prefix_rng_tag)
+        self.parameterization = normalize_parameterization(
+            self.continuous_config.parameterization
+        )
+        self.parameter_names = parameter_names_for_parameterization(
+            self.parameterization
+        )
         if int(self.generation_topk) <= 0:
             raise ValueError("generation_topk must be positive.")
         if not bool(self.continuous_config.deterministic_sampling):
@@ -99,10 +110,10 @@ class PTSContinuousBetaCEMTrainer:
             base_seed=int(self.cem_config.base_seed),
             prefix_rng_tag=self.shared_prefix_rng_tag,
         )
-        current_mean = [0.0 for _ in CONTINUOUS_BETA_PARAMETER_NAMES]
+        current_mean = [0.0 for _ in self.parameter_names]
         current_std = [
             float(self.continuous_config.initial_std)
-            for _ in CONTINUOUS_BETA_PARAMETER_NAMES
+            for _ in self.parameter_names
         ]
         policy_history = [
             self._distribution_payload(
@@ -134,6 +145,7 @@ class PTSContinuousBetaCEMTrainer:
                 candidate_policy = ContinuousBetaPolicy.from_vector(
                     sample_spec.vector,
                     parameter_bounds=self.continuous_config.parameter_bounds,
+                    parameterization=self.parameterization,
                 )
                 construction_result = apply_pts_continuous_beta_construction_batch(
                     session_contexts=session_contexts,
@@ -295,7 +307,7 @@ class PTSContinuousBetaCEMTrainer:
         return self._initial_sample_plan(population_size=int(population_size))
 
     def _initial_sample_plan(self, *, population_size: int) -> list[_ContinuousCandidateSampleSpec]:
-        prototypes = _behavior_covering_prototypes()
+        prototypes = _behavior_covering_prototypes(self.parameterization)
         selected: list[_ContinuousCandidateSampleSpec] = []
         for name, vector in prototypes[: int(population_size)]:
             selected.append(
@@ -322,10 +334,10 @@ class PTSContinuousBetaCEMTrainer:
             selected.append(
                 _ContinuousCandidateSampleSpec(
                     vector=self._sample_gaussian_vector(
-                        mean=[0.0 for _ in CONTINUOUS_BETA_PARAMETER_NAMES],
+                        mean=[0.0 for _ in self.parameter_names],
                         std=[
                             float(self.continuous_config.initial_std)
-                            for _ in CONTINUOUS_BETA_PARAMETER_NAMES
+                            for _ in self.parameter_names
                         ],
                         seed=self._candidate_seed(0, candidate_id),
                     ),
@@ -356,23 +368,23 @@ class PTSContinuousBetaCEMTrainer:
         else:
             elite_mean = [
                 sum(vector[index] for vector in vectors) / float(len(vectors))
-                for index in range(len(CONTINUOUS_BETA_PARAMETER_NAMES))
+                for index in range(len(self.parameter_names))
             ]
             elite_std = [
                 _std([vector[index] for vector in vectors], elite_mean[index])
-                for index in range(len(CONTINUOUS_BETA_PARAMETER_NAMES))
+                for index in range(len(self.parameter_names))
             ]
         smoothing = float(self.cem_config.update.smoothing)
         new_mean = self._clip_vector(
             [
                 (1.0 - smoothing) * float(elite_mean[index])
                 + smoothing * float(old_mean[index])
-                for index in range(len(CONTINUOUS_BETA_PARAMETER_NAMES))
+                for index in range(len(self.parameter_names))
             ]
         )
         new_std = [
             max(float(elite_std[index]), float(self.continuous_config.min_std))
-            for index in range(len(CONTINUOUS_BETA_PARAMETER_NAMES))
+            for index in range(len(self.parameter_names))
         ]
         return new_mean, new_std
 
@@ -415,12 +427,14 @@ class PTSContinuousBetaCEMTrainer:
             "label": str(label),
             "method": "continuous_beta_cem_v1",
             "normalized_sampler": CONTINUOUS_BETA_NORMALIZED_SAMPLER,
-            "parameter_names": list(CONTINUOUS_BETA_PARAMETER_NAMES),
+            "parameterization": self.parameterization,
+            "parameter_names": list(self.parameter_names),
             "mean_vector": [float(value) for value in mean],
             "std_vector": [float(value) for value in std],
             "mean_policy": ContinuousBetaPolicy.from_vector(
                 mean,
                 parameter_bounds=self.continuous_config.parameter_bounds,
+                parameterization=self.parameterization,
             ).to_dict(),
             "parameter_bounds": {
                 "min": float(self.continuous_config.parameter_bounds[0]),
@@ -445,7 +459,8 @@ class PTSContinuousBetaCEMTrainer:
     ) -> dict[str, object]:
         return {
             "method": "continuous_beta_cem_v1",
-            "parameter_names": list(CONTINUOUS_BETA_PARAMETER_NAMES),
+            "parameterization": self.parameterization,
+            "parameter_names": list(self.parameter_names),
             "parameter_vector": [float(value) for value in vector],
             "policy_vector": policy.to_vector(),
             "bounds": {
@@ -472,7 +487,10 @@ class PTSContinuousBetaCEMTrainer:
         return int(self.cem_config.population_size)
 
 
-def _behavior_covering_prototypes() -> list[tuple[str, list[float]]]:
+def _behavior_covering_prototypes(parameterization: str) -> list[tuple[str, list[float]]]:
+    parameterization = normalize_parameterization(parameterization)
+    if parameterization == CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2:
+        return _tiny_mlp_behavior_covering_prototypes()
     return [
         ("near_zero_consume_preserve", [-3.0, 0.0, 2.0, 0.0, -4.0, 0.0, 0.0]),
         ("near_zero_consume_generate", [-3.0, 0.0, 2.0, 0.0, 4.0, 0.0, 0.0]),
@@ -482,6 +500,56 @@ def _behavior_covering_prototypes() -> list[tuple[str, list[float]]]:
         ("u_shaped_mixed_source", [-2.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0]),
         ("q_sensitive_generation", [0.0, 0.0, 0.0, 0.0, -2.0, 4.0, 0.0]),
         ("rho_sensitive_generation", [0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 4.0]),
+    ]
+
+
+def _tiny_mlp_behavior_covering_prototypes() -> list[tuple[str, list[float]]]:
+    # Vector order:
+    # h0_w,h0_b,h1_w,h1_b,a0,a_h0,a_h1,b0,b_h0,b_h1,c0,c1,c2
+    names = CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES
+    if len(names) != 13:
+        raise RuntimeError("Unexpected tiny MLP parameter count.")
+    return [
+        (
+            "tiny_near_zero_consume_preserve",
+            [0.0, 0.0, 0.0, 0.0, -3.0, 0.0, 0.0, 2.0, 0.0, 0.0, -4.0, 0.0, 0.0],
+        ),
+        (
+            "tiny_near_zero_consume_generate",
+            [0.0, 0.0, 0.0, 0.0, -3.0, 0.0, 0.0, 2.0, 0.0, 0.0, 4.0, 0.0, 0.0],
+        ),
+        (
+            "tiny_near_one_consume_stop",
+            [0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, -3.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        ),
+        (
+            "tiny_middle_consume_preserve",
+            [0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0, -4.0, 0.0, 0.0],
+        ),
+        (
+            "tiny_middle_consume_generate",
+            [0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 0.0, 0.0, 4.0, 0.0, 0.0],
+        ),
+        (
+            "tiny_short_generate_mid_stop_long_partial",
+            [5.0, -1.25, -5.0, 3.75, 1.0, -4.0, 3.0, 1.0, 4.0, -3.0, 2.0, -4.0, 0.0],
+        ),
+        (
+            "tiny_short_stop_mid_partial_long_keep",
+            [5.0, -1.25, -5.0, 3.75, 0.0, 4.0, -2.0, 0.0, -4.0, 2.0, -2.0, 4.0, 0.0],
+        ),
+        (
+            "tiny_u_shaped_consume_mixed_source",
+            [5.0, -1.25, -5.0, 3.75, -1.5, -3.0, -3.0, -1.5, -3.0, -3.0, 0.0, 0.0, 0.0],
+        ),
+        (
+            "tiny_q_sensitive_generation",
+            [5.0, -1.25, -5.0, 3.75, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 4.0, 0.0],
+        ),
+        (
+            "tiny_rho_sensitive_generation",
+            [5.0, -1.25, -5.0, 3.75, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 4.0],
+        ),
     ]
 
 

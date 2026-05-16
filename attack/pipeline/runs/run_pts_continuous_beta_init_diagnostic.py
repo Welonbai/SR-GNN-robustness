@@ -56,7 +56,7 @@ from attack.pts.continuous_executor import (
     compute_half_up_consume_count,
 )
 from attack.pts.continuous_policy import (
-    CONTINUOUS_BETA_PARAMETER_NAMES,
+    CONTINUOUS_BETA_ALL_PARAMETER_NAMES,
     CONTINUOUS_BETA_SHARED_PREFIX_TAG,
     ContinuousBetaPolicy,
 )
@@ -75,7 +75,7 @@ CANDIDATE_DISTRIBUTION_COLUMNS = (
     "candidate_id",
     "sample_origin",
     "prototype_name",
-    *CONTINUOUS_BETA_PARAMETER_NAMES,
+    *CONTINUOUS_BETA_ALL_PARAMETER_NAMES,
     "num_sessions",
     "residual_suffix_len_mean",
     "residual_suffix_len_min",
@@ -221,6 +221,7 @@ def run_continuous_beta_init_diagnostic(
         policy = ContinuousBetaPolicy.from_vector(
             sample_spec.vector,
             parameter_bounds=continuous_config.parameter_bounds,
+            parameterization=continuous_config.parameterization,
         )
         construction_result = apply_pts_continuous_beta_construction_batch(
             session_contexts=session_contexts,
@@ -243,6 +244,7 @@ def run_continuous_beta_init_diagnostic(
             "sample_metadata": sample_metadata,
             "policy": policy,
             "parameter_vector": policy.to_vector(),
+            "parameter_names": list(policy.to_dict()["parameter_names"]),
         }
         initial_candidates.append(_initial_candidate_payload(candidate_info))
         records = [dict(record) for record in construction_result.per_session_records]
@@ -374,6 +376,7 @@ def _diagnostic_config_payload(
         "target_item": int(target_item),
         "dataset": config.data.dataset_name,
         "method": PTS_CONSTRUCTION_METHOD_CONTINUOUS_BETA_CEM_V1,
+        "parameterization": continuous_config.parameterization,
         "population_size": int(population_size),
         "candidate_count": int(candidate_count),
         "initialization_mode": continuous_config.initialization_mode,
@@ -573,11 +576,25 @@ def _candidate_base_row(candidate_info: Mapping[str, object]) -> dict[str, objec
     }
 
 
-def _parameter_row(candidate_info: Mapping[str, object]) -> dict[str, float]:
+def _parameter_row(candidate_info: Mapping[str, object]) -> dict[str, object]:
     vector = [float(value) for value in candidate_info["parameter_vector"]]
+    raw_names = candidate_info.get("parameter_names")
+    if raw_names is None:
+        policy = candidate_info.get("policy")
+        if not isinstance(policy, ContinuousBetaPolicy):
+            raise KeyError("candidate_info must include parameter_names or policy.")
+        raw_names = policy.to_dict()["parameter_names"]
+    names = [str(name) for name in raw_names]
+    row = {name: "" for name in CONTINUOUS_BETA_ALL_PARAMETER_NAMES}
+    row.update(
+        {
+            name: float(vector[index])
+            for index, name in enumerate(names)
+        }
+    )
     return {
-        name: float(vector[index])
-        for index, name in enumerate(CONTINUOUS_BETA_PARAMETER_NAMES)
+        str(name): value
+        for name, value in row.items()
     }
 
 

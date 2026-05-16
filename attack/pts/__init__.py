@@ -14,10 +14,13 @@ from attack.pts.continuous_executor import (
     compute_half_up_consume_count,
 )
 from attack.pts.continuous_policy import (
+    CONTINUOUS_BETA_ALL_PARAMETER_NAMES,
     CONTINUOUS_BETA_PARAMETER_NAMES,
+    CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES,
     ContinuousBetaPolicy,
     build_suffix_length_percentile_lookup,
     deterministic_policy_seed,
+    parameter_names_for_parameterization,
     sample_beta,
 )
 from attack.pts.artifacts import write_pts_cem_artifacts
@@ -88,6 +91,8 @@ __all__ = [
     "KEEP_RESIDUAL_SUFFIX_ACTION_NAME",
     "MANDATORY_VERTEX_NAMES",
     "CONTINUOUS_BETA_PARAMETER_NAMES",
+    "CONTINUOUS_BETA_ALL_PARAMETER_NAMES",
+    "CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES",
     "ContinuousBetaPolicy",
     "PTSCEMCandidateResult",
     "PTSCEMConfig",
@@ -128,6 +133,7 @@ __all__ = [
     "get_default_pts_v1_specs",
     "initial_population_size_for_space_filling",
     "lookup_spec_by_name",
+    "parameter_names_for_parameterization",
     "sample_beta",
     "select_anchor_position",
     "select_internal_uniform_anchor",

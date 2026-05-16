@@ -9,6 +9,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from attack.pts.continuous_policy import (
+    CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
+    CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES,
     ContinuousBetaPolicy,
     build_suffix_length_percentile_lookup,
     deterministic_policy_seed,
@@ -28,6 +30,43 @@ def test_continuous_policy_vector_roundtrip_and_math() -> None:
     alpha, beta = policy.beta_params(0.75)
     assert alpha > 0.0
     assert beta > 0.0
+    assert 0.0 <= policy.p_generate(0.25, 0.8) <= 1.0
+
+
+def test_continuous_policy_tiny_mlp_vector_roundtrip_and_math() -> None:
+    vector = [
+        5.0,
+        -1.25,
+        -5.0,
+        3.75,
+        0.25,
+        -1.5,
+        1.25,
+        -0.5,
+        1.75,
+        -1.0,
+        0.2,
+        0.3,
+        -0.4,
+    ]
+    policy = ContinuousBetaPolicy.from_vector(
+        vector,
+        parameter_bounds=(-5.0, 5.0),
+        parameterization=CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
+    )
+
+    assert policy.to_vector() == vector
+    payload = policy.to_dict()
+    assert payload["parameterization"] == CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2
+    assert payload["parameter_names"] == list(CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES)
+    assert ContinuousBetaPolicy.from_dict(payload).to_dict() == payload
+
+    low_alpha, low_beta = policy.beta_params(0.1)
+    mid_alpha, mid_beta = policy.beta_params(0.5)
+    high_alpha, high_beta = policy.beta_params(0.9)
+    assert min(low_alpha, low_beta, mid_alpha, mid_beta, high_alpha, high_beta) > 0.0
+    assert (low_alpha, low_beta) != (mid_alpha, mid_beta)
+    assert (mid_alpha, mid_beta) != (high_alpha, high_beta)
     assert 0.0 <= policy.p_generate(0.25, 0.8) <= 1.0
 
 

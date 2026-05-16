@@ -148,6 +148,7 @@ _ALLOWED_PTS_V1_ACTIONS = {
 }
 PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE = "suffix_length_percentile"
 PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA = "linear_log_beta"
+PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2 = "tiny_mlp_log_beta_h2"
 PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC = "q_and_rho_logistic"
 PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1 = "behavior_covering_v1"
 _REQUIRED_SRGNN_TRAIN_KEYS = (
@@ -1427,10 +1428,13 @@ class PTSContinuousBetaConfig:
             self.parameterization,
             "attack.pts_construction.continuous_beta.parameterization",
         ).strip().lower()
-        if parameterization != PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA:
+        if parameterization not in {
+            PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA,
+            PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
+        }:
             raise ValueError(
                 "attack.pts_construction.continuous_beta.parameterization "
-                "must be 'linear_log_beta'."
+                "must be 'linear_log_beta' or 'tiny_mlp_log_beta_h2'."
             )
         source_policy = _as_str(
             self.source_policy,
@@ -3713,6 +3717,7 @@ __all__ = [
     "PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1",
     "PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE",
     "PTS_CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA",
+    "PTS_CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2",
     "PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC",
     "PTS_CEM_INIT_UNIFORM",
     "PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING",

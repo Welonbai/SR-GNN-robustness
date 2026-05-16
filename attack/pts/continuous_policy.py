@@ -13,7 +13,9 @@ except ImportError:  # pragma: no cover - numpy is available in the main project
 
 
 CONTINUOUS_BETA_POLICY_TYPE = "continuous_beta_policy"
-CONTINUOUS_BETA_PARAMETERIZATION = "linear_log_beta"
+CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA = "linear_log_beta"
+CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2 = "tiny_mlp_log_beta_h2"
+CONTINUOUS_BETA_PARAMETERIZATION = CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA
 CONTINUOUS_BETA_SOURCE_POLICY = "q_and_rho_logistic"
 CONTINUOUS_BETA_INPUT = "suffix_length_percentile"
 CONTINUOUS_BETA_PARAMETER_NAMES = (
@@ -24,6 +26,27 @@ CONTINUOUS_BETA_PARAMETER_NAMES = (
     "c0",
     "c1",
     "c2",
+)
+CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES = (
+    "h0_w",
+    "h0_b",
+    "h1_w",
+    "h1_b",
+    "a0",
+    "a_h0",
+    "a_h1",
+    "b0",
+    "b_h0",
+    "b_h1",
+    "c0",
+    "c1",
+    "c2",
+)
+CONTINUOUS_BETA_ALL_PARAMETER_NAMES = tuple(
+    dict.fromkeys(
+        list(CONTINUOUS_BETA_PARAMETER_NAMES)
+        + list(CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES)
+    )
 )
 CONTINUOUS_BETA_DEFAULT_BOUNDS = (-5.0, 5.0)
 CONTINUOUS_BETA_MIN_SHAPE = 1e-3
@@ -36,23 +59,28 @@ CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1 = "behavior_covering_v1"
 
 @dataclass(frozen=True)
 class ContinuousBetaPolicy:
-    a0: float
-    a1: float
-    b0: float
-    b1: float
-    c0: float
-    c1: float
-    c2: float
+    parameter_values: tuple[float, ...]
+    parameterization: str = CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA
     parameter_bounds: tuple[float, float] = CONTINUOUS_BETA_DEFAULT_BOUNDS
 
     def __post_init__(self) -> None:
         bounds = _coerce_bounds(self.parameter_bounds)
+        parameterization = normalize_parameterization(self.parameterization)
+        names = parameter_names_for_parameterization(parameterization)
+        values = tuple(float(value) for value in self.parameter_values)
+        if len(values) != len(names):
+            raise ValueError(
+                f"{parameterization} requires exactly {len(names)} parameters."
+            )
+        clipped = tuple(_clip(value, bounds) for value in values)
+        object.__setattr__(self, "parameter_values", clipped)
+        object.__setattr__(self, "parameterization", parameterization)
         object.__setattr__(self, "parameter_bounds", bounds)
-        for name in CONTINUOUS_BETA_PARAMETER_NAMES:
-            object.__setattr__(self, name, _clip(float(getattr(self, name)), bounds))
+        for name, value in zip(names, clipped):
+            object.__setattr__(self, name, float(value))
 
     def to_vector(self) -> list[float]:
-        return [float(getattr(self, name)) for name in CONTINUOUS_BETA_PARAMETER_NAMES]
+        return [float(value) for value in self.parameter_values]
 
     @classmethod
     def from_vector(
@@ -60,24 +88,32 @@ class ContinuousBetaPolicy:
         values: Sequence[float],
         *,
         parameter_bounds: tuple[float, float] = CONTINUOUS_BETA_DEFAULT_BOUNDS,
+        parameterization: str = CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA,
     ) -> "ContinuousBetaPolicy":
+        parameterization = normalize_parameterization(parameterization)
+        names = parameter_names_for_parameterization(parameterization)
         vector = [float(value) for value in values]
-        if len(vector) != len(CONTINUOUS_BETA_PARAMETER_NAMES):
+        if len(vector) != len(names):
             raise ValueError(
-                "ContinuousBetaPolicy requires exactly "
-                f"{len(CONTINUOUS_BETA_PARAMETER_NAMES)} parameters."
+                f"ContinuousBetaPolicy parameterization={parameterization!r} "
+                f"requires exactly {len(names)} parameters."
             )
         bounds = _coerce_bounds(parameter_bounds)
         clipped = [_clip(value, bounds) for value in vector]
-        return cls(*clipped, parameter_bounds=bounds)
+        return cls(
+            tuple(clipped),
+            parameterization=parameterization,
+            parameter_bounds=bounds,
+        )
 
     def to_dict(self) -> dict[str, object]:
+        names = parameter_names_for_parameterization(self.parameterization)
         return {
             "type": CONTINUOUS_BETA_POLICY_TYPE,
             "input": CONTINUOUS_BETA_INPUT,
-            "parameterization": CONTINUOUS_BETA_PARAMETERIZATION,
+            "parameterization": self.parameterization,
             "source_policy": CONTINUOUS_BETA_SOURCE_POLICY,
-            "parameter_names": list(CONTINUOUS_BETA_PARAMETER_NAMES),
+            "parameter_names": list(names),
             "parameter_vector": self.to_vector(),
             "parameter_bounds": {
                 "min": float(self.parameter_bounds[0]),
@@ -85,12 +121,16 @@ class ContinuousBetaPolicy:
             },
             "parameters": {
                 name: float(getattr(self, name))
-                for name in CONTINUOUS_BETA_PARAMETER_NAMES
+                for name in names
             },
         }
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, object]) -> "ContinuousBetaPolicy":
+        parameterization = normalize_parameterization(
+            str(payload.get("parameterization", CONTINUOUS_BETA_PARAMETERIZATION))
+        )
+        names = parameter_names_for_parameterization(parameterization)
         raw_bounds = payload.get("parameter_bounds", {})
         if isinstance(raw_bounds, Mapping):
             bounds = (
@@ -103,19 +143,40 @@ class ContinuousBetaPolicy:
         if raw_vector is not None:
             if not isinstance(raw_vector, Sequence) or isinstance(raw_vector, (str, bytes)):
                 raise ValueError("ContinuousBetaPolicy parameter_vector must be a sequence.")
-            return cls.from_vector(raw_vector, parameter_bounds=bounds)
+            return cls.from_vector(
+                raw_vector,
+                parameter_bounds=bounds,
+                parameterization=parameterization,
+            )
         raw_parameters = payload.get("parameters")
         if not isinstance(raw_parameters, Mapping):
             raise ValueError("ContinuousBetaPolicy payload is missing parameters.")
         return cls.from_vector(
-            [float(raw_parameters[name]) for name in CONTINUOUS_BETA_PARAMETER_NAMES],
+            [float(raw_parameters[name]) for name in names],
             parameter_bounds=bounds,
+            parameterization=parameterization,
         )
 
     def beta_params(self, q: float) -> tuple[float, float]:
         q_value = _clamp_unit(float(q))
-        log_alpha = _clip(float(self.a0) + float(self.a1) * q_value, self.parameter_bounds)
-        log_beta = _clip(float(self.b0) + float(self.b1) * q_value, self.parameter_bounds)
+        if self.parameterization == CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2:
+            hidden0 = math.tanh(float(self.h0_w) * q_value + float(self.h0_b))
+            hidden1 = math.tanh(float(self.h1_w) * q_value + float(self.h1_b))
+            log_alpha = (
+                float(self.a0)
+                + float(self.a_h0) * hidden0
+                + float(self.a_h1) * hidden1
+            )
+            log_beta = (
+                float(self.b0)
+                + float(self.b_h0) * hidden0
+                + float(self.b_h1) * hidden1
+            )
+        else:
+            log_alpha = float(self.a0) + float(self.a1) * q_value
+            log_beta = float(self.b0) + float(self.b1) * q_value
+        log_alpha = _clip(log_alpha, self.parameter_bounds)
+        log_beta = _clip(log_beta, self.parameter_bounds)
         alpha = max(CONTINUOUS_BETA_MIN_SHAPE, math.exp(log_alpha))
         beta = max(CONTINUOUS_BETA_MIN_SHAPE, math.exp(log_beta))
         return float(alpha), float(beta)
@@ -128,6 +189,26 @@ class ContinuousBetaPolicy:
                 float(self.c0) + float(self.c1) * q_value + float(self.c2) * rho_value
             )
         )
+
+
+def normalize_parameterization(parameterization: str) -> str:
+    value = str(parameterization).strip().lower()
+    if value not in {
+        CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA,
+        CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2,
+    }:
+        raise ValueError(
+            "continuous_beta parameterization must be 'linear_log_beta' or "
+            "'tiny_mlp_log_beta_h2'."
+        )
+    return value
+
+
+def parameter_names_for_parameterization(parameterization: str) -> tuple[str, ...]:
+    value = normalize_parameterization(parameterization)
+    if value == CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2:
+        return CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES
+    return CONTINUOUS_BETA_PARAMETER_NAMES
 
 
 def stable_sigmoid(value: float) -> float:
@@ -222,20 +303,26 @@ def _clamp_unit(value: float) -> float:
 
 __all__ = [
     "CONTINUOUS_BETA_DEFAULT_BOUNDS",
+    "CONTINUOUS_BETA_ALL_PARAMETER_NAMES",
     "CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1",
     "CONTINUOUS_BETA_INPUT",
     "CONTINUOUS_BETA_NORMALIZED_SAMPLER",
     "CONTINUOUS_BETA_PARAMETERIZATION",
+    "CONTINUOUS_BETA_PARAMETERIZATION_LINEAR_LOG_BETA",
+    "CONTINUOUS_BETA_PARAMETERIZATION_TINY_MLP_LOG_BETA_H2",
     "CONTINUOUS_BETA_PARAMETER_NAMES",
     "CONTINUOUS_BETA_POLICY_TYPE",
     "CONTINUOUS_BETA_RHO_TAG",
     "CONTINUOUS_BETA_SHARED_PREFIX_TAG",
     "CONTINUOUS_BETA_SOURCE_POLICY",
     "CONTINUOUS_BETA_SOURCE_TAG",
+    "CONTINUOUS_BETA_TINY_MLP_H2_PARAMETER_NAMES",
     "ContinuousBetaPolicy",
     "build_suffix_length_percentile_lookup",
     "deterministic_policy_seed",
     "deterministic_unit_interval",
+    "normalize_parameterization",
+    "parameter_names_for_parameterization",
     "sample_beta",
     "stable_sigmoid",
 ]
