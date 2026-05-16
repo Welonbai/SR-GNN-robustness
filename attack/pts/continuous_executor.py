@@ -107,6 +107,7 @@ def apply_pts_continuous_beta_construction_batch(
     generation_rng_tag: str = "pts_generated_suffix",
     rho_sampling_tag: str = CONTINUOUS_BETA_RHO_TAG,
     source_sampling_tag: str = CONTINUOUS_BETA_SOURCE_TAG,
+    materialize_generated_suffix: bool = True,
 ) -> PTSConstructionBatchResult:
     if not session_contexts:
         raise ValueError("session_contexts must not be empty.")
@@ -150,25 +151,28 @@ def apply_pts_continuous_beta_construction_batch(
             use_generate = bool(source_sample < p_generate)
             remaining_length = int(residual_suffix_len - consume_count)
             if use_generate:
-                if poison_runner is None:
+                if bool(materialize_generated_suffix) and poison_runner is None:
                     raise ValueError(
                         "poison_runner is required for continuous generated suffix construction."
                     )
-                generated_suffix = [
-                    int(item)
-                    for item in generate_poison_model_suffix(
-                        runner=poison_runner,
-                        prefix=prefix_through_target,
-                        suffix_length=remaining_length,
-                        topk=int(generation_topk),
-                        rng=deterministic_session_rng(
-                            base_seed=int(generation_rng_base_seed),
-                            target_item=target,
-                            fake_session_index=int(context.fake_session_index),
-                            tag=str(generation_rng_tag),
-                        ),
-                    )
-                ]
+                if bool(materialize_generated_suffix):
+                    generated_suffix = [
+                        int(item)
+                        for item in generate_poison_model_suffix(
+                            runner=poison_runner,
+                            prefix=prefix_through_target,
+                            suffix_length=remaining_length,
+                            topk=int(generation_topk),
+                            rng=deterministic_session_rng(
+                                base_seed=int(generation_rng_base_seed),
+                                target_item=target,
+                                fake_session_index=int(context.fake_session_index),
+                                tag=str(generation_rng_tag),
+                            ),
+                        )
+                    ]
+                else:
+                    generated_suffix = [-1 for _ in range(remaining_length)]
                 if len(generated_suffix) != remaining_length:
                     raise RuntimeError(
                         "Generated continuous PTS suffix length mismatch: "
@@ -223,6 +227,9 @@ def apply_pts_continuous_beta_construction_batch(
             "generation_length_policy": "remaining_suffix_after_consume",
             "generated_suffix": [int(item) for item in generated_suffix],
             "generated_suffix_length": int(len(generated_suffix)),
+            "generated_suffix_materialized": bool(
+                not generated_suffix or bool(materialize_generated_suffix)
+            ),
             "final_session": [int(item) for item in final_session],
             "final_length": int(len(final_session)),
             "length_shift_from_template": int(

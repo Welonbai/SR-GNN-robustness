@@ -287,6 +287,13 @@ class PTSContinuousBetaCEMTrainer:
             for candidate_id in range(int(population_size))
         ]
 
+    def build_initial_sample_plan(
+        self,
+        *,
+        population_size: int,
+    ) -> list[_ContinuousCandidateSampleSpec]:
+        return self._initial_sample_plan(population_size=int(population_size))
+
     def _initial_sample_plan(self, *, population_size: int) -> list[_ContinuousCandidateSampleSpec]:
         prototypes = _behavior_covering_prototypes()
         selected: list[_ContinuousCandidateSampleSpec] = []
@@ -507,7 +514,21 @@ def _std(values: Sequence[float], mean: float) -> float:
     )
 
 
+def build_continuous_beta_initial_sample_plan(
+    *,
+    cem_config: PTSCEMConfig,
+    continuous_config: PTSContinuousBetaCEMConfig,
+    population_size: int,
+) -> list[_ContinuousCandidateSampleSpec]:
+    trainer = PTSContinuousBetaCEMTrainer(
+        cem_config=cem_config,
+        continuous_config=continuous_config,
+    )
+    return trainer.build_initial_sample_plan(population_size=int(population_size))
+
+
 __all__ = [
+    "build_continuous_beta_initial_sample_plan",
     "PTSContinuousBetaCEMConfig",
     "PTSContinuousBetaCEMTrainer",
 ]

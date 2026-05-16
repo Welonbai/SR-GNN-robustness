@@ -5,6 +5,7 @@ from attack.pts.executor import (
 from attack.pts.continuous_cem import (
     PTSContinuousBetaCEMConfig,
     PTSContinuousBetaCEMTrainer,
+    build_continuous_beta_initial_sample_plan,
 )
 from attack.pts.continuous_executor import (
     PTSContinuousSessionContext,
@@ -116,6 +117,7 @@ __all__ = [
     "apply_suffix_construction",
     "assign_suffix_length_group",
     "build_continuous_shared_session_contexts",
+    "build_continuous_beta_initial_sample_plan",
     "build_suffix_length_percentile_lookup",
     "build_valid_actions_by_group",
     "build_vertex_stratified_initial_population",
