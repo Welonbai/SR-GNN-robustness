@@ -39,13 +39,13 @@ GROUPED_CONFIG_PATH = (
 )
 CONTINUOUS_CONFIG_PATH = (
     TEST_CONFIG_DIR
-    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334.yaml"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_target5334.yaml"
 )
 CONTINUOUS_MLP_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334.yaml"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_target5334.yaml"
 )
 
 
@@ -121,7 +121,7 @@ def test_continuous_mlp_sample_yaml_loads() -> None:
 
     assert pts is not None
     assert config.experiment.name == (
-        "valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334"
+        "valbest_attack_pts_construction_continuous_mlp_cem_ratio1_target5334"
     )
     assert pts.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM
     assert pts.cem.sampler.type == PTS_CEM_SAMPLER_GAUSSIAN

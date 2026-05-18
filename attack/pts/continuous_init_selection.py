@@ -70,14 +70,6 @@ class BehaviorCurveSelectionConfig:
     select_size: int | None = None
     distance: str = "l1"
     min_behavior_distance: float = 1e-9
-    extreme_count: int = 6
-    moderate_count: int = 9
-    balanced_count: int = 1
-    extreme_max_action_ratio_min: float = 0.70
-    extreme_max_action_ratio_max: float = 0.90
-    moderate_max_action_ratio_min: float = 0.35
-    moderate_max_action_ratio_max: float = 0.70
-    reject_max_action_ratio_above: float = 0.95
     soft_extreme_pool_size: int = 512
     moderate_pool_size: int = 512
     soft_extreme_select_size: int = 5
@@ -276,7 +268,7 @@ def _build_uncached_selection(
         continuous_config=continuous_config,
         pts_config=_PTSGenerationOnly(generation_topk),
         session_contexts=session_contexts,
-        target_item=0,
+        init_target_placeholder=0,
         pool_size=int(init.soft_extreme_pool_size),
         source_pool="soft_extreme",
         key_prefix="soft_extreme_pool_cand",
@@ -289,7 +281,7 @@ def _build_uncached_selection(
         continuous_config=continuous_config,
         pts_config=_PTSGenerationOnly(generation_topk),
         session_contexts=session_contexts,
-        target_item=0,
+        init_target_placeholder=0,
         pool_size=int(init.moderate_pool_size),
         source_pool="moderate",
         key_prefix="moderate_pool_cand",
@@ -388,6 +380,8 @@ def resolve_continuous_mlp_init_seed(config: Config) -> int:
     pts = config.attack.pts_construction
     if pts is None:
         raise ValueError("pts_construction config is required.")
+    # Mirrors formal PTS-CEM's current base-seed resolver. Keep this explicit
+    # here so init cache identity changes if seed_source support broadens.
     if pts.cem.seed_source == PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED:
         return int(config.seeds.position_opt_seed)
     raise ValueError(
@@ -403,13 +397,16 @@ def _build_behavior_candidate_pool(
     continuous_config: PTSContinuousBetaCEMConfig,
     pts_config: Any,
     session_contexts: Sequence[PTSContinuousSessionContext],
-    target_item: int,
+    init_target_placeholder: int = 0,
     pool_size: int | None = None,
     source_pool: str = "behavior",
     key_prefix: str = "pool_cand",
     initial_std: float | None = None,
     seed_offset: int = 0,
 ) -> list[dict[str, Any]]:
+    # Initialization selection is target-independent and never materializes
+    # generated suffix item IDs. The executor still requires a target_item for
+    # seed inputs and stop/generate plumbing, so use a fixed placeholder.
     effective_continuous_config = (
         continuous_config
         if initial_std is None
@@ -440,7 +437,7 @@ def _build_behavior_candidate_pool(
         )
         construction_result = apply_pts_continuous_beta_construction_batch(
             session_contexts=session_contexts,
-            target_item=int(target_item),
+            target_item=int(init_target_placeholder),
             policy=policy,
             base_seed=int(cem_config.base_seed),
             candidate_key=pool_key,

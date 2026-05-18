@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 from attack.common.artifact_io import (
     load_json,
+    load_run_coverage,
     save_execution_log,
     save_json,
     save_run_coverage,
@@ -143,7 +144,7 @@ def run_targets_and_victims(
     save_json(key_payloads, metadata_paths["key_payloads"])
     save_json(artifact_manifest, metadata_paths["artifact_manifest"])
     run_started_monotonic = time.monotonic()
-    existing_run_coverage_payload = load_json(metadata_paths["run_coverage"])
+    existing_run_coverage_payload = load_run_coverage(metadata_paths["run_coverage"])
     target_registry = ensure_target_registry_prefix(
         context.stats,
         config,

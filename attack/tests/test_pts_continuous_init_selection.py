@@ -6,6 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 import sys
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -40,6 +42,7 @@ from attack.pts.continuous_init_selection import (
     continuous_mlp_init_cache_key,
     continuous_mlp_init_cache_path,
     continuous_mlp_init_identity_payload,
+    resolve_continuous_mlp_init_seed,
 )
 from attack.pts.continuous_executor import build_continuous_shared_session_contexts
 from attack.pts.executor import PTSConstructionBatchResult
@@ -51,7 +54,7 @@ CONTINUOUS_FIXTURE = (
     / "tests"
     / "fixtures"
     / "configs"
-    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_srgnn_partial4_target5334.yaml"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_target5334.yaml"
 )
 
 
@@ -351,6 +354,19 @@ def test_continuous_mlp_init_identity_changes_for_seed_and_init_settings(
     )
 
 
+def test_continuous_mlp_init_seed_resolver_supports_only_position_opt_seed(
+    tmp_path: Path,
+) -> None:
+    config = _small_config(tmp_path)
+    assert resolve_continuous_mlp_init_seed(config) == int(config.seeds.position_opt_seed)
+
+    with pytest.raises(ValueError, match="position_opt_seed"):
+        replace(
+            config.attack.pts_construction.cem,
+            seed_source="unsupported_seed",
+        )
+
+
 def test_continuous_construction_identity_includes_target_specific_init_key(
     tmp_path: Path,
 ) -> None:
@@ -383,3 +399,17 @@ def test_continuous_construction_identity_includes_target_specific_init_key(
         CONTINUOUS_MLP_INITIALIZATION_RUN_TYPE
     )
     assert pts_cem_shared_cache_key(target_1) != pts_cem_shared_cache_key(target_2)
+
+
+def test_continuous_construction_identity_requires_readable_fake_sessions(
+    tmp_path: Path,
+) -> None:
+    config = _small_config(tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="fake sessions"):
+        build_pts_cem_shared_cache_identity(
+            config,
+            target_item=5334,
+            fake_sessions_path=tmp_path / "missing.pkl",
+            poison_model_path=None,
+        )

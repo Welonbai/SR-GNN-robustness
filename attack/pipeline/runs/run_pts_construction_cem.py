@@ -971,11 +971,6 @@ def _continuous_pts_construction_identity_payload(
         payload["initialization"] = {
             "cache_key": str(initialization_cache_key),
             "identity_version": str(initialization_identity.get("identity_version", "")),
-            "identity_hash": str(initialization_cache_key).replace(
-                "continuous_mlp_init_",
-                "",
-                1,
-            ),
             "target_independent": True,
             "materialize_generated_suffix": False,
         }
@@ -1021,6 +1016,12 @@ def build_pts_cem_shared_cache_identity(
     poison_model_path: Path | None = None,
 ) -> dict[str, object]:
     pts_config = _require_pts_config(config)
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
+        if load_fake_sessions(fake_sessions_path) is None:
+            raise FileNotFoundError(
+                "continuous_mlp_cem construction identity requires readable fake sessions: "
+                f"{fake_sessions_path}"
+            )
     split_config = config.data.canonical_split
     poison_checkpoint_identity = (
         _file_sha1_identity(poison_model_path)

@@ -206,6 +206,9 @@ def save_run_coverage(payload: Mapping[str, Any], path: str | Path) -> None:
 
 
 def load_run_coverage(path: str | Path) -> dict[str, Any] | None:
+    path = Path(path)
+    if path.exists() and path.stat().st_size == 0:
+        return None
     payload = load_json(path)
     if payload is None:
         return None
