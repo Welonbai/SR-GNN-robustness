@@ -100,6 +100,66 @@ class DirectAction:
         }
 
 
+@dataclass(frozen=True)
+class DirectActionMLPPolicy:
+    parameter_values: tuple[float, ...]
+    length_feature_mode: str = DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE_M
+    context_stats: Mapping[str, float] | None = None
+
+    def __post_init__(self) -> None:
+        values = tuple(float(value) for value in self.parameter_values)
+        if len(values) != len(DIRECT_ACTION_MLP_H2_PARAMETER_NAMES):
+            raise ValueError(
+                "direct_action_mlp_h2 requires exactly "
+                f"{len(DIRECT_ACTION_MLP_H2_PARAMETER_NAMES)} parameters."
+            )
+        object.__setattr__(self, "parameter_values", values)
+        object.__setattr__(
+            self,
+            "length_feature_mode",
+            normalize_direct_action_length_feature_mode(self.length_feature_mode),
+        )
+        object.__setattr__(
+            self,
+            "context_stats",
+            {} if self.context_stats is None else dict(self.context_stats),
+        )
+
+    @classmethod
+    def from_vector(
+        cls,
+        values: Sequence[float],
+        *,
+        length_feature_mode: str = DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE_M,
+        context_stats: Mapping[str, float] | None = None,
+    ) -> "DirectActionMLPPolicy":
+        return cls(
+            tuple(float(value) for value in values),
+            length_feature_mode=length_feature_mode,
+            context_stats=context_stats,
+        )
+
+    def to_vector(self) -> list[float]:
+        return [float(value) for value in self.parameter_values]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "type": "direct_action_policy",
+            "parameterization": DIRECT_ACTION_POLICY_MLP_H2,
+            "length_feature": self.length_feature_mode,
+            "input_features": ["is_keep", "is_generate", "is_stop", "r", "l"],
+            "hidden_size": 2,
+            "parameter_names": list(DIRECT_ACTION_MLP_H2_PARAMETER_NAMES),
+            "parameter_count": len(DIRECT_ACTION_MLP_H2_PARAMETER_NAMES),
+            "parameter_vector": self.to_vector(),
+            "parameters": {
+                name: float(self.parameter_values[index])
+                for index, name in enumerate(DIRECT_ACTION_MLP_H2_PARAMETER_NAMES)
+            },
+            "context_stats": dict(self.context_stats or {}),
+        }
+
+
 def normalize_direct_action_policy_variant(policy_variant: str) -> str:
     value = str(policy_variant).strip().lower()
     if value not in {DIRECT_ACTION_POLICY_LINEAR_LENGTH, DIRECT_ACTION_POLICY_MLP_H2}:
@@ -225,6 +285,8 @@ def direct_action_length_feature(
 
 def normalize_direct_action_length_feature_mode(mode: str) -> str:
     value = str(mode).strip().lower()
+    if value == "z_score":
+        value = DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE_M
     if value not in {
         DIRECT_ACTION_LENGTH_FEATURE_LOG1P,
         DIRECT_ACTION_LENGTH_FEATURE_M_OVER_MAX_M,
@@ -232,7 +294,8 @@ def normalize_direct_action_length_feature_mode(mode: str) -> str:
         DIRECT_ACTION_LENGTH_FEATURE_RAW_M,
     }:
         raise ValueError(
-            "direct action length feature must be 'log1p' or 'm_over_max_m'."
+            "direct action length feature must be 'log1p', 'm_over_max_m', "
+            "'z_score_m'/'z_score', or 'raw_m'."
         )
     return value
 
@@ -474,6 +537,7 @@ __all__ = [
     "DIRECT_ACTION_POLICY_MLP_H2",
     "DIRECT_ACTION_STOP",
     "DirectAction",
+    "DirectActionMLPPolicy",
     "action_probability_payload",
     "build_direct_action_features",
     "deterministic_direct_action_seed",

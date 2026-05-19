@@ -320,6 +320,19 @@ def _candidate_sampling_payload(candidate: PTSCEMCandidateResult) -> dict[str, A
         "sampled_policy_projection_enabled",
         "sampled_policy_min_probability",
         "sampled_policy_max_probability",
+        "method",
+        "parameterization",
+        "parameter_names",
+        "parameter_vector",
+        "theta",
+        "policy_vector",
+        "length_feature",
+        "cem_init",
+        "direct_action_policy_payload",
+        "direct_action_context_stats",
+        "direct_action_action_summary",
+        "search_distribution_mean",
+        "search_distribution_std",
     ):
         if key in sample_metadata:
             payload[key] = sample_metadata[key]

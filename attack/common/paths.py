@@ -21,6 +21,7 @@ POSITION_OPT_SHARED_POLICY_RUN_TYPE = "position_opt_shared_policy"
 POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE = "rank_bucket_cem"
 POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE = "rank_bucket_cem_candidate_replay"
 PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE = "pts_construction_grouped_cem"
+PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE = "pts_construction_direct_action_mlp_cem"
 PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE = "pts_construction_candidate_replay"
 TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE = "target_aware_carrier_selection_nz"
 TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE = "target_aware_carrier_local_position"
@@ -391,10 +392,13 @@ def attack_key_payload(
         payload["attack_runtime_identity"] = _normalize_identity_value(
             attack_identity_context
         )
-    if run_type == PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE:
+    if run_type in {
+        PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+    }:
         if config.attack.pts_construction is None:
             raise ValueError(
-                "pts_construction_grouped_cem final attack identity requires "
+                f"{run_type} final attack identity requires "
                 "attack.pts_construction."
             )
         payload["attack"]["pts_construction"] = _pts_construction_identity_payload(
@@ -430,13 +434,30 @@ def _pts_construction_identity_payload(config: Config) -> Any:
         if method == "grouped_cem_v1":
             payload = dict(payload)
             payload.pop("continuous_policy", None)
+            payload.pop("direct_action_policy", None)
         elif method == "continuous_mlp_cem":
             payload = dict(payload)
             payload.pop("grouping", None)
             payload.pop("actions", None)
+            payload.pop("direct_action_policy", None)
             continuous = payload.get("continuous_policy")
             if isinstance(continuous, dict):
                 payload["continuous_policy"] = dict(continuous)
+        elif method == "direct_action_mlp_cem":
+            payload = dict(payload)
+            payload.pop("grouping", None)
+            payload.pop("actions", None)
+            payload.pop("continuous_policy", None)
+            direct_action = payload.get("direct_action_policy")
+            if isinstance(direct_action, dict):
+                payload["direct_action_policy"] = {
+                    "parameterization": direct_action.get("parameterization"),
+                    "length_feature": direct_action.get("length_feature"),
+                    "cem_init": {
+                        "mode": "zero_mean_gaussian",
+                        "initial_std": direct_action.get("initial_std"),
+                    },
+                }
         cem = payload.get("cem")
         if isinstance(cem, dict):
             cem = dict(cem)
@@ -450,6 +471,19 @@ def _pts_construction_identity_payload(config: Config) -> Any:
                 if isinstance(update, dict):
                     cem["update"] = {"smoothing": update.get("smoothing")}
                 cem.pop("init", None)
+                cem.pop("resampling", None)
+            elif method == "direct_action_mlp_cem":
+                sampler = cem.get("sampler")
+                if isinstance(sampler, dict):
+                    cem["sampler"] = {"type": "gaussian"}
+                update = cem.get("update")
+                if isinstance(update, dict):
+                    cem["update"] = {
+                        "mode": update.get("mode"),
+                        "elite_min_std": update.get("elite_min_std"),
+                        "elite_std_scale": update.get("elite_std_scale"),
+                    }
+                cem["init"] = None
                 cem.pop("resampling", None)
             payload = dict(payload)
             payload["cem"] = cem
@@ -1009,6 +1043,7 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
     "PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE",
+    "PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE",
     "PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",

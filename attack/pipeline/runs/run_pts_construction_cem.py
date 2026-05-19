@@ -17,6 +17,7 @@ if __package__ is None or __package__ == "":
 from attack.common.config import (
     Config,
     PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
+    PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM,
     PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
     PTS_CEM_SAMPLER_DIRICHLET,
     PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED,
@@ -33,6 +34,7 @@ from attack.common.config import (
 )
 from attack.common.artifact_io import load_fake_sessions, load_json, save_json
 from attack.common.paths import (
+    PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     attack_key,
     poison_model_key_payload,
@@ -87,6 +89,16 @@ from attack.pts.continuous_init_selection import (
 from attack.pts.continuous_policy import (
     CONTINUOUS_BETA_NORMALIZED_SAMPLER,
     CONTINUOUS_BETA_SHARED_PREFIX_TAG,
+)
+from attack.pts.direct_action_cem import (
+    DIRECT_ACTION_MLP_CEM_METHOD,
+    PTSDirectActionMLPCEMConfig,
+    PTSDirectActionMLPCEMTrainer,
+)
+from attack.pts.direct_action_executor import (
+    DIRECT_ACTION_FORMAL_GENERATION_TAG,
+    DIRECT_ACTION_FORMAL_PREFIX_TAG,
+    DIRECT_ACTION_FORMAL_SAMPLE_TAG,
 )
 from attack.pts.grouping import SuffixLengthBucket
 from attack.pts.specs import (
@@ -149,9 +161,10 @@ def run_pts_construction_grouped_cem(
 ) -> dict[str, object]:
     _validate_pts_construction_run_config(config)
 
+    run_type = _pts_construction_run_type(config)
     shared = prepare_shared_attack_artifacts(
         config,
-        run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        run_type=run_type,
         require_poison_runner=True,
         config_path=config_path,
     )
@@ -317,6 +330,15 @@ def run_pts_construction_grouped_cem(
                 initial_sample_plan=init_selection.selected_sample_plan,
                 seed_scope="target_independent",
             )
+        elif pts_config.method == PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM:
+            trainer = PTSDirectActionMLPCEMTrainer(
+                cem_config=cem_config,
+                direct_action_config=_build_direct_action_mlp_cem_config(pts_config),
+                generation_topk=int(pts_config.generation.topk),
+                generation_rng_tag=DIRECT_ACTION_FORMAL_GENERATION_TAG,
+                action_sampling_tag=DIRECT_ACTION_FORMAL_SAMPLE_TAG,
+                shared_prefix_rng_tag=DIRECT_ACTION_FORMAL_PREFIX_TAG,
+            )
         else:
             raise ValueError(f"Unsupported PTS-CEM method {pts_config.method!r}.")
 
@@ -422,7 +444,7 @@ def run_pts_construction_grouped_cem(
         config,
         config_path=config_path,
         context=context,
-        run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        run_type=run_type,
         build_poisoned=build_poisoned,
         attack_identity_context=attack_identity_context,
     )
@@ -435,9 +457,21 @@ def _require_pts_config(config: Config) -> PTSConstructionConfig:
     return pts_config
 
 
+def _pts_construction_run_type(config: Config) -> str:
+    pts_config = _require_pts_config(config)
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM:
+        return PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE
+    return PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE
+
+
 def _pts_construction_log_method_detail(pts_config: PTSConstructionConfig) -> str:
     if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
         return "continuous_policy=suffix_length_mlp_h2"
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM:
+        return (
+            "direct_action_policy=direct_action_mlp_h2 "
+            f"length_feature={pts_config.direct_action_policy.length_feature}"
+        )
     return f"actions={list(pts_config.actions.enabled)}"
 
 
@@ -450,10 +484,11 @@ def _validate_pts_construction_run_config(config: Config) -> None:
     if pts_config.method not in {
         PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
         PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
+        PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM,
     }:
         raise ValueError(
-            "PTS-CEM runner supports method='grouped_cem_v1' or "
-            "method='continuous_mlp_cem'."
+            "PTS-CEM runner supports method='grouped_cem_v1', "
+            "method='continuous_mlp_cem', or method='direct_action_mlp_cem'."
         )
     if (
         pts_config.prefix_selector.range != PTS_PREFIX_RANGE_INTERNAL
@@ -467,10 +502,19 @@ def _validate_pts_construction_run_config(config: Config) -> None:
             raise ValueError("PTS-CEM Phase 3 supports only residual_suffix_length grouping.")
         _build_pts_specs_from_config(pts_config)
         _build_suffix_length_buckets_from_config(pts_config)
-    else:
+    elif pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
         if pts_config.cem.sampler.type != "gaussian":
             raise ValueError("Continuous MLP-CEM requires cem.sampler.type='gaussian'.")
         _build_continuous_beta_cem_config(pts_config)
+    else:
+        if pts_config.cem.sampler.type != "gaussian":
+            raise ValueError("Direct-action MLP-CEM requires cem.sampler.type='gaussian'.")
+        if pts_config.cem.update.mode != "elite_centered_gaussian":
+            raise ValueError(
+                "Direct-action MLP-CEM requires "
+                "cem.update.mode='elite_centered_gaussian'."
+            )
+        _build_direct_action_mlp_cem_config(pts_config)
     if (
         pts_config.generation.length_policy
         != PTS_GENERATION_LENGTH_POLICY_SAME_AS_RESIDUAL_SUFFIX
@@ -602,6 +646,18 @@ def _build_continuous_beta_cem_config(
     )
 
 
+def _build_direct_action_mlp_cem_config(
+    pts_config: PTSConstructionConfig,
+) -> PTSDirectActionMLPCEMConfig:
+    policy = pts_config.direct_action_policy
+    return PTSDirectActionMLPCEMConfig(
+        length_feature_mode=policy.length_feature,
+        initial_std=float(policy.initial_std),
+        elite_min_std=float(pts_config.cem.update.elite_min_std),
+        elite_std_scale=float(pts_config.cem.update.elite_std_scale),
+    )
+
+
 def _pts_cem_population_size(cem_config: PTSCEMConfig, iteration: int) -> int:
     if cem_config.population_schedule is not None:
         return int(cem_config.population_schedule[int(iteration)])
@@ -627,7 +683,7 @@ def resolve_pts_cem_surrogate_effective_seed(
     return victim_effective_train_seed(
         config,
         victim_name=PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME,
-        run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        run_type=_pts_construction_run_type(config),
         target_item=int(target_item),
     )
 
@@ -772,6 +828,23 @@ def build_pts_construction_attack_identity_context(config: Config) -> dict[str, 
                 **_continuous_pts_construction_identity_payload(
                     config,
                     target_item=None,
+                ),
+                "runtime_seeds": {
+                    "position_opt_seed": int(config.seeds.position_opt_seed),
+                    "surrogate_train_seed": int(config.seeds.surrogate_train_seed),
+                    "victim_train_seed": int(config.seeds.victim_train_seed),
+                    "resolved_cem_base_seed": int(resolved_cem_base_seed),
+                    "surrogate_seed_alignment": _pts_cem_seed_alignment_identity(config),
+                },
+            }
+        }
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM:
+        return {
+            "pts_construction": {
+                **_direct_action_pts_construction_identity_payload(
+                    config,
+                    target_item=None,
+                    fake_sessions_path=None,
                 ),
                 "runtime_seeds": {
                     "position_opt_seed": int(config.seeds.position_opt_seed),
@@ -979,6 +1052,107 @@ def _continuous_pts_construction_identity_payload(
     return payload
 
 
+def _direct_action_pts_construction_identity_payload(
+    config: Config,
+    *,
+    target_item: int | None,
+    fake_sessions_path: Path | None,
+) -> dict[str, object]:
+    pts_config = _require_pts_config(config)
+    cem = pts_config.cem
+    policy = pts_config.direct_action_policy
+    payload: dict[str, object] = {
+        "method": pts_config.method,
+        "prefix_selector": {
+            "range": pts_config.prefix_selector.range,
+            "sampler": pts_config.prefix_selector.sampler,
+        },
+        "shared_prefix_assignment": {
+            "mode": "internal_uniform_target_independent_v1",
+            "seed_scope": "target_independent",
+            "seed_source": cem.seed_source,
+            "resolved_seed": int(_resolve_pts_cem_base_seed(config)),
+            "rng_tag": DIRECT_ACTION_FORMAL_PREFIX_TAG,
+        },
+        "generation": {
+            "topk": int(pts_config.generation.topk),
+            "length_policy": pts_config.generation.length_policy,
+            "generation_rng_tag": DIRECT_ACTION_FORMAL_GENERATION_TAG,
+            "generation_seed_fields": [
+                "base_seed",
+                "target_item",
+                "iteration",
+                "candidate_key",
+                "fake_session_index",
+                "consume_count",
+                "generated_length",
+                "formal_generation_tag",
+            ],
+        },
+        "sampling": {
+            "action_rng_tag": DIRECT_ACTION_FORMAL_SAMPLE_TAG,
+            "action_seed_fields": [
+                "base_seed",
+                "target_item",
+                "iteration",
+                "candidate_key",
+                "fake_session_index",
+                "formal_action_sampling_tag",
+            ],
+        },
+        "direct_action_policy": {
+            "parameterization": policy.parameterization,
+            "length_feature": policy.length_feature,
+        },
+        "cem_init": {
+            "mode": "zero_mean_gaussian",
+            "initial_std": float(policy.initial_std),
+        },
+        "cem": {
+            "iterations": int(cem.iterations),
+            "population_schedule": (
+                None
+                if cem.population_schedule is None
+                else [int(value) for value in cem.population_schedule]
+            ),
+            "population_size": (
+                None if cem.population_size is None else int(cem.population_size)
+            ),
+            "elite_ratio": float(cem.elite_ratio),
+            "sampler": {
+                "type": "gaussian",
+            },
+            "update": {
+                "mode": "elite_centered_gaussian",
+                "elite_min_std": float(cem.update.elite_min_std),
+                "elite_std_scale": float(cem.update.elite_std_scale),
+                "std_ddof": 0,
+            },
+            "seed_source": cem.seed_source,
+            "cem_base_seed": int(_resolve_pts_cem_base_seed(config)),
+            "resolved_cem_base_seed": int(_resolve_pts_cem_base_seed(config)),
+            "candidate_seed_stride": int(cem.candidate_seed_stride),
+        },
+        "valid_actions": {
+            "families": ["keep(k)", "generate(k)", "stop"],
+            "k_range": "0..m-1",
+            "generate_m_allowed": False,
+            "keep_m_allowed": False,
+            "stop_is_only_length_0_suffix_action": True,
+        },
+        "final_selection": {
+            "mode": pts_config.final_selection.mode,
+        },
+    }
+    if fake_sessions_path is not None:
+        payload["fake_sessions"] = {
+            "artifact_identity": _file_sha1_identity(fake_sessions_path),
+        }
+    if target_item is not None:
+        payload["target_item"] = int(target_item)
+    return payload
+
+
 def _pts_construction_artifact_dir(
     config: Config,
     target_item: int,
@@ -989,7 +1163,7 @@ def _pts_construction_artifact_dir(
         target_dir(
             config,
             int(target_item),
-            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            run_type=_pts_construction_run_type(config),
             attack_identity_context=attack_identity_context,
         )
         / _PTS_CONSTRUCTION_ARTIFACT_DIR_NAME
@@ -1016,10 +1190,13 @@ def build_pts_cem_shared_cache_identity(
     poison_model_path: Path | None = None,
 ) -> dict[str, object]:
     pts_config = _require_pts_config(config)
-    if pts_config.method == PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM:
+    if pts_config.method in {
+        PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
+        PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM,
+    }:
         if load_fake_sessions(fake_sessions_path) is None:
             raise FileNotFoundError(
-                "continuous_mlp_cem construction identity requires readable fake sessions: "
+                f"{pts_config.method} construction identity requires readable fake sessions: "
                 f"{fake_sessions_path}"
             )
     split_config = config.data.canonical_split
@@ -1031,7 +1208,7 @@ def build_pts_cem_shared_cache_identity(
     return {
         "schema_version": PTS_CEM_SHARED_CACHE_SCHEMA_VERSION,
         "artifact_schema_version": PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION,
-        "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        "run_type": _pts_construction_run_type(config),
         "dataset": {
             "dataset_name": config.data.dataset_name,
             "split_protocol": config.data.split_protocol,
@@ -1048,7 +1225,7 @@ def build_pts_cem_shared_cache_identity(
             "artifact_identity": _file_sha1_identity(fake_sessions_path),
             "generation_identity": shared_attack_artifact_key_payload(
                 config,
-                run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+                run_type=_pts_construction_run_type(config),
             ),
         },
         "poison_model": {
@@ -1114,6 +1291,21 @@ def _pts_construction_shared_identity_payload(
             target_item=int(target_item),
             initialization_identity=init_identity,
             initialization_cache_key=init_cache_key,
+        )
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM:
+        if fake_sessions_path is None:
+            raise ValueError(
+                "direct_action_mlp_cem construction identity requires fake_sessions_path."
+            )
+        if load_fake_sessions(fake_sessions_path) is None:
+            raise FileNotFoundError(
+                "direct_action_mlp_cem construction identity requires readable fake sessions: "
+                f"{fake_sessions_path}"
+            )
+        return _direct_action_pts_construction_identity_payload(
+            config,
+            target_item=int(target_item),
+            fake_sessions_path=fake_sessions_path,
         )
     return {
         "target_item": int(target_item),
@@ -1232,14 +1424,15 @@ def _current_pts_construction_cache_identity(
     target_item: int | None = None,
 ) -> dict[str, object]:
     payload = {
+        "run_type": _pts_construction_run_type(config),
         "attack_key": attack_key(
             config,
-            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            run_type=_pts_construction_run_type(config),
             attack_identity_context=attack_identity_context,
         ),
         "run_group_key": run_group_key(
             config,
-            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            run_type=_pts_construction_run_type(config),
             attack_identity_context=attack_identity_context,
         ),
         "experiment_name": config.experiment.name,
@@ -1414,7 +1607,10 @@ def _load_marker_cached_pts_best_candidate(
         raise ValueError(
             f"PTS-CEM cache marker status must be 'completed': {marker_path}"
         )
-    if marker.get("run_type") != PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE:
+    expected_run_type = str(
+        (current_identity or {}).get("run_type", PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE)
+    )
+    if marker.get("run_type") != expected_run_type:
         raise ValueError(
             "PTS-CEM cache marker run_type mismatch: "
             f"{marker.get('run_type')!r}"
@@ -1845,10 +2041,10 @@ def _write_pts_construction_complete_marker(
         "schema_version": "pts_construction_cache_v1",
         "local_artifact_schema_version": PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION,
         "status": "completed",
-        "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        "run_type": _pts_construction_run_type(config),
         "run_group_key": run_group_key(
             config,
-            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            run_type=_pts_construction_run_type(config),
             attack_identity_context=attack_identity_context,
         ),
         "target_cohort_key": target_cohort_key(config),
@@ -2015,7 +2211,7 @@ def _write_shared_pts_cem_cache(
     payload = {
         "schema_version": PTS_CEM_SHARED_CACHE_SCHEMA_VERSION,
         "status": "completed",
-        "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        "run_type": _pts_construction_run_type(config),
         "shared_pts_cem_cache_key": str(shared_cache_key),
         "target_item": int(target_item),
         "construction_identity": dict(shared_cache_identity),
@@ -2036,7 +2232,7 @@ def _write_shared_pts_cem_cache(
         "created_from_experiment": config.experiment.name,
         "created_from_run_group": run_group_key(
             config,
-            run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            run_type=_pts_construction_run_type(config),
             attack_identity_context=attack_identity_context,
         ),
         "best_candidate": {
@@ -2701,6 +2897,20 @@ def _pts_method_metadata_payload(
                 },
                 "smoothing_epsilon": float(continuous.smoothing_epsilon),
                 "deterministic_sampling": bool(continuous.deterministic_sampling),
+            },
+        }
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM:
+        policy = pts_config.direct_action_policy
+        return {
+            "pts_actions_enabled": [],
+            "pts_grouping_mode": None,
+            "pts_direct_action_policy": {
+                "parameterization": policy.parameterization,
+                "length_feature": policy.length_feature,
+                "cem_init": {
+                    "mode": "zero_mean_gaussian",
+                    "initial_std": float(policy.initial_std),
+                },
             },
         }
     return {

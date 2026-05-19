@@ -116,6 +116,7 @@ _ALLOWED_ANCHOR_ASSIGNMENT_STRATEGIES = {
 }
 PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1 = "grouped_cem_v1"
 PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM = "continuous_mlp_cem"
+PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM = "direct_action_mlp_cem"
 PTS_PREFIX_RANGE_INTERNAL = "internal"
 PTS_PREFIX_SAMPLER_UNIFORM = "uniform"
 PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH = "residual_suffix_length"
@@ -125,6 +126,9 @@ PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE = "global_best_candidate"
 PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED = "position_opt_seed"
 PTS_CEM_SAMPLER_DIRICHLET = "dirichlet"
 PTS_CEM_SAMPLER_GAUSSIAN = "gaussian"
+PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN = "elite_centered_gaussian"
+PTS_DIRECT_ACTION_POLICY_PARAMETERIZATION_MLP_H2 = "direct_action_mlp_h2"
+PTS_DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE = "z_score"
 PTS_CEM_INIT_UNIFORM = "uniform"
 PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING = "vertex_stratified_space_filling"
 PTS_CEM_INIT_TWO_POOL_BEHAVIOR_CURVE_SPACE_FILLING = (
@@ -960,12 +964,21 @@ class PTSCEMSamplerRuntimeConfig:
 
 @dataclass(frozen=True)
 class PTSCEMUpdateRuntimeConfig:
+    mode: str = "standard"
     smoothing: float = 0.3
     min_probability: float = 0.03
     max_probability: float = 0.90
     min_std: float = 0.25
+    elite_min_std: float = 0.25
+    elite_std_scale: float = 1.0
 
     def __post_init__(self) -> None:
+        mode = _as_str(self.mode, "attack.pts_construction.cem.update.mode").strip().lower()
+        if mode not in {"standard", PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN}:
+            raise ValueError(
+                "attack.pts_construction.cem.update.mode must be 'standard' or "
+                "'elite_centered_gaussian'."
+            )
         smoothing = _as_float(self.smoothing, "attack.pts_construction.cem.update.smoothing")
         if not 0.0 <= smoothing <= 1.0:
             raise ValueError("attack.pts_construction.cem.update.smoothing must be in [0, 1].")
@@ -985,10 +998,29 @@ class PTSCEMUpdateRuntimeConfig:
         min_std = _as_float(self.min_std, "attack.pts_construction.cem.update.min_std")
         if min_std <= 0.0:
             raise ValueError("attack.pts_construction.cem.update.min_std must be positive.")
+        elite_min_std = _as_float(
+            self.elite_min_std,
+            "attack.pts_construction.cem.update.elite_min_std",
+        )
+        if elite_min_std <= 0.0:
+            raise ValueError(
+                "attack.pts_construction.cem.update.elite_min_std must be positive."
+            )
+        elite_std_scale = _as_float(
+            self.elite_std_scale,
+            "attack.pts_construction.cem.update.elite_std_scale",
+        )
+        if elite_std_scale < 0.0:
+            raise ValueError(
+                "attack.pts_construction.cem.update.elite_std_scale must be non-negative."
+            )
+        object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "smoothing", smoothing)
         object.__setattr__(self, "min_probability", min_probability)
         object.__setattr__(self, "max_probability", max_probability)
         object.__setattr__(self, "min_std", min_std)
+        object.__setattr__(self, "elite_min_std", elite_min_std)
+        object.__setattr__(self, "elite_std_scale", elite_std_scale)
 
 
 @dataclass(frozen=True)
@@ -1540,6 +1572,45 @@ class PTSContinuousPolicyConfig:
 
 
 @dataclass(frozen=True)
+class PTSDirectActionPolicyConfig:
+    parameterization: str = PTS_DIRECT_ACTION_POLICY_PARAMETERIZATION_MLP_H2
+    length_feature: str = PTS_DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE
+    initial_std: float = 1.0
+
+    def __post_init__(self) -> None:
+        parameterization = _as_str(
+            self.parameterization,
+            "attack.pts_construction.direct_action_policy.parameterization",
+        ).strip().lower()
+        if parameterization != PTS_DIRECT_ACTION_POLICY_PARAMETERIZATION_MLP_H2:
+            raise ValueError(
+                "attack.pts_construction.direct_action_policy.parameterization "
+                "must be 'direct_action_mlp_h2'."
+            )
+        length_feature = _as_str(
+            self.length_feature,
+            "attack.pts_construction.direct_action_policy.length_feature",
+        ).strip().lower()
+        if length_feature not in {"z_score", "z_score_m"}:
+            raise ValueError(
+                "attack.pts_construction.direct_action_policy.length_feature "
+                "must be 'z_score'."
+            )
+        initial_std = _as_float(
+            self.initial_std,
+            "attack.pts_construction.direct_action_policy.initial_std",
+        )
+        if initial_std <= 0.0:
+            raise ValueError(
+                "attack.pts_construction.direct_action_policy.initial_std "
+                "must be positive."
+            )
+        object.__setattr__(self, "parameterization", parameterization)
+        object.__setattr__(self, "length_feature", "z_score")
+        object.__setattr__(self, "initial_std", initial_std)
+
+
+@dataclass(frozen=True)
 class PTSRewardConfig:
     target_summary: str = PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20
     enable_gt_penalty: bool = False
@@ -1655,6 +1726,9 @@ class PTSConstructionConfig:
     continuous_policy: PTSContinuousPolicyConfig = field(
         default_factory=PTSContinuousPolicyConfig
     )
+    direct_action_policy: PTSDirectActionPolicyConfig = field(
+        default_factory=PTSDirectActionPolicyConfig
+    )
     cem: PTSCEMRuntimeConfig = field(default_factory=PTSCEMRuntimeConfig)
     reward: PTSRewardConfig = field(default_factory=PTSRewardConfig)
     artifacts: PTSArtifactsConfig = field(default_factory=PTSArtifactsConfig)
@@ -1666,10 +1740,11 @@ class PTSConstructionConfig:
         if method not in {
             PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
             PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
+            PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM,
         }:
             raise ValueError(
-                "attack.pts_construction.method must be 'grouped_cem_v1' or "
-                "'continuous_mlp_cem'."
+                "attack.pts_construction.method must be 'grouped_cem_v1', "
+                "'continuous_mlp_cem', or 'direct_action_mlp_cem'."
             )
         object.__setattr__(self, "enabled", enabled)
         object.__setattr__(self, "method", method)
@@ -1720,6 +1795,15 @@ class PTSConstructionConfig:
         )
         object.__setattr__(
             self,
+            "direct_action_policy",
+            _coerce_pts_dataclass(
+                self.direct_action_policy,
+                PTSDirectActionPolicyConfig,
+                "attack.pts_construction.direct_action_policy",
+            ),
+        )
+        object.__setattr__(
+            self,
             "cem",
             _coerce_pts_dataclass(
                 self.cem,
@@ -1762,6 +1846,16 @@ class PTSConstructionConfig:
                 "attack.pts_construction.cem.sampler.type must be 'dirichlet' "
                 "for method='grouped_cem_v1'."
             )
+        if method == PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM:
+            if self.cem.sampler.type != PTS_CEM_SAMPLER_GAUSSIAN:
+                raise ValueError(
+                    "Direct-action MLP-CEM requires cem.sampler.type='gaussian'."
+                )
+            if self.cem.update.mode != PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN:
+                raise ValueError(
+                    "Direct-action MLP-CEM requires "
+                    "cem.update.mode='elite_centered_gaussian'."
+                )
         if (
             method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1
             and self.cem.init.mode == PTS_CEM_INIT_VERTEX_STRATIFIED_SPACE_FILLING
@@ -3767,7 +3861,9 @@ __all__ = [
     "PTSContinuousParameterBoundsConfig",
     "PTSContinuousPolicyConfig",
     "PTSConstructionConfig",
+    "PTSDirectActionPolicyConfig",
     "PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM",
+    "PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM",
     "PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1",
     "PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1",
     "PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE",
@@ -3780,6 +3876,7 @@ __all__ = [
     "PTS_CEM_SAMPLER_DIRICHLET",
     "PTS_CEM_SAMPLER_GAUSSIAN",
     "PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED",
+    "PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN",
     "PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST",
     "PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST",
     "PTS_CEM_SURROGATE_REWARD_BEST",
@@ -3789,6 +3886,8 @@ __all__ = [
     "PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH",
     "PTS_PREFIX_RANGE_INTERNAL",
     "PTS_PREFIX_SAMPLER_UNIFORM",
+    "PTS_DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE",
+    "PTS_DIRECT_ACTION_POLICY_PARAMETERIZATION_MLP_H2",
     "PTS_REWARD_RAW_LOWK_MRR_RECALL_10_20",
     "PTSFinalSelectionConfig",
     "PTSGenerationConfig",
