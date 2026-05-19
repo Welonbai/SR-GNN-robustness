@@ -66,6 +66,7 @@ class ViewSpec:
     require_unique_cells: bool
     ground_truth_relative_to_clean: GroundTruthRelativeToCleanSpec | None
     mean_completeness: MeanCompletenessSpec | None
+    mean_std: MeanStdSpec | None
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,14 @@ class MeanCompletenessSpec:
     group_by: list[str]
     on_missing: str
     write_missing_report: bool
+
+
+@dataclass(frozen=True)
+class MeanStdSpec:
+    """Optional companion standard-deviation output for mean-aggregate views."""
+
+    ddof: int
+    std_round_digits: int
 
 
 @dataclass(frozen=True)
@@ -217,6 +226,11 @@ def parse_view_spec(payload: Mapping[str, Any], *, source_spec_path: Path) -> Vi
         raise AnalysisError(
             f"Unsupported agg '{agg}'. Allowed values: {sorted(ALLOWED_AGGREGATIONS)}."
         )
+    mean_std = normalize_mean_std_spec(
+        payload.get("mean_std"),
+        agg=agg,
+        label="mean_std",
+    )
 
     return ViewSpec(
         input_csv=input_csv,
@@ -233,6 +247,7 @@ def parse_view_spec(payload: Mapping[str, Any], *, source_spec_path: Path) -> Vi
         require_unique_cells=require_unique_cells,
         ground_truth_relative_to_clean=ground_truth_relative_to_clean,
         mean_completeness=mean_completeness,
+        mean_std=mean_std,
     )
 
 
@@ -543,11 +558,21 @@ def write_view_bundle(
         validate_unique_cells(dataframe, spec)
 
     report_dataframe, pivot_structure = build_report_table(dataframe, spec)
+    std_dataframe: pd.DataFrame | None = None
+    if spec.mean_std is not None:
+        std_dataframe = build_mean_std_table(
+            dataframe=dataframe,
+            spec=spec,
+            pivot_structure=pivot_structure,
+        )
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     table_path = bundle_dir / "table.csv"
+    std_table_path = bundle_dir / "table_std.csv"
     meta_path = bundle_dir / "meta.json"
     report_dataframe.to_csv(table_path, index=False)
+    if std_dataframe is not None:
+        std_dataframe.to_csv(std_table_path, index=False)
 
     normalized_split_values = normalize_split_value_mapping(spec.split_by, split_values)
     json_split_values = normalize_for_json(normalized_split_values)
@@ -617,6 +642,13 @@ def write_view_bundle(
         if mean_completeness_report_path is not None:
             mean_meta["missing_report_path"] = to_repo_relative(mean_completeness_report_path)
         meta["mean_completeness"] = mean_meta
+    if spec.mean_std is not None:
+        meta["mean_std"] = {
+            "enabled": True,
+            "ddof": int(spec.mean_std.ddof),
+            "std_round_digits": int(spec.mean_std.std_round_digits),
+            "table_std_path": to_repo_relative(std_table_path),
+        }
     write_json(meta_path, meta)
 
 
@@ -652,6 +684,91 @@ def build_report_table(dataframe: pd.DataFrame, spec: ViewSpec) -> tuple[pd.Data
     flattened = pivoted.reset_index()
     flattened.columns = [flatten_column_label(column) for column in flattened.columns]
     return flattened, pivot_structure
+
+
+def build_mean_std_table(
+    *,
+    dataframe: pd.DataFrame,
+    spec: ViewSpec,
+    pivot_structure: PivotStructure,
+) -> pd.DataFrame:
+    """Build a companion std table with the same shape as the mean report table."""
+    if spec.mean_std is None:
+        raise AnalysisError("Cannot build table_std.csv when mean_std is disabled.")
+    validate_mean_std_group_counts(dataframe=dataframe, spec=spec)
+    try:
+        pivoted = pd.pivot_table(
+            dataframe,
+            index=spec.rows,
+            columns=spec.cols,
+            values=spec.value_col,
+            aggfunc=lambda values: pd.to_numeric(values, errors="coerce").std(
+                ddof=spec.mean_std.ddof,
+            ),
+            sort=True,
+        )
+    except Exception as exc:  # pragma: no cover - defensive pandas error wrapping
+        raise AnalysisError(f"Could not build table_std.csv: {exc}.") from exc
+
+    if pivoted.empty:
+        raise AnalysisError("The std report table is empty after aggregation.")
+
+    std_structure = PivotStructure(
+        row_levels=extract_axis_levels(pivoted.index, fallback_levels=spec.rows),
+        col_levels=extract_axis_levels(pivoted.columns, fallback_levels=spec.cols),
+        row_tuples=extract_axis_tuples(pivoted.index, level_count=len(spec.rows), axis_label="rows"),
+        column_tuples=extract_axis_tuples(
+            pivoted.columns,
+            level_count=len(spec.cols),
+            axis_label="columns",
+        ),
+    )
+    if std_structure != pivot_structure:
+        raise AnalysisError("table_std.csv structure does not match table.csv structure.")
+
+    flattened = pivoted.reset_index()
+    flattened.columns = [flatten_column_label(column) for column in flattened.columns]
+    return flattened
+
+
+def validate_mean_std_group_counts(*, dataframe: pd.DataFrame, spec: ViewSpec) -> None:
+    """Require enough numeric source values for every std aggregate cell."""
+    if spec.mean_std is None:
+        return
+    cell_dimensions = spec.rows + spec.cols
+    insufficient_groups: list[dict[str, Any]] = []
+    grouped = dataframe.groupby(cell_dimensions, dropna=False, sort=True)
+    for raw_group_key, group in grouped:
+        group_values = coerce_group_key(raw_group_key, level_count=len(cell_dimensions))
+        numeric_value_count = int(pd.to_numeric(group[spec.value_col], errors="coerce").count())
+        if numeric_value_count > spec.mean_std.ddof:
+            continue
+        insufficient_groups.append(
+            {
+                column_name: normalize_scalar(group_value)
+                for column_name, group_value in zip(cell_dimensions, group_values, strict=True)
+            }
+            | {
+                "numeric_value_count": numeric_value_count,
+                "ddof": int(spec.mean_std.ddof),
+            }
+        )
+
+    if not insufficient_groups:
+        return
+
+    example = insufficient_groups[0]
+    group_fields = {
+        key: value
+        for key, value in example.items()
+        if key not in {"numeric_value_count", "ddof"}
+    }
+    raise AnalysisError(
+        "mean_std requires every aggregate cell to contain more numeric values than ddof. "
+        f"Found {len(insufficient_groups)} insufficient groups. "
+        f"Example group={group_fields}, numeric_value_count={example['numeric_value_count']}, "
+        f"ddof={example['ddof']}."
+    )
 
 
 def validate_mean_completeness(
@@ -1112,6 +1229,32 @@ def normalize_mean_completeness_spec(
         group_by=group_by,
         on_missing=on_missing,
         write_missing_report=write_missing_report,
+    )
+
+
+def normalize_mean_std_spec(
+    value: Any,
+    *,
+    agg: str,
+    label: str,
+) -> MeanStdSpec | None:
+    """Normalize optional std output for mean-aggregate views."""
+    if value is None:
+        return None
+
+    payload = require_mapping(value, label=label)
+    enabled = require_bool(payload.get("enabled", False), label=f"{label}.enabled")
+    if not enabled:
+        return None
+    if agg != "mean":
+        raise AnalysisError(f"{label}.enabled can only be used when agg is 'mean', got '{agg}'.")
+
+    return MeanStdSpec(
+        ddof=require_nonnegative_int(payload.get("ddof", 1), label=f"{label}.ddof"),
+        std_round_digits=require_nonnegative_int(
+            payload.get("std_round_digits"),
+            label=f"{label}.std_round_digits",
+        ),
     )
 
 
@@ -1718,6 +1861,15 @@ def require_bool(value: Any, *, label: str) -> bool:
     if not isinstance(value, bool):
         raise AnalysisError(f"Expected '{label}' to be a boolean, got {type(value).__name__}.")
     return value
+
+
+def require_nonnegative_int(value: Any, *, label: str) -> int:
+    """Require a non-negative integer value."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise AnalysisError(f"Expected '{label}' to be a non-negative integer.")
+    if value < 0:
+        raise AnalysisError(f"Expected '{label}' to be a non-negative integer, got {value}.")
+    return int(value)
 
 
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:

@@ -1,21 +1,21 @@
-style_name: diginetica_ptscem_randomnz_clean_sample5_mean_targets
+style_name: diginetica_ptscem_mlp_compare_sample5_mean_targets
 
 output_format: png
 
 title:
-  template: "Diginetica | mean targets 11103 / 39588 / 5334 / 5418 / 14514 | Clean / Random-NZ / CEM"
+  template: "Diginetica | mean targets 11103 / 39588 / 5334 / 5418 / 14514 | Clean / randomNZ / ptscem / ptsMlpCem"
   align: center
   font_size: 12
   color: black
 
 figure:
-  width: 14.5
-  height: 5.8
+  width: 15.5
+  height: 6.8
   dpi: 220
   background_color: white
 
 table:
-  font_size: 11
+  font_size: 10
   round_digits: 6
   signed_percent_round_digits: 3
   text_color: black
@@ -36,8 +36,9 @@ table:
 
     attack_method:
       clean: Clean
-      random_nonzero_when_possible: Random-NZ
-      cem: CEM
+      random_nonzero_when_possible: randomNZ
+      cem: ptscem
+      pts_continuous_cem: ptsMlpCem
 
     victim_model:
       miasrec: MiaSRec
@@ -63,11 +64,12 @@ table:
       - clean
       - random_nonzero_when_possible
       - cem
+      - pts_continuous_cem
 
   best_value_bolding:
     compare_along: rows
     mode: max
-    underline_second_best: false
+    underline_second_best: true
     partition_by_levels:
       - victim_model
     column_filters:

@@ -110,6 +110,7 @@ class TableSpec:
     scope_colors: dict[str, dict[str, str]]
     best_value_bolding: BestValueBoldingSpec | None
     top_level_group_separators: bool
+    stub_column_width_weight: float
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,13 @@ class DataCellPresentation:
 
     display_modes: list[list[str]]
     signed_percent_scales: list[list[SignedPercentHeatmapScale | None]]
+
+
+@dataclass(frozen=True)
+class MeanStdDisplaySpec:
+    """Display settings for optional mean-plus-std table cells."""
+
+    std_round_digits: int
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -291,6 +299,10 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
             table_payload.get("top_level_group_separators", False),
             label="table.top_level_group_separators",
         ),
+        stub_column_width_weight=require_positive_float(
+            table_payload.get("stub_column_width_weight", STUB_COLUMN_WIDTH_WEIGHT),
+            label="table.stub_column_width_weight",
+        ),
     )
 
     return RenderSpec(
@@ -311,6 +323,8 @@ def render_png(
     title_text: str,
     render_spec: RenderSpec,
     output_path: Path,
+    std_dataframe: pd.DataFrame | None = None,
+    mean_std_display: MeanStdDisplaySpec | None = None,
 ) -> None:
     """Render one report table into a PNG image."""
     validate_display_alias_targets(
@@ -329,6 +343,8 @@ def render_png(
         value_alias=render_spec.table.value_alias,
         table_structure=table_structure,
         data_cell_presentation=data_cell_presentation,
+        std_dataframe=std_dataframe,
+        mean_std_display=mean_std_display,
     )
     ranked_value_highlights = resolve_ranked_value_highlights(
         dataframe=dataframe,
@@ -436,6 +452,69 @@ def validate_bundle_dir(bundle_dir: Path) -> None:
     require_file(bundle_dir / "meta.json", label="bundle metadata")
 
 
+def resolve_mean_std_display_spec(meta_payload: Mapping[str, Any]) -> MeanStdDisplaySpec | None:
+    """Read optional mean/std display metadata from one view bundle."""
+    raw_config = meta_payload.get("mean_std")
+    if not isinstance(raw_config, Mapping):
+        return None
+    raw_enabled = raw_config.get("enabled")
+    if raw_enabled is not None and not bool(raw_enabled):
+        return None
+
+    return MeanStdDisplaySpec(
+        std_round_digits=require_nonnegative_int(
+            raw_config.get("std_round_digits"),
+            label="meta.json mean_std.std_round_digits",
+        ),
+    )
+
+
+def load_mean_std_table(
+    *,
+    bundle_dir: Path,
+    meta_payload: Mapping[str, Any],
+    expected_table_structure: TableStructure,
+) -> tuple[pd.DataFrame, TableStructure]:
+    """Load and validate the companion table_std.csv for mean/std display."""
+    std_table_path = bundle_dir / "table_std.csv"
+    require_file(std_table_path, label="bundle std table")
+    std_dataframe = load_table_csv(std_table_path)
+    row_column_names = extract_identifier_column_names(
+        meta_payload=meta_payload,
+        dataframe=std_dataframe,
+    )
+    std_table_structure = extract_table_structure(
+        meta_payload=meta_payload,
+        dataframe=std_dataframe,
+        row_column_names=row_column_names,
+    )
+    validate_mean_std_table_alignment(
+        dataframe=None,
+        std_dataframe=std_dataframe,
+        table_structure=expected_table_structure,
+        std_table_structure=std_table_structure,
+    )
+    return std_dataframe, std_table_structure
+
+
+def validate_mean_std_table_alignment(
+    *,
+    dataframe: pd.DataFrame | None,
+    std_dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    std_table_structure: TableStructure,
+) -> None:
+    """Require table_std.csv to share the rendered table structure."""
+    if std_table_structure != table_structure:
+        raise AnalysisError("table_std.csv structure does not match table.csv structure.")
+    if dataframe is not None:
+        validate_optional_mean_std_display(
+            dataframe=dataframe,
+            std_dataframe=std_dataframe,
+            mean_std_display=MeanStdDisplaySpec(std_round_digits=0),
+        )
+
+
 def render_bundle(*, bundle_dir: Path, render_spec: RenderSpec) -> Path:
     """Render exactly one bundle directory using the shared rendering path."""
     try:
@@ -453,11 +532,32 @@ def render_bundle(*, bundle_dir: Path, render_spec: RenderSpec) -> Path:
             dataframe=table_dataframe,
             row_column_names=row_column_names,
         )
+        mean_std_display = resolve_mean_std_display_spec(meta_payload)
+        std_dataframe: pd.DataFrame | None = None
+        std_table_structure: TableStructure | None = None
+        if mean_std_display is not None:
+            std_dataframe, std_table_structure = load_mean_std_table(
+                bundle_dir=bundle_dir,
+                meta_payload=meta_payload,
+                expected_table_structure=table_structure,
+            )
         table_dataframe, table_structure = apply_dimension_value_orders(
             dataframe=table_dataframe,
             table_structure=table_structure,
             dimension_value_orders=render_spec.table.dimension_value_orders,
         )
+        if std_dataframe is not None and std_table_structure is not None:
+            std_dataframe, std_table_structure = apply_dimension_value_orders(
+                dataframe=std_dataframe,
+                table_structure=std_table_structure,
+                dimension_value_orders=render_spec.table.dimension_value_orders,
+            )
+            validate_mean_std_table_alignment(
+                dataframe=table_dataframe,
+                std_dataframe=std_dataframe,
+                table_structure=table_structure,
+                std_table_structure=std_table_structure,
+            )
         data_cell_presentation = build_data_cell_presentation(
             dataframe=table_dataframe,
             table_structure=table_structure,
@@ -473,6 +573,8 @@ def render_bundle(*, bundle_dir: Path, render_spec: RenderSpec) -> Path:
             title_text=title_text,
             render_spec=render_spec,
             output_path=output_path,
+            std_dataframe=std_dataframe,
+            mean_std_display=mean_std_display,
         )
         return output_path
     except AnalysisError as exc:
@@ -500,7 +602,7 @@ def draw_structured_table(
     if total_row_count <= 0:
         raise AnalysisError("Cannot render an empty table structure.")
 
-    column_width_weights = ([STUB_COLUMN_WIDTH_WEIGHT] * stub_column_count) + (
+    column_width_weights = ([render_spec.table.stub_column_width_weight] * stub_column_count) + (
         [LEAF_COLUMN_WIDTH_WEIGHT] * leaf_column_count
     )
     column_boundaries = build_boundaries(column_width_weights)
@@ -1015,6 +1117,8 @@ def format_dataframe_for_display(
     table_structure: TableStructure,
     data_cell_presentation: DataCellPresentation,
     signed_percent_round_digits: int | None = None,
+    std_dataframe: pd.DataFrame | None = None,
+    mean_std_display: MeanStdDisplaySpec | None = None,
 ) -> pd.DataFrame:
     """Convert a dataframe into display strings for slide rendering."""
     validate_value_alias_columns(dataframe=dataframe, value_alias=value_alias)
@@ -1022,6 +1126,11 @@ def format_dataframe_for_display(
         dataframe=dataframe,
         table_structure=table_structure,
         data_cell_presentation=data_cell_presentation,
+    )
+    validate_optional_mean_std_display(
+        dataframe=dataframe,
+        std_dataframe=std_dataframe,
+        mean_std_display=mean_std_display,
     )
 
     formatted_columns: dict[str, pd.Series] = {}
@@ -1051,11 +1160,17 @@ def format_dataframe_for_display(
             [
                 format_cell_value(
                     dataframe.iloc[row_index][normalized_column_name],
+                    std_value=(
+                        None
+                        if std_dataframe is None
+                        else std_dataframe.iloc[row_index][normalized_column_name]
+                    ),
                     is_identifier_column=False,
                     round_digits=round_digits,
                     signed_percent_round_digits=signed_percent_round_digits,
                     value_alias=column_value_alias,
                     display_mode=data_cell_presentation.display_modes[row_index][leaf_column_index],
+                    mean_std_display=mean_std_display,
                 )
                 for row_index in range(len(dataframe))
             ],
@@ -1095,6 +1210,25 @@ def validate_data_cell_presentation(
                 f"count at row {row_index}."
             )
  
+
+def validate_optional_mean_std_display(
+    *,
+    dataframe: pd.DataFrame,
+    std_dataframe: pd.DataFrame | None,
+    mean_std_display: MeanStdDisplaySpec | None,
+) -> None:
+    """Require std display inputs to be present and shape-compatible together."""
+    if mean_std_display is None:
+        if std_dataframe is not None:
+            raise AnalysisError("std_dataframe was provided but mean_std display is disabled.")
+        return
+    if std_dataframe is None:
+        raise AnalysisError("mean_std display is enabled but std_dataframe is missing.")
+    if list(std_dataframe.columns) != list(dataframe.columns):
+        raise AnalysisError("table_std.csv columns do not match table.csv columns.")
+    if len(std_dataframe) != len(dataframe):
+        raise AnalysisError("table_std.csv row count does not match table.csv row count.")
+
 
 def build_data_cell_presentation(
     *,
@@ -1524,6 +1658,8 @@ def format_cell_value(
     value_alias: Mapping[str, str],
     display_mode: str,
     signed_percent_round_digits: int | None = None,
+    std_value: Any | None = None,
+    mean_std_display: MeanStdDisplaySpec | None = None,
 ) -> str:
     """Format one cell value for display."""
     if pd.isna(value):
@@ -1553,7 +1689,38 @@ def format_cell_value(
     else:
         formatted_value = str(normalized_value)
 
-    return value_alias.get(raw_lookup_key, value_alias.get(formatted_value, formatted_value))
+    displayed_value = value_alias.get(raw_lookup_key, value_alias.get(formatted_value, formatted_value))
+    if is_identifier_column or mean_std_display is None:
+        return displayed_value
+    formatted_std = format_std_cell_value(
+        std_value,
+        display_mode=display_mode,
+        mean_std_display=mean_std_display,
+    )
+    if formatted_std is None:
+        return displayed_value
+    return f"{displayed_value}\u00b1{formatted_std}"
+
+
+def format_std_cell_value(
+    value: Any,
+    *,
+    display_mode: str,
+    mean_std_display: MeanStdDisplaySpec,
+) -> str | None:
+    """Format one companion standard-deviation value for display."""
+    if value is None or pd.isna(value):
+        return None
+    normalized_value = normalize_scalar(value)
+    if isinstance(normalized_value, bool) or not isinstance(normalized_value, Real):
+        return None
+
+    numeric_value = abs(float(normalized_value))
+    if are_close(numeric_value, 0.0):
+        numeric_value = 0.0
+    if display_mode == SIGNED_PERCENT_VALUE_DISPLAY_MODE:
+        return f"{numeric_value:.{mean_std_display.std_round_digits}f}%"
+    return f"{numeric_value:.{mean_std_display.std_round_digits}f}"
 
 
 def validate_display_mode(display_mode: str) -> None:

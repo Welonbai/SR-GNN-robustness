@@ -1,0 +1,7 @@
+comparison_id: diginetica_ptscem_mlp_compare_sample5
+
+runs:
+  - diginetica_clean_ptscem_mlp_compare_sample5
+  - diginetica_randomnz_ptscem_mlp_compare_sample5
+  - diginetica_ptscem_ptscem_mlp_compare_sample5
+  - diginetica_ptscem_mlp_ptscem_mlp_compare_sample5

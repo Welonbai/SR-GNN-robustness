@@ -1,12 +1,12 @@
 name: mean_targets
 
-input: results/comparisons/diginetica_ptscem_randomnz_clean_sample5/merged_long_table.csv
-output: results/comparisons/diginetica_ptscem_randomnz_clean_sample5/mean_targets
+input: results/comparisons/diginetica_ptscem_mlp_compare_sample5/merged_long_table.csv
+output: results/comparisons/diginetica_ptscem_mlp_compare_sample5/mean_targets
 
 filters:
   target_item: [11103, 39588, 5334, 5418, 14514]
   victim_model: [srgnn, miasrec, tron]
-  attack_method: [clean, random_nonzero_when_possible, cem]
+  attack_method: [clean, random_nonzero_when_possible, cem, pts_continuous_cem]
   poison_model: srgnn
   target_type: popular
   attack_size: 0.01

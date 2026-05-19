@@ -23,12 +23,14 @@ from analysis.pipeline.comparison_stats_builder import (
 )
 from analysis.pipeline.report_table_renderer import (
     BestValueBoldingSpec,
+    MeanStdDisplaySpec,
     TableStructure,
     apply_dimension_value_orders,
     build_data_cell_presentation,
     draw_cell_block,
     format_dataframe_for_display,
     parse_render_spec,
+    render_bundle,
     resolve_data_cell_fill_color,
     resolve_ranked_value_highlights,
     resolve_title,
@@ -272,6 +274,8 @@ def _mean_completeness_view_payload(
     input_csv: Path,
     output_dir: Path,
     mean_completeness: dict[str, object] | None,
+    mean_std: dict[str, object] | None = None,
+    agg: str = "mean",
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "name": "mean_completeness_test_view",
@@ -288,12 +292,14 @@ def _mean_completeness_view_payload(
         "rows": ["victim_model", "attack_method"],
         "cols": ["metric_scope", "metric_name", "k"],
         "value_col": "value",
-        "agg": "mean",
+        "agg": agg,
         "auto_context": True,
         "require_unique_cells": False,
     }
     if mean_completeness is not None:
         payload["mean_completeness"] = mean_completeness
+    if mean_std is not None:
+        payload["mean_std"] = mean_std
     return payload
 
 
@@ -730,6 +736,115 @@ def test_view_table_builder_mean_completeness_passes_for_complete_targets() -> N
     assert (bundle_dirs[0] / "mean_completeness_missing_report.csv").exists() is False
     assert meta["mean_completeness"]["complete_over"] == "target_item"
     assert meta["mean_completeness"]["expected_values"] == [11103, 39588]
+
+
+def test_view_table_builder_mean_std_writes_companion_table_and_metadata() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=_mean_completeness_rows(targets=[11103, 39588], victims=["srgnn"], methods=["pts_cem"]),
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_std"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            _mean_completeness_view_payload(
+                input_csv=input_csv,
+                output_dir=output_bundle_dir,
+                mean_completeness=None,
+                mean_std={"enabled": True, "ddof": 1, "std_round_digits": 4},
+            ),
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_std.yaml",
+        )
+
+        bundle_dirs = build_view_bundles(view_spec)
+        table = pd.read_csv(bundle_dirs[0] / "table.csv")
+        std_table = pd.read_csv(bundle_dirs[0] / "table_std.csv")
+        meta = _load_json(bundle_dirs[0] / "meta.json")
+
+    assert table["targeted | recall | 10"].tolist() == [pytest.approx(45.6)]
+    assert std_table["targeted | recall | 10"].tolist() == [pytest.approx(60.1040764)]
+    assert list(std_table.columns) == list(table.columns)
+    assert meta["mean_std"] == {
+        "ddof": 1,
+        "enabled": True,
+        "std_round_digits": 4,
+        "table_std_path": str((bundle_dirs[0] / "table_std.csv").relative_to(REPO_ROOT)).replace("\\", "/"),
+    }
+
+
+def test_view_table_builder_mean_std_rejects_non_mean_aggregation() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=_mean_completeness_rows(targets=[11103, 39588]),
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_std_non_mean"
+        created_paths.append(output_bundle_dir)
+
+        with pytest.raises(ViewAnalysisError) as exc_info:
+            parse_view_spec(
+                _mean_completeness_view_payload(
+                    input_csv=input_csv,
+                    output_dir=output_bundle_dir,
+                    mean_completeness=None,
+                    mean_std={"enabled": True, "ddof": 1, "std_round_digits": 4},
+                    agg="median",
+                ),
+                source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_std_non_mean.yaml",
+            )
+
+    assert "agg is 'mean'" in str(exc_info.value)
+
+
+def test_view_table_builder_mean_std_rejects_invalid_round_digits() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=_mean_completeness_rows(targets=[11103, 39588]),
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_std_bad_digits"
+        created_paths.append(output_bundle_dir)
+
+        with pytest.raises(ViewAnalysisError) as exc_info:
+            parse_view_spec(
+                _mean_completeness_view_payload(
+                    input_csv=input_csv,
+                    output_dir=output_bundle_dir,
+                    mean_completeness=None,
+                    mean_std={"enabled": True, "ddof": 1, "std_round_digits": -1},
+                ),
+                source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_std_bad_digits.yaml",
+            )
+
+    assert "mean_std.std_round_digits" in str(exc_info.value)
+
+
+def test_view_table_builder_mean_std_rejects_single_sample_group() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        input_csv = _write_mean_completeness_input(
+            token=token,
+            rows=_mean_completeness_rows(targets=[11103], victims=["srgnn"], methods=["pts_cem"]),
+            created_paths=created_paths,
+        )
+        output_bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_mean_std_single"
+        created_paths.append(output_bundle_dir)
+        view_spec = parse_view_spec(
+            _mean_completeness_view_payload(
+                input_csv=input_csv,
+                output_dir=output_bundle_dir,
+                mean_completeness=None,
+                mean_std={"enabled": True, "ddof": 1, "std_round_digits": 4},
+            ),
+            source_spec_path=REPO_ROOT / "analysis" / "tests" / "phase8_mean_std_single.yaml",
+        )
+
+        with pytest.raises(ViewAnalysisError) as exc_info:
+            build_view_bundles(view_spec)
+
+    assert "more numeric values than ddof" in str(exc_info.value)
 
 
 def test_view_table_builder_mean_completeness_errors_and_writes_missing_report() -> None:
@@ -1325,6 +1440,155 @@ def test_renderer_formats_gt_relative_cells_as_signed_percent_and_colors_by_sign
     assert negative_color is not None
     assert positive_color != negative_color
     assert targeted_color is None
+
+
+def test_renderer_formats_absolute_mean_std_cells_with_separate_std_digits() -> None:
+    dataframe = pd.DataFrame([{"attack_method": "pts_cem", "targeted": 0.123456}])
+    std_dataframe = pd.DataFrame([{"attack_method": "pts_cem", "targeted": 0.012345}])
+    table_structure = TableStructure(
+        row_levels=["attack_method"],
+        col_levels=["metric_scope"],
+        row_tuples=[("pts_cem",)],
+        column_tuples=[("targeted",)],
+        row_column_names=["attack_method"],
+        value_column_names=["targeted"],
+    )
+    data_cell_presentation = build_data_cell_presentation(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        meta_payload={"context": {}, "effective_filters": {}, "split_values": {}},
+    )
+
+    display_dataframe = format_dataframe_for_display(
+        dataframe,
+        identifier_columns={"attack_method"},
+        round_digits=6,
+        value_alias={},
+        table_structure=table_structure,
+        data_cell_presentation=data_cell_presentation,
+        std_dataframe=std_dataframe,
+        mean_std_display=MeanStdDisplaySpec(std_round_digits=3),
+    )
+
+    assert display_dataframe["targeted"].tolist() == ["0.123456\u00b10.012"]
+
+
+def test_renderer_formats_signed_percent_mean_std_cells_with_std_digits() -> None:
+    dataframe = pd.DataFrame(
+        [
+            {"attack_method": "clean", "ground_truth": 0.35},
+            {"attack_method": "pts_cem", "ground_truth": 12.34567},
+        ]
+    )
+    std_dataframe = pd.DataFrame(
+        [
+            {"attack_method": "clean", "ground_truth": 0.01},
+            {"attack_method": "pts_cem", "ground_truth": 1.23456},
+        ]
+    )
+    table_structure = TableStructure(
+        row_levels=["attack_method"],
+        col_levels=["metric_scope"],
+        row_tuples=[("clean",), ("pts_cem",)],
+        column_tuples=[("ground_truth",)],
+        row_column_names=["attack_method"],
+        value_column_names=["ground_truth"],
+    )
+    data_cell_presentation = build_data_cell_presentation(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        meta_payload={
+            "ground_truth_relative_to_clean": {
+                "enabled": True,
+                "baseline_attack_method": "clean",
+                "ignore_pairing_columns": [],
+            },
+            "context": {},
+            "effective_filters": {},
+            "split_values": {},
+        },
+    )
+
+    display_dataframe = format_dataframe_for_display(
+        dataframe,
+        identifier_columns={"attack_method"},
+        round_digits=6,
+        signed_percent_round_digits=2,
+        value_alias={},
+        table_structure=table_structure,
+        data_cell_presentation=data_cell_presentation,
+        std_dataframe=std_dataframe,
+        mean_std_display=MeanStdDisplaySpec(std_round_digits=3),
+    )
+
+    assert data_cell_presentation.display_modes == [["absolute"], ["signed_percent"]]
+    assert display_dataframe["ground_truth"].tolist() == [
+        "0.350000\u00b10.010",
+        "+12.35%\u00b11.235%",
+    ]
+
+
+def test_renderer_rejects_mean_std_metadata_without_std_table() -> None:
+    with _phase8_results_root() as (token, created_paths):
+        bundle_dir = RESULTS_ROOT / "views" / f"phase8_{token}_missing_std_table"
+        created_paths.append(bundle_dir)
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame([{"attack_method": "pts_cem", "targeted": 0.1}]).to_csv(
+            bundle_dir / "table.csv",
+            index=False,
+        )
+        _write_json(
+            bundle_dir / "meta.json",
+            {
+                "rows": ["attack_method"],
+                "row_levels": ["attack_method"],
+                "col_levels": ["metric_scope"],
+                "row_tuples": [["pts_cem"]],
+                "column_tuples": [["targeted"]],
+                "mean_std": {"enabled": True, "std_round_digits": 3},
+                "context": {},
+                "effective_filters": {},
+                "split_values": {},
+            },
+        )
+        render_spec = parse_render_spec(
+            {
+                "style_name": "phase8_missing_std_table",
+                "output_format": "png",
+                "title": {
+                    "template": "Missing std",
+                    "align": "center",
+                    "font_size": 12,
+                    "color": "black",
+                },
+                "figure": {
+                    "width": 4,
+                    "height": 3,
+                    "dpi": 100,
+                    "background_color": "white",
+                },
+                "table": {
+                    "font_size": 10,
+                    "round_digits": 3,
+                    "signed_percent_round_digits": 2,
+                    "text_color": "black",
+                    "show_grid": True,
+                    "auto_shrink": False,
+                    "wrap_text": False,
+                    "cell_align": "center",
+                    "display_alias": {},
+                    "value_alias": {},
+                    "dimension_value_orders": {},
+                    "scope_colors": {},
+                    "top_level_group_separators": False,
+                },
+            }
+        )
+
+        with pytest.raises(Exception) as exc_info:
+            render_bundle(bundle_dir=bundle_dir, render_spec=render_spec)
+
+    assert "bundle std table" in str(exc_info.value)
 
 
 def test_renderer_scales_gt_heatmap_separately_for_positive_and_negative_values_within_row_group() -> None:
