@@ -454,8 +454,8 @@ def _pts_construction_identity_payload(config: Config) -> Any:
                     "parameterization": direct_action.get("parameterization"),
                     "length_feature": direct_action.get("length_feature"),
                     "cem_init": {
-                        "mode": "zero_mean_gaussian",
-                        "initial_std": direct_action.get("initial_std"),
+                        "mode": "standard_normal",
+                        "parameter_space": "standardized_policy_parameter_space",
                     },
                 }
         cem = payload.get("cem")
@@ -481,7 +481,6 @@ def _pts_construction_identity_payload(config: Config) -> Any:
                     cem["update"] = {
                         "mode": update.get("mode"),
                         "elite_min_std": update.get("elite_min_std"),
-                        "elite_std_scale": update.get("elite_std_scale"),
                     }
                 cem["init"] = None
                 cem.pop("resampling", None)

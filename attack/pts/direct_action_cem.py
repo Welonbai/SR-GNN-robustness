@@ -42,9 +42,7 @@ DIRECT_ACTION_MLP_CEM_METHOD = "direct_action_mlp_cem"
 @dataclass(frozen=True)
 class PTSDirectActionMLPCEMConfig:
     length_feature_mode: str = DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE_M
-    initial_std: float = 1.0
     elite_min_std: float = 0.25
-    elite_std_scale: float = 1.0
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -52,15 +50,9 @@ class PTSDirectActionMLPCEMConfig:
             "length_feature_mode",
             normalize_direct_action_length_feature_mode(self.length_feature_mode),
         )
-        if float(self.initial_std) <= 0.0:
-            raise ValueError("direct-action CEM initial_std must be positive.")
         if float(self.elite_min_std) <= 0.0:
             raise ValueError("direct-action CEM elite_min_std must be positive.")
-        if float(self.elite_std_scale) < 0.0:
-            raise ValueError("direct-action CEM elite_std_scale must be non-negative.")
-        object.__setattr__(self, "initial_std", float(self.initial_std))
         object.__setattr__(self, "elite_min_std", float(self.elite_min_std))
-        object.__setattr__(self, "elite_std_scale", float(self.elite_std_scale))
 
 
 @dataclass(frozen=True)
@@ -110,10 +102,7 @@ class PTSDirectActionMLPCEMTrainer:
             prefix_rng_tag=self.shared_prefix_rng_tag,
         )
         current_mean = [0.0 for _ in self.parameter_names]
-        current_std = [
-            float(self.direct_action_config.initial_std)
-            for _ in self.parameter_names
-        ]
+        current_std = [1.0 for _ in self.parameter_names]
         context_stats_payload = context_stats.to_dict()
         policy_history = [
             self._distribution_payload(
@@ -293,15 +282,15 @@ class PTSDirectActionMLPCEMTrainer:
         std: Sequence[float],
     ) -> list[_DirectActionCandidateSampleSpec]:
         sample_origin = (
-            "direct_action_initial_zero_mean_gaussian"
+            "direct_action_initial_standard_normal"
             if int(iteration) == 0
-            else "direct_action_elite_centered_gaussian"
+            else "direct_action_elite_centered_empirical_gaussian"
         )
         metadata = (
             {
                 "cem_init": {
-                    "mode": "zero_mean_gaussian",
-                    "initial_std": float(self.direct_action_config.initial_std),
+                    "mode": "standard_normal",
+                    "parameter_space": "standardized_policy_parameter_space",
                 }
             }
             if int(iteration) == 0
@@ -350,7 +339,7 @@ class PTSDirectActionMLPCEMTrainer:
             ]
         resample_std = [
             max(
-                float(elite_std[index]) * float(self.direct_action_config.elite_std_scale),
+                float(elite_std[index]),
                 float(self.direct_action_config.elite_min_std),
             )
             for index in range(len(self.parameter_names))
@@ -411,13 +400,12 @@ class PTSDirectActionMLPCEMTrainer:
             ).to_dict(),
             "length_feature": self.direct_action_config.length_feature_mode,
             "cem_init": {
-                "mode": "zero_mean_gaussian",
-                "initial_std": float(self.direct_action_config.initial_std),
+                "mode": "standard_normal",
+                "parameter_space": "standardized_policy_parameter_space",
             },
-            "elite_update": {
-                "mode": "elite_centered_gaussian",
-                "elite_min_std": float(self.direct_action_config.elite_min_std),
-                "elite_std_scale": float(self.direct_action_config.elite_std_scale),
+            "cem_update": {
+                "mode": "elite_centered_empirical_gaussian",
+                "anti_collapse_min_std": float(self.direct_action_config.elite_min_std),
                 "std_ddof": 0,
             },
             "context_stats": context_stats.to_dict(),
@@ -452,6 +440,15 @@ class PTSDirectActionMLPCEMTrainer:
             "theta": [float(value) for value in vector],
             "direct_action_policy_payload": policy.to_dict(),
             "length_feature": self.direct_action_config.length_feature_mode,
+            "cem_init": {
+                "mode": "standard_normal",
+                "parameter_space": "standardized_policy_parameter_space",
+            },
+            "cem_update": {
+                "mode": "elite_centered_empirical_gaussian",
+                "anti_collapse_min_std": float(self.direct_action_config.elite_min_std),
+                "std_ddof": 0,
+            },
             "direct_action_context_stats": context_stats.to_dict(),
             "direct_action_action_summary": dict(
                 construction_summary.get("direct_action", {})

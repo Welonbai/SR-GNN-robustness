@@ -56,7 +56,6 @@ attack:
     direct_action_policy:
       parameterization: direct_action_mlp_h2
       length_feature: z_score
-      initial_std: 1.0
 
     cem:
       iterations: 3
@@ -66,9 +65,8 @@ attack:
         type: gaussian
         concentration_scale: 20.0
       update:
-        mode: elite_centered_gaussian
+        mode: elite_centered_empirical_gaussian
         elite_min_std: 0.25
-        elite_std_scale: 1.0
       seed_source: position_opt_seed
       candidate_seed_stride: 1000
       save_top_k_candidates: 3

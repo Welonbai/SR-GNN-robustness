@@ -328,6 +328,7 @@ def _candidate_sampling_payload(candidate: PTSCEMCandidateResult) -> dict[str, A
         "policy_vector",
         "length_feature",
         "cem_init",
+        "cem_update",
         "direct_action_policy_payload",
         "direct_action_context_stats",
         "direct_action_action_summary",

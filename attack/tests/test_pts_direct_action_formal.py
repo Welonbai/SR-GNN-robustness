@@ -10,13 +10,17 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from attack.common.artifact_io import save_fake_sessions
 from attack.common.config import load_config
+from attack.pipeline.runs.run_pts_construction_cem import (
+    build_pts_cem_shared_cache_identity,
+)
 from attack.pipeline.runs.run_pts_construction_cem import (
     _build_direct_action_mlp_cem_config,
     _build_pts_cem_config_from_config,
     _validate_pts_construction_run_config,
 )
-from attack.pts.cem import PTSCEMEvaluationResult
+from attack.pts.cem import PTSCEMCandidateResult, PTSCEMEvaluationResult
 from attack.pts.direct_action_cem import (
     PTSDirectActionMLPCEMTrainer,
     direct_action_elite_count,
@@ -55,9 +59,32 @@ def test_direct_action_smoke_config_loads_and_records_cem_init() -> None:
 
     direct_config = _build_direct_action_mlp_cem_config(pts_config)
     assert direct_config.length_feature_mode == DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE_M
-    assert direct_config.initial_std == pytest.approx(1.0)
+    assert not hasattr(pts_config.direct_action_policy, "initial_std")
+    assert not hasattr(direct_config, "initial_std")
     assert direct_config.elite_min_std == pytest.approx(0.25)
-    assert direct_config.elite_std_scale == pytest.approx(1.0)
+    assert not hasattr(direct_config, "elite_std_scale")
+    assert not hasattr(pts_config.cem.update, "elite_std_scale")
+
+
+def test_direct_action_old_exposed_std_fields_are_rejected(tmp_path: Path) -> None:
+    text = SMOKE_CONFIG.read_text(encoding="utf-8")
+    old_policy_config = text.replace(
+        "      length_feature: z_score\n",
+        "      length_feature: z_score\n      initial_std: 1.0\n",
+    )
+    old_policy_path = tmp_path / "old_policy.yaml"
+    old_policy_path.write_text(old_policy_config, encoding="utf-8")
+    with pytest.raises(TypeError, match="initial_std"):
+        load_config(old_policy_path)
+
+    old_update_config = text.replace(
+        "        elite_min_std: 0.25\n",
+        "        elite_min_std: 0.25\n        elite_std_scale: 1.0\n",
+    )
+    old_update_path = tmp_path / "old_update.yaml"
+    old_update_path.write_text(old_update_config, encoding="utf-8")
+    with pytest.raises(TypeError, match="elite_std_scale"):
+        load_config(old_update_path)
 
 
 def test_direct_action_contexts_are_target_independent_and_z_stats() -> None:
@@ -243,12 +270,101 @@ def test_direct_action_trainer_uses_reward_elites_and_records_update_metadata(
     assert result.iteration_results[0].elite_candidate_keys == ["iter0_cand0", "iter0_cand1"]
     policy_after = result.iteration_results[0].policy_after
     assert policy_after["elite_rewards"] == [10.0, 9.0]
+    assert policy_after["cem_init"] == {
+        "mode": "standard_normal",
+        "parameter_space": "standardized_policy_parameter_space",
+    }
+    assert policy_after["cem_update"]["mode"] == "elite_centered_empirical_gaussian"
+    assert policy_after["cem_update"]["anti_collapse_min_std"] == pytest.approx(0.25)
+    assert not _contains_key(policy_after, "initial_std")
+    assert not _contains_key(policy_after, "elite_std_scale")
     assert len(policy_after["elite_mean"]) == len(DIRECT_ACTION_MLP_H2_PARAMETER_NAMES)
     assert len(policy_after["elite_std"]) == len(DIRECT_ACTION_MLP_H2_PARAMETER_NAMES)
     assert len(policy_after["resample_std"]) == len(DIRECT_ACTION_MLP_H2_PARAMETER_NAMES)
     assert result.best_candidate.candidate_key == "iter1_cand0"
     assert result.best_candidate.sample_metadata["direct_action_action_summary"]
     assert result.best_candidate.policy.to_dict()["parameterization"] == DIRECT_ACTION_POLICY_MLP_H2
+    assert not _contains_key(result.best_candidate.sample_metadata, "initial_std")
+    assert not _contains_key(result.best_candidate.sample_metadata, "elite_std_scale")
+
+
+def test_direct_action_iter0_standard_normal_sampling_is_deterministic() -> None:
+    config = load_config(SMOKE_CONFIG)
+    cem_config = _build_pts_cem_config_from_config(config)
+    cem_config = type(cem_config)(
+        iterations=1,
+        population_schedule=[3],
+        elite_ratio=0.25,
+        sampler=cem_config.sampler,
+        update=cem_config.update,
+        init=cem_config.init,
+        resampling=cem_config.resampling,
+        base_seed=777,
+        candidate_seed_stride=cem_config.candidate_seed_stride,
+        save_top_k_candidates=2,
+    )
+    trainer_a = PTSDirectActionMLPCEMTrainer(
+        cem_config=cem_config,
+        direct_action_config=_build_direct_action_mlp_cem_config(
+            config.attack.pts_construction
+        ),
+    )
+    trainer_b = PTSDirectActionMLPCEMTrainer(
+        cem_config=cem_config,
+        direct_action_config=_build_direct_action_mlp_cem_config(
+            config.attack.pts_construction
+        ),
+    )
+
+    plan_a = trainer_a._candidate_sample_plan(
+        iteration=0,
+        population_size=3,
+        mean=[0.0] * 15,
+        std=[1.0] * 15,
+    )
+    plan_b = trainer_b._candidate_sample_plan(
+        iteration=0,
+        population_size=3,
+        mean=[0.0] * 15,
+        std=[1.0] * 15,
+    )
+
+    assert len(plan_a) == 3
+    assert [item.vector for item in plan_a] == [item.vector for item in plan_b]
+    assert all(len(item.vector) == 15 for item in plan_a)
+    assert all(
+        item.sample_metadata["cem_init"]["mode"] == "standard_normal"
+        for item in plan_a
+    )
+    assert not any(_contains_key(item.sample_metadata, "initial_std") for item in plan_a)
+
+
+def test_direct_action_elite_update_uses_empirical_std_without_scale() -> None:
+    config = load_config(SMOKE_CONFIG)
+    cem_config = _build_pts_cem_config_from_config(config)
+    trainer = PTSDirectActionMLPCEMTrainer(
+        cem_config=cem_config,
+        direct_action_config=_build_direct_action_mlp_cem_config(
+            config.attack.pts_construction
+        ),
+    )
+    left = [0.0] * 15
+    right = [0.0] * 15
+    right[0] = 0.2
+    right[1] = 1.0
+    update = trainer._updated_distribution_from_elites(
+        elites=[
+            _candidate_with_policy(0, left),
+            _candidate_with_policy(1, right),
+        ]
+    )
+
+    assert update.elite_mean[0] == pytest.approx(0.1)
+    assert update.elite_mean[1] == pytest.approx(0.5)
+    assert update.elite_std[0] == pytest.approx(0.1)
+    assert update.elite_std[1] == pytest.approx(0.5)
+    assert update.resample_std[0] == pytest.approx(0.25)
+    assert update.resample_std[1] == pytest.approx(0.5)
 
 
 def test_direct_action_elite_count_floor_and_population_one() -> None:
@@ -257,3 +373,62 @@ def test_direct_action_elite_count_floor_and_population_one() -> None:
     assert direct_action_elite_count(1, 0.25) == 1
     with pytest.raises(ValueError):
         direct_action_elite_count(0, 0.25)
+
+
+def test_direct_action_identity_uses_elite_min_std_not_removed_std_fields(
+    tmp_path: Path,
+) -> None:
+    fake_sessions_path = tmp_path / "fake_sessions.pkl"
+    save_fake_sessions([[1, 2, 3], [4, 5, 6]], fake_sessions_path)
+    base = load_config(SMOKE_CONFIG)
+    changed_path = tmp_path / "changed.yaml"
+    changed_path.write_text(
+        SMOKE_CONFIG.read_text(encoding="utf-8").replace(
+            "        elite_min_std: 0.25",
+            "        elite_min_std: 0.5",
+        ),
+        encoding="utf-8",
+    )
+    changed = load_config(changed_path)
+
+    base_identity = build_pts_cem_shared_cache_identity(
+        base,
+        target_item=5334,
+        fake_sessions_path=fake_sessions_path,
+    )
+    changed_identity = build_pts_cem_shared_cache_identity(
+        changed,
+        target_item=5334,
+        fake_sessions_path=fake_sessions_path,
+    )
+
+    assert base_identity != changed_identity
+    identity_text = repr(base_identity)
+    assert "elite_min_std" in identity_text
+    assert "standard_normal" in identity_text
+    assert "elite_centered_empirical_gaussian" in identity_text
+    assert "initial_std" not in identity_text
+    assert "elite_std_scale" not in identity_text
+
+
+def _candidate_with_policy(candidate_id: int, vector: list[float]) -> PTSCEMCandidateResult:
+    return PTSCEMCandidateResult(
+        iteration=0,
+        candidate_id=int(candidate_id),
+        candidate_seed=100 + int(candidate_id),
+        policy=DirectActionMLPPolicy.from_vector(vector),
+        reward=float(candidate_id),
+        reward_metrics={},
+        evaluator_metadata={},
+        construction_summary={},
+        per_session_records=[],
+        final_sessions=[],
+    )
+
+
+def _contains_key(value: object, key: str) -> bool:
+    if isinstance(value, dict):
+        return key in value or any(_contains_key(item, key) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_key(item, key) for item in value)
+    return False

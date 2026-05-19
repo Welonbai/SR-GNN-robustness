@@ -126,7 +126,9 @@ PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE = "global_best_candidate"
 PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED = "position_opt_seed"
 PTS_CEM_SAMPLER_DIRICHLET = "dirichlet"
 PTS_CEM_SAMPLER_GAUSSIAN = "gaussian"
-PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN = "elite_centered_gaussian"
+PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN = (
+    "elite_centered_empirical_gaussian"
+)
 PTS_DIRECT_ACTION_POLICY_PARAMETERIZATION_MLP_H2 = "direct_action_mlp_h2"
 PTS_DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE = "z_score"
 PTS_CEM_INIT_UNIFORM = "uniform"
@@ -970,14 +972,16 @@ class PTSCEMUpdateRuntimeConfig:
     max_probability: float = 0.90
     min_std: float = 0.25
     elite_min_std: float = 0.25
-    elite_std_scale: float = 1.0
 
     def __post_init__(self) -> None:
         mode = _as_str(self.mode, "attack.pts_construction.cem.update.mode").strip().lower()
-        if mode not in {"standard", PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN}:
+        if mode not in {
+            "standard",
+            PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN,
+        }:
             raise ValueError(
                 "attack.pts_construction.cem.update.mode must be 'standard' or "
-                "'elite_centered_gaussian'."
+                "'elite_centered_empirical_gaussian'."
             )
         smoothing = _as_float(self.smoothing, "attack.pts_construction.cem.update.smoothing")
         if not 0.0 <= smoothing <= 1.0:
@@ -1006,21 +1010,12 @@ class PTSCEMUpdateRuntimeConfig:
             raise ValueError(
                 "attack.pts_construction.cem.update.elite_min_std must be positive."
             )
-        elite_std_scale = _as_float(
-            self.elite_std_scale,
-            "attack.pts_construction.cem.update.elite_std_scale",
-        )
-        if elite_std_scale < 0.0:
-            raise ValueError(
-                "attack.pts_construction.cem.update.elite_std_scale must be non-negative."
-            )
         object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "smoothing", smoothing)
         object.__setattr__(self, "min_probability", min_probability)
         object.__setattr__(self, "max_probability", max_probability)
         object.__setattr__(self, "min_std", min_std)
         object.__setattr__(self, "elite_min_std", elite_min_std)
-        object.__setattr__(self, "elite_std_scale", elite_std_scale)
 
 
 @dataclass(frozen=True)
@@ -1575,7 +1570,6 @@ class PTSContinuousPolicyConfig:
 class PTSDirectActionPolicyConfig:
     parameterization: str = PTS_DIRECT_ACTION_POLICY_PARAMETERIZATION_MLP_H2
     length_feature: str = PTS_DIRECT_ACTION_LENGTH_FEATURE_Z_SCORE
-    initial_std: float = 1.0
 
     def __post_init__(self) -> None:
         parameterization = _as_str(
@@ -1596,18 +1590,8 @@ class PTSDirectActionPolicyConfig:
                 "attack.pts_construction.direct_action_policy.length_feature "
                 "must be 'z_score'."
             )
-        initial_std = _as_float(
-            self.initial_std,
-            "attack.pts_construction.direct_action_policy.initial_std",
-        )
-        if initial_std <= 0.0:
-            raise ValueError(
-                "attack.pts_construction.direct_action_policy.initial_std "
-                "must be positive."
-            )
         object.__setattr__(self, "parameterization", parameterization)
         object.__setattr__(self, "length_feature", "z_score")
-        object.__setattr__(self, "initial_std", initial_std)
 
 
 @dataclass(frozen=True)
@@ -1851,10 +1835,13 @@ class PTSConstructionConfig:
                 raise ValueError(
                     "Direct-action MLP-CEM requires cem.sampler.type='gaussian'."
                 )
-            if self.cem.update.mode != PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN:
+            if (
+                self.cem.update.mode
+                != PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN
+            ):
                 raise ValueError(
                     "Direct-action MLP-CEM requires "
-                    "cem.update.mode='elite_centered_gaussian'."
+                    "cem.update.mode='elite_centered_empirical_gaussian'."
                 )
         if (
             method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1
@@ -3876,7 +3863,7 @@ __all__ = [
     "PTS_CEM_SAMPLER_DIRICHLET",
     "PTS_CEM_SAMPLER_GAUSSIAN",
     "PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED",
-    "PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN",
+    "PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN",
     "PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST",
     "PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST",
     "PTS_CEM_SURROGATE_REWARD_BEST",

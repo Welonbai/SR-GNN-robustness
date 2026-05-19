@@ -509,10 +509,10 @@ def _validate_pts_construction_run_config(config: Config) -> None:
     else:
         if pts_config.cem.sampler.type != "gaussian":
             raise ValueError("Direct-action MLP-CEM requires cem.sampler.type='gaussian'.")
-        if pts_config.cem.update.mode != "elite_centered_gaussian":
+        if pts_config.cem.update.mode != "elite_centered_empirical_gaussian":
             raise ValueError(
                 "Direct-action MLP-CEM requires "
-                "cem.update.mode='elite_centered_gaussian'."
+                "cem.update.mode='elite_centered_empirical_gaussian'."
             )
         _build_direct_action_mlp_cem_config(pts_config)
     if (
@@ -652,9 +652,7 @@ def _build_direct_action_mlp_cem_config(
     policy = pts_config.direct_action_policy
     return PTSDirectActionMLPCEMConfig(
         length_feature_mode=policy.length_feature,
-        initial_std=float(policy.initial_std),
         elite_min_std=float(pts_config.cem.update.elite_min_std),
-        elite_std_scale=float(pts_config.cem.update.elite_std_scale),
     )
 
 
@@ -1105,8 +1103,8 @@ def _direct_action_pts_construction_identity_payload(
             "length_feature": policy.length_feature,
         },
         "cem_init": {
-            "mode": "zero_mean_gaussian",
-            "initial_std": float(policy.initial_std),
+            "mode": "standard_normal",
+            "parameter_space": "standardized_policy_parameter_space",
         },
         "cem": {
             "iterations": int(cem.iterations),
@@ -1123,9 +1121,8 @@ def _direct_action_pts_construction_identity_payload(
                 "type": "gaussian",
             },
             "update": {
-                "mode": "elite_centered_gaussian",
+                "mode": "elite_centered_empirical_gaussian",
                 "elite_min_std": float(cem.update.elite_min_std),
-                "elite_std_scale": float(cem.update.elite_std_scale),
                 "std_ddof": 0,
             },
             "seed_source": cem.seed_source,
@@ -2908,8 +2905,8 @@ def _pts_method_metadata_payload(
                 "parameterization": policy.parameterization,
                 "length_feature": policy.length_feature,
                 "cem_init": {
-                    "mode": "zero_mean_gaussian",
-                    "initial_std": float(policy.initial_std),
+                    "mode": "standard_normal",
+                    "parameter_space": "standardized_policy_parameter_space",
                 },
             },
         }
