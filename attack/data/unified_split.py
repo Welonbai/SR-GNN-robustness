@@ -18,6 +18,11 @@ from attack.data.dataset_specs import resolve_dataset_spec
 
 
 _SECONDS_PER_DAY = 86400
+_YOOCHOOSE_VARIANTS = {
+    "yoochoose": ("full", None),
+    "yoochoose1_64": ("1_64", 1.0 / 64.0),
+    "yoochoose1_4": ("1_4", 1.0 / 4.0),
+}
 
 
 @dataclass(frozen=True)
@@ -54,7 +59,16 @@ def _load_raw_sessions(
     sess_clicks: dict[str, list[tuple[str, int]]] = {}
     sess_date: dict[str, float] = {}
     with raw_path.open("r", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle, delimiter=spec.delimiter)
+        if spec.has_header:
+            reader = csv.DictReader(handle, delimiter=spec.delimiter)
+        else:
+            if not spec.fieldnames:
+                raise ValueError(f"Dataset spec '{spec.name}' must define fieldnames.")
+            reader = csv.DictReader(
+                handle,
+                fieldnames=spec.fieldnames,
+                delimiter=spec.delimiter,
+            )
         for row in reader:
             session_id, item_id, sort_key = spec.extract_session_item(row)
             event_date = spec.parse_event_date(row)
@@ -68,6 +82,17 @@ def _load_raw_sessions(
         ordered = sorted(clicks, key=lambda x: x[1])
         sessions[session_id] = [item for item, _ in ordered]
     return sessions, sess_date
+
+
+def resolve_yoochoose_variant(dataset_name: str) -> tuple[str, float | None]:
+    name = dataset_name.lower()
+    if name not in _YOOCHOOSE_VARIANTS:
+        raise ValueError(f"Dataset '{dataset_name}' is not a Yoochoose variant.")
+    return _YOOCHOOSE_VARIANTS[name]
+
+
+def _is_yoochoose_variant(dataset_name: str) -> bool:
+    return dataset_name.lower() in _YOOCHOOSE_VARIANTS
 
 
 def _filter_sessions(
@@ -155,6 +180,42 @@ def _split_train_valid(
     return train_sub, valid
 
 
+def _expanded_pair_count(sessions: list[list[int]]) -> int:
+    return sum(max(0, len(session) - 1) for session in sessions)
+
+
+def _expanded_sample_session_ids(train_sessions: list[list[int]]) -> list[int]:
+    ids: list[int] = []
+    for session_idx, seq in enumerate(train_sessions):
+        for _ in range(1, len(seq)):
+            ids.append(session_idx)
+    return ids
+
+
+def _apply_recent_fraction_by_expanded_pairs(
+    train_sessions: list[list[int]],
+    *,
+    fraction: float,
+) -> list[list[int]]:
+    if not 0.0 < fraction <= 1.0:
+        raise ValueError("Yoochoose train tail fraction must be in (0, 1].")
+    expanded_ids = _expanded_sample_session_ids(train_sessions)
+    if not expanded_ids:
+        return train_sessions
+    keep_samples = max(1, int(len(expanded_ids) * fraction))
+    start_session_idx = expanded_ids[-keep_samples]
+    return train_sessions[start_session_idx:]
+
+
+def _max_item_id(*session_groups: list[list[int]]) -> int:
+    max_item = 0
+    for sessions in session_groups:
+        for session in sessions:
+            if session:
+                max_item = max(max_item, max(int(item) for item in session))
+    return int(max_item)
+
+
 def split_config_from_config(config: Config) -> SplitConfig:
     canonical_split = config.data.canonical_split
     return SplitConfig(
@@ -177,12 +238,14 @@ def build_canonical_dataset(
     raw_path = spec.raw_path
 
     sessions, session_dates = _load_raw_sessions(spec)
+    raw_session_count = len(sessions)
     sessions, session_dates = _filter_sessions(
         sessions,
         session_dates,
         min_item_count=split_config.min_item_count,
         min_session_len=split_config.min_session_len,
     )
+    filtered_session_count = len(sessions)
     train_ids, test_ids, split_date = _time_split_sessions(
         sessions,
         session_dates,
@@ -190,13 +253,43 @@ def build_canonical_dataset(
     )
     train_sessions, item_map = _map_sessions(train_ids, sessions, item_map=None)
     test_sessions, _ = _map_sessions(test_ids, sessions, item_map=item_map)
+    train_sessions_before_variant = len(train_sessions)
+    expanded_pairs_before_variant = _expanded_pair_count(train_sessions)
+
+    source_dataset = spec.name
+    variant = "full"
+    train_tail_fraction: float | None = None
+    if _is_yoochoose_variant(config.data.dataset_name):
+        source_dataset = "yoochoose"
+        variant, train_tail_fraction = resolve_yoochoose_variant(config.data.dataset_name)
+        if train_tail_fraction is not None:
+            train_sessions = _apply_recent_fraction_by_expanded_pairs(
+                train_sessions,
+                fraction=train_tail_fraction,
+            )
+
+    train_sessions_after_variant = len(train_sessions)
+    expanded_pairs_after_variant = _expanded_pair_count(train_sessions)
     train_sub, valid = _split_train_valid(train_sessions, valid_ratio=split_config.valid_ratio)
+    max_item_id = max(item_map.values(), default=0)
 
     metadata: dict[str, Any] = {
         "dataset_name": config.data.dataset_name,
+        "source_dataset": source_dataset,
+        "variant": variant,
+        "train_tail_fraction": train_tail_fraction,
         "split_protocol": config.data.split_protocol,
         "split_key": _split_key(config, split_config),
         "created_at": datetime.utcnow().isoformat() + "Z",
+        "raw_path": str(raw_path),
+        "raw_session_count": raw_session_count,
+        "filtered_session_count": filtered_session_count,
+        "train_sessions_before_variant": train_sessions_before_variant,
+        "train_sessions_after_variant": train_sessions_after_variant,
+        "expanded_pairs_before_variant": expanded_pairs_before_variant,
+        "expanded_pairs_after_variant": expanded_pairs_after_variant,
+        "max_item_id": max_item_id,
+        "item_count": len(item_map),
         "filtering": {
             "min_item_count": split_config.min_item_count,
             "min_session_len": split_config.min_session_len,
@@ -213,6 +306,18 @@ def build_canonical_dataset(
             "valid": len(valid),
             "test": len(test_sessions),
             "items": len(item_map),
+            "max_item_id": max_item_id,
+        },
+        "counts_before_variant": {
+            "train_sessions": train_sessions_before_variant,
+            "train_pairs": expanded_pairs_before_variant,
+        },
+        "counts_after_variant": {
+            "train_sessions": train_sessions_after_variant,
+            "train_pairs": expanded_pairs_after_variant,
+        },
+        "observed": {
+            "max_item_id": _max_item_id(train_sub, valid, test_sessions),
         },
     }
 
@@ -252,6 +357,7 @@ def ensure_canonical_dataset(
 
 __all__ = [
     "SplitConfig",
+    "resolve_yoochoose_variant",
     "split_config_from_config",
     "build_canonical_dataset",
     "ensure_canonical_dataset",

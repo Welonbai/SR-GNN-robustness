@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
+import json
 import pickle
 
 import numpy as np
 import torch
 
 from attack.common.config import Config
-from attack.common.paths import dataset_paths
+from attack.common.paths import canonical_split_paths, dataset_paths
 from pytorch_code.model import SessionGraph, train_test, trans_to_cpu, trans_to_cuda, forward as srg_forward
 from pytorch_code.utils import Data
 
 
-def _infer_n_node(dataset_path: Path) -> int:
+def _legacy_infer_n_node(dataset_path: Path) -> int:
     path_str = str(dataset_path).lower()
     if "diginetica" in path_str:
         return 43098
@@ -22,11 +23,103 @@ def _infer_n_node(dataset_path: Path) -> int:
     return 310
 
 
+def _positive_int(value: Any) -> int | None:
+    try:
+        integer = int(value)
+    except (TypeError, ValueError):
+        return None
+    if integer <= 0:
+        return None
+    return integer
+
+
+def _infer_n_node_from_canonical(config: Config) -> int | None:
+    paths = canonical_split_paths(config)
+    metadata_path = paths["metadata"]
+    if metadata_path.exists():
+        with metadata_path.open("r", encoding="utf-8") as handle:
+            metadata = json.load(handle)
+        item_count = _positive_int(metadata.get("item_count"))
+        if item_count is None:
+            counts = metadata.get("counts")
+            if isinstance(counts, dict):
+                item_count = _positive_int(counts.get("items"))
+        if item_count is not None:
+            return int(item_count) + 1
+
+    item_map_path = paths["item_map"]
+    if item_map_path.exists():
+        with item_map_path.open("rb") as handle:
+            item_map = pickle.load(handle)
+        if isinstance(item_map, dict) and item_map:
+            return int(max(int(item) for item in item_map.values())) + 1
+    return None
+
+
+def _infer_n_node_from_export_metadata(dataset_path: Path) -> int | None:
+    metadata_path = dataset_path.parent / "export_metadata.json"
+    if not metadata_path.exists():
+        return None
+    with metadata_path.open("r", encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    item_count = _positive_int(metadata.get("item_count"))
+    if item_count is not None:
+        return int(item_count) + 1
+    max_item_id = _positive_int(metadata.get("max_item_id"))
+    if max_item_id is not None:
+        return int(max_item_id) + 1
+    return None
+
+
+def _max_item_id_from_srg_nn_pickle(path: Path) -> int:
+    if not path.exists():
+        return 0
+    with path.open("rb") as handle:
+        data = pickle.load(handle)
+    if isinstance(data, (list, tuple)) and len(data) == 2:
+        sessions, labels = data
+    else:
+        sessions, labels = data, []
+    max_item = 0
+    for session in sessions:
+        if session:
+            max_item = max(max_item, max(int(item) for item in session))
+    for label in labels:
+        max_item = max(max_item, int(label))
+    return int(max_item)
+
+
+def _infer_n_node_from_pickles(dataset_path: Path) -> int | None:
+    candidates = [dataset_path]
+    for name in ("valid.txt", "test.txt"):
+        candidate = dataset_path.parent / name
+        if candidate != dataset_path:
+            candidates.append(candidate)
+    max_item = 0
+    for candidate in candidates:
+        max_item = max(max_item, _max_item_id_from_srg_nn_pickle(candidate))
+    if max_item <= 0:
+        return None
+    return int(max_item) + 1
+
+
+def _infer_n_node(config: Config, dataset_path: Path) -> int:
+    return (
+        _infer_n_node_from_canonical(config)
+        or _infer_n_node_from_export_metadata(dataset_path)
+        or _infer_n_node_from_pickles(dataset_path)
+        or _legacy_infer_n_node(dataset_path)
+    )
+
+
 class SRGNNBaseRunner:
     def __init__(self, config: Config, base_dir: str | Path | None = None, n_node: int | None = None) -> None:
         self.config = config
         self.base_dir = Path(base_dir) if base_dir is not None else Path.cwd()
-        self.n_node = n_node or _infer_n_node(self._resolve_path(dataset_paths(config)["train"]))
+        self.n_node = n_node or _infer_n_node(
+            config,
+            self._resolve_path(dataset_paths(config)["train"]),
+        )
         self.model: SessionGraph | None = None
         self.opt = None
         self.train_loss_history: list[float] = []

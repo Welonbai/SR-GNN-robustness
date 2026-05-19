@@ -1,15 +1,15 @@
 experiment:
-  name: valbest_attack_ptscem_mlp_internal_sample
+  name: yoochoose1_64_valbest_attack_pts_construction_continuous_mlp_cem_sample
 
 data:
-  dataset_name: diginetica
+  dataset_name: yoochoose1_64
   split_protocol: unified
   poison_train_only: true
   canonical_split:
     min_item_count: 5
     min_session_len: 2
     valid_ratio: 0.1
-    test_days: 7
+    test_days: 1
 
 seeds:
   fake_session_seed: 20260405
@@ -27,7 +27,7 @@ attack:
     name: srgnn
     params:
       train:
-        epochs: 30
+        epochs: 1
         batch_size: 100
         hidden_size: 100
         lr: 0.001
@@ -65,9 +65,9 @@ attack:
       deterministic_sampling: true
 
     cem:
-      iterations: 3
-      population_schedule: [16, 8, 8]
-      elite_ratio: 0.25
+      iterations: 1
+      population_schedule: [4]
+      elite_ratio: 0.5
       sampler:
         type: gaussian
         concentration_scale: 20.0
@@ -78,18 +78,18 @@ attack:
         min_std: 0.25
       init:
         mode: two_pool_behavior_curve_space_filling
-        soft_extreme_pool_size: 512
-        moderate_pool_size: 512
-        soft_extreme_select_size: 5
-        moderate_select_size: 11
+        soft_extreme_pool_size: 128
+        moderate_pool_size: 128
+        soft_extreme_select_size: 2
+        moderate_select_size: 2
         soft_extreme_initial_std: 1.25
         moderate_initial_std: 0.8
-        q_grid_size: 19
+        q_grid_size: 9
         behavior_distance: l1
         init_materialize_generated_suffix: false
       seed_source: position_opt_seed
       candidate_seed_stride: 1000
-      save_top_k_candidates: 3
+      save_top_k_candidates: 1
       epoch_reward_diagnostics:
         enabled: false
 
@@ -116,15 +116,15 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 5
-  reuse_saved_targets: false
+  count: 1
+  reuse_saved_targets: true
 
 victims:
   enabled: [srgnn, miasrec, tron]
   params:
     srgnn:
       train:
-        epochs: 4
+        epochs: 1
         batch_size: 100
         hidden_size: 100
         lr: 0.001
@@ -139,7 +139,7 @@ victims:
         patience_metric: recall20_or_mrr20
     miasrec:
       train:
-        epochs: 6
+        epochs: 1
         checkpoint_protocol: fixed_epoch
         validation_enabled: false
         export_model: last
@@ -147,7 +147,7 @@ victims:
         eval_batch_size: 32
     tron:
       train:
-        epochs: 4
+        epochs: 1
         checkpoint_protocol: fixed_epoch
         validation_enabled: false
         export_model: last
