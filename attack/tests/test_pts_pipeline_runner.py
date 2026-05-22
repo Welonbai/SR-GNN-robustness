@@ -168,6 +168,51 @@ def _write_minimal_pts_artifacts(root: Path) -> dict[str, str]:
     }
 
 
+def _add_optional_rank2_artifacts(root: Path) -> None:
+    rank2 = root / "top_candidates" / "rank_2"
+    rank2.mkdir(parents=True, exist_ok=True)
+    save_json({"policy": "rank2"}, rank2 / "policy.json")
+    save_json([[4, 5, 5334]], rank2 / "sessions.json")
+    (rank2 / "session_records.jsonl").write_text("{}", encoding="utf-8")
+    save_json(
+        {
+            "rank": 2,
+            "candidate_key": "iter0_cand1",
+            "iteration": 0,
+            "candidate_id": 1,
+            "candidate_seed": 20261405,
+            "reward": 0.4,
+            "reward_metrics": {"reward": 0.4},
+            "target_item": 5334,
+        },
+        rank2 / "metadata.json",
+    )
+    top_candidates = json.loads((root / "pts_top_candidates.json").read_text(encoding="utf-8"))
+    top_candidates["candidates"].append(
+        {
+            "rank": 2,
+            "candidate_key": "iter0_cand1",
+            "policy_path": str(rank2 / "policy.json"),
+            "sessions_path": str(rank2 / "sessions.json"),
+            "session_records_path": str(rank2 / "session_records.jsonl"),
+            "metadata_path": str(rank2 / "metadata.json"),
+        }
+    )
+    save_json(top_candidates, root / "pts_top_candidates.json")
+    top_policies = json.loads(
+        (root / "pts_top_candidate_policies.json").read_text(encoding="utf-8")
+    )
+    top_policies["top_k"] = 2
+    top_policies["candidates"].append(
+        {
+            "rank": 2,
+            "candidate_key": "iter0_cand1",
+            "policy": {},
+        }
+    )
+    save_json(top_policies, root / "pts_top_candidate_policies.json")
+
+
 class FakeBestCandidate:
     iteration = 0
     candidate_id = 0
@@ -683,6 +728,15 @@ def test_shared_pts_cem_cache_materializes_into_local_run_group() -> None:
     work_dir = _make_test_output_dir()
     try:
         config = _with_output_root(load_config(CONFIG_PATH), work_dir / "outputs")
+        pts = config.attack.pts_construction
+        lean_config = _with_pts(
+            config,
+            replace(
+                pts,
+                cem=replace(pts.cem, save_top_k_candidates=1),
+                artifacts=replace(pts.artifacts, save_per_session_records=False),
+            ),
+        )
         fake_sessions, poison_model = _write_identity_inputs(work_dir / "identity")
         identity = build_pts_cem_shared_cache_identity(
             config,
@@ -694,6 +748,7 @@ def test_shared_pts_cem_cache_materializes_into_local_run_group() -> None:
         shared_dir = pts_cem_shared_cache_dir(config, shared_key)
         source_dir = work_dir / "source" / "pts_construction_cem"
         artifact_paths = _write_minimal_pts_artifacts(source_dir)
+        _add_optional_rank2_artifacts(source_dir)
         attack_identity_context = (
             run_pts_construction_cem.build_pts_construction_attack_identity_context(
                 config
@@ -720,12 +775,12 @@ def test_shared_pts_cem_cache_materializes_into_local_run_group() -> None:
         assert shared_cached is not None
         local_dir = work_dir / "local_run_group" / "targets" / "5334" / "pts_construction_cem"
         current_identity = run_pts_construction_cem._current_pts_construction_cache_identity(
-            config,
+            lean_config,
             attack_identity_context=attack_identity_context,
             target_item=5334,
         )
         cached = _materialize_shared_pts_cem_cache(
-            config=config,
+            config=lean_config,
             target_item=5334,
             local_artifact_dir=local_dir,
             shared_cache_dir=shared_dir,
@@ -739,6 +794,8 @@ def test_shared_pts_cem_cache_materializes_into_local_run_group() -> None:
         assert cached.local_materialized_from_shared is True
         assert (local_dir / "pts_cem_trace.jsonl").exists()
         assert (local_dir / "top_candidates" / "rank_1" / "sessions.json").exists()
+        assert not (local_dir / "top_candidates" / "rank_1" / "session_records.jsonl").exists()
+        assert not (local_dir / "top_candidates" / "rank_2").exists()
         assert not (local_dir / "pts_cem_shared_complete.json").exists()
         with (local_dir / "pts_construction_complete.json").open(
             "r",
@@ -759,9 +816,11 @@ def test_shared_pts_cem_cache_materializes_into_local_run_group() -> None:
             encoding="utf-8",
         ) as handle:
             top_candidates = json.load(handle)
+        assert len(top_candidates["candidates"]) == 1
         row = top_candidates["candidates"][0]
         assert str(local_dir) in row["policy_path"]
         assert str(local_dir) in row["sessions_path"]
+        assert row["session_records_path"] is None
         assert str(source_dir) not in row["policy_path"]
         assert str(shared_dir) not in row["policy_path"]
     finally:

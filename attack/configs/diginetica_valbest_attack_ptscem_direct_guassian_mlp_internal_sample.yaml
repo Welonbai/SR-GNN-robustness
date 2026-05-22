@@ -69,7 +69,7 @@ attack:
         elite_min_std: 0.25
       seed_source: position_opt_seed
       candidate_seed_stride: 1000
-      save_top_k_candidates: 3
+      save_top_k_candidates: 1
       epoch_reward_diagnostics:
         enabled: false
 
@@ -84,7 +84,7 @@ attack:
       save_cem_trace: true
       save_best_policy: true
       save_final_policy: true
-      save_per_session_records: true
+      save_per_session_records: false
       save_candidate_sessions: false
       save_best_sessions: true
       save_top_candidate_sessions: true

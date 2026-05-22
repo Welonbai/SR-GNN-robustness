@@ -34,11 +34,24 @@ from attack.pipeline.core.orchestrator import (
 CONFIG_PATH = (
     Path(__file__).resolve().parents[2] / "attack" / "configs" / "diginetica_attack_dpsbr.yaml"
 )
+PTS_DIRECT_CONFIG_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "attack"
+    / "configs"
+    / "diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample.yaml"
+)
 
 
 def _base_config():
     assert CONFIG_PATH.is_file(), f"Missing Phase 1 test config at {CONFIG_PATH}"
     return load_config(CONFIG_PATH)
+
+
+def _pts_direct_config():
+    assert PTS_DIRECT_CONFIG_PATH.is_file(), (
+        f"Missing PTS direct CEM test config at {PTS_DIRECT_CONFIG_PATH}"
+    )
+    return load_config(PTS_DIRECT_CONFIG_PATH)
 
 
 def test_target_cohort_key_ignores_requested_count_for_sampled_targets() -> None:
@@ -104,6 +117,46 @@ def test_attack_key_payload_no_longer_depends_on_target_selection_identity() -> 
     payload = attack_key_payload(_base_config(), run_type="attack")
 
     assert "target_selection_key" not in payload
+
+
+def test_pts_direct_artifact_persistence_knobs_do_not_affect_identity() -> None:
+    config = _pts_direct_config()
+    pts = config.attack.pts_construction
+    assert pts is not None
+    run_type = "pts_construction_direct_action_mlp_cem"
+    changed = replace(
+        config,
+        attack=replace(
+            config.attack,
+            pts_construction=replace(
+                pts,
+                cem=replace(
+                    pts.cem,
+                    save_top_k_candidates=3,
+                ),
+                artifacts=replace(
+                    pts.artifacts,
+                    save_per_session_records=not bool(
+                        pts.artifacts.save_per_session_records
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    assert attack_key_payload(config, run_type=run_type) == attack_key_payload(
+        changed,
+        run_type=run_type,
+    )
+    assert run_group_key(config, run_type=run_type) == run_group_key(
+        changed,
+        run_type=run_type,
+    )
+    assert victim_prediction_key(config, "tron", run_type=run_type) == victim_prediction_key(
+        changed,
+        "tron",
+        run_type=run_type,
+    )
 
 
 def test_shared_attack_artifact_key_stays_stable_across_phase1_identity_changes() -> None:

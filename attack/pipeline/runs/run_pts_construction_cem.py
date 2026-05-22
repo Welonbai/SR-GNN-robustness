@@ -2136,6 +2136,10 @@ def _materialize_shared_pts_cem_cache(
         destination_dir=local_root,
         exclude_markers=True,
     )
+    _prune_optional_pts_cem_artifacts_for_config(
+        config=config,
+        artifact_dir=local_root,
+    )
     _rewrite_top_candidate_paths(local_root)
     required_paths = _required_pts_cem_relative_artifact_paths()
     _verify_relative_files_exist(local_root, required_paths)
@@ -2161,6 +2165,75 @@ def _materialize_shared_pts_cem_cache(
     if cached is None:
         raise ValueError(f"Materialized PTS-CEM cache was not loadable: {marker_path}")
     return cached
+
+
+def _prune_optional_pts_cem_artifacts_for_config(
+    *,
+    config: Config,
+    artifact_dir: Path,
+) -> None:
+    pts_config = _require_pts_config(config)
+    root = Path(artifact_dir)
+    top_k = int(pts_config.cem.save_top_k_candidates)
+    top_candidates_dir = root / "top_candidates"
+    if top_candidates_dir.exists():
+        for rank_dir in top_candidates_dir.glob("rank_*"):
+            if not rank_dir.is_dir():
+                continue
+            try:
+                rank = int(rank_dir.name.removeprefix("rank_"))
+            except ValueError:
+                continue
+            if rank > top_k:
+                shutil.rmtree(rank_dir)
+                continue
+            if not bool(pts_config.artifacts.save_per_session_records):
+                session_records_path = rank_dir / "session_records.jsonl"
+                if session_records_path.exists():
+                    session_records_path.unlink()
+
+    _prune_top_candidate_summary_json(
+        root / "pts_top_candidates.json",
+        top_k=top_k,
+        save_per_session_records=bool(pts_config.artifacts.save_per_session_records),
+    )
+    _prune_top_candidate_summary_json(
+        root / "pts_top_candidate_policies.json",
+        top_k=top_k,
+        save_per_session_records=bool(pts_config.artifacts.save_per_session_records),
+    )
+
+
+def _prune_top_candidate_summary_json(
+    path: Path,
+    *,
+    top_k: int,
+    save_per_session_records: bool,
+) -> None:
+    if not path.exists():
+        return
+    payload = _load_json_dict(path)
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list):
+        pruned: list[object] = []
+        for row in candidates:
+            if not isinstance(row, Mapping):
+                pruned.append(row)
+                continue
+            try:
+                rank = int(row.get("rank", len(pruned) + 1))
+            except (TypeError, ValueError):
+                rank = len(pruned) + 1
+            if rank > top_k:
+                continue
+            row = dict(row)
+            if not save_per_session_records and "session_records_path" in row:
+                row["session_records_path"] = None
+            pruned.append(row)
+        payload["candidates"] = pruned
+        if "top_k" in payload:
+            payload["top_k"] = min(int(top_k), len(pruned))
+    save_json(_to_jsonable_cache_payload(payload), path)
 
 
 def _write_shared_pts_cem_cache(

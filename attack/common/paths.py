@@ -425,18 +425,18 @@ def attack_key_payload(
 
 
 def _pts_construction_identity_payload(config: Config) -> Any:
-    """PTS-CEM diagnostics are artifact-only and must not affect run identity."""
+    """Return PTS construction semantics, excluding artifact-only persistence knobs."""
     payload = _normalize_identity_value(
         config.to_primitive()["attack"]["pts_construction"]
     )
     if isinstance(payload, dict):
+        payload = dict(payload)
+        payload.pop("artifacts", None)
         method = payload.get("method")
         if method == "grouped_cem_v1":
-            payload = dict(payload)
             payload.pop("continuous_policy", None)
             payload.pop("direct_action_policy", None)
         elif method == "continuous_mlp_cem":
-            payload = dict(payload)
             payload.pop("grouping", None)
             payload.pop("actions", None)
             payload.pop("direct_action_policy", None)
@@ -444,7 +444,6 @@ def _pts_construction_identity_payload(config: Config) -> Any:
             if isinstance(continuous, dict):
                 payload["continuous_policy"] = dict(continuous)
         elif method == "direct_action_mlp_cem":
-            payload = dict(payload)
             payload.pop("grouping", None)
             payload.pop("actions", None)
             payload.pop("continuous_policy", None)
@@ -461,6 +460,7 @@ def _pts_construction_identity_payload(config: Config) -> Any:
         cem = payload.get("cem")
         if isinstance(cem, dict):
             cem = dict(cem)
+            cem.pop("save_top_k_candidates", None)
             cem.pop("epoch_reward_diagnostics", None)
             cem.pop("surrogate_retrain", None)
             if method == "continuous_mlp_cem":
