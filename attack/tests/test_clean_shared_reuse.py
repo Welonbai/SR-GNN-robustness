@@ -22,6 +22,7 @@ from attack.data.session_stats import compute_session_stats
 from attack.pipeline.core.orchestrator import (
     RunContext,
     TargetPoisonOutput,
+    _cleanup_victim_intermediates_if_enabled,
     _persist_shared_victim_result,
     run_targets_and_victims,
 )
@@ -88,6 +89,54 @@ def _minimal_context(config) -> RunContext:
         shared_paths=shared_artifact_paths(config, run_type="clean"),
         fake_session_count=0,
     )
+
+
+def test_cleanup_victim_intermediates_is_opt_in_and_preserves_core_artifacts() -> None:
+    with _temp_root() as temp_root:
+        config = _config_for_temp_root(temp_root, count=1, victims=("tron",))
+        run_dir = temp_root / "run" / "victims" / "tron"
+        run_dir.mkdir(parents=True)
+        artifacts = {
+            "run_dir": run_dir,
+            "metrics": run_dir / "metrics.json",
+            "predictions": run_dir / "predictions.json",
+            "train_history": run_dir / "train_history.json",
+            "poisoned_train": run_dir / "poisoned_train.txt",
+        }
+        for key in ("metrics", "predictions", "train_history", "poisoned_train"):
+            artifacts[key].write_text("{}", encoding="utf-8")
+        (run_dir / "tron_topk_raw.json").write_text("{}", encoding="utf-8")
+        (run_dir / "export" / "tron").mkdir(parents=True)
+        (run_dir / "export" / "tron" / "train.jsonl").write_text("{}", encoding="utf-8")
+        (run_dir / "mlruns").mkdir()
+        (run_dir / "mlruns" / "model.pth").write_text("model", encoding="utf-8")
+
+        _cleanup_victim_intermediates_if_enabled(
+            config,
+            victim_name="tron",
+            artifacts=artifacts,
+        )
+        assert (run_dir / "tron_topk_raw.json").exists()
+        assert (run_dir / "export" / "tron").exists()
+        assert (run_dir / "mlruns").exists()
+
+        cleanup_config = replace(
+            config,
+            artifacts=replace(config.artifacts, cleanup_victim_intermediates=True),
+        )
+        _cleanup_victim_intermediates_if_enabled(
+            cleanup_config,
+            victim_name="tron",
+            artifacts=artifacts,
+        )
+
+        assert artifacts["metrics"].exists()
+        assert artifacts["predictions"].exists()
+        assert artifacts["train_history"].exists()
+        assert artifacts["poisoned_train"].exists()
+        assert not (run_dir / "tron_topk_raw.json").exists()
+        assert not (run_dir / "export" / "tron").exists()
+        assert not (run_dir / "mlruns").exists()
 
 
 def _expected_target_prefix(config) -> list[int]:

@@ -2259,6 +2259,7 @@ class ArtifactsConfig:
     root: str
     shared_dir: str
     runs_dir: str
+    cleanup_victim_intermediates: bool = False
 
 
 @dataclass(frozen=True)
@@ -2589,6 +2590,10 @@ def _normalize_config_mapping(data: Mapping[str, Any]) -> dict[str, Any]:
         "runs_dir": _as_str(
             artifacts.get("runs_dir", "runs"),
             "artifacts.runs_dir",
+        ),
+        "cleanup_victim_intermediates": _as_bool(
+            artifacts.get("cleanup_victim_intermediates", False),
+            "artifacts.cleanup_victim_intermediates",
         ),
     }
 
@@ -3844,6 +3849,10 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
             root=_as_str(artifacts.get("root", "outputs"), "artifacts.root"),
             shared_dir=_as_str(artifacts.get("shared_dir", "shared"), "artifacts.shared_dir"),
             runs_dir=_as_str(artifacts.get("runs_dir", "runs"), "artifacts.runs_dir"),
+            cleanup_victim_intermediates=_as_bool(
+                artifacts.get("cleanup_victim_intermediates", False),
+                "artifacts.cleanup_victim_intermediates",
+            ),
         ),
     )
 

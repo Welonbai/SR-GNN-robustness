@@ -363,6 +363,11 @@ def run_targets_and_victims(
                 if victim_result.extra:
                     payload.update(victim_result.extra)
                 save_metrics(payload, artifacts["metrics"])
+                _cleanup_victim_intermediates_if_enabled(
+                    config,
+                    victim_name=victim_name,
+                    artifacts=artifacts,
+                )
                 _validate_completed_local_artifacts(artifacts)
                 _mark_coverage_cell_completed(
                     run_coverage,
@@ -1950,6 +1955,69 @@ def _persist_shared_victim_result(
         },
         artifacts["shared_execution_result"],
     )
+
+
+def _cleanup_victim_intermediates_if_enabled(
+    config: Config,
+    *,
+    victim_name: str,
+    artifacts: Mapping[str, Path],
+) -> None:
+    if not bool(config.artifacts.cleanup_victim_intermediates):
+        return
+    run_dir = Path(artifacts["run_dir"])
+    cleanup_paths = _victim_intermediate_cleanup_paths(run_dir, victim_name=victim_name)
+    removed: list[str] = []
+    for path in cleanup_paths:
+        if _remove_optional_path(path):
+            removed.append(_repo_relative_path(path))
+    if removed:
+        print(
+            f"[victim] model={victim_name} cleanup_intermediates "
+            f"removed={len(removed)}"
+        )
+
+
+def _victim_intermediate_cleanup_paths(
+    run_dir: Path,
+    *,
+    victim_name: str,
+) -> list[Path]:
+    if victim_name == "miasrec":
+        return [
+            run_dir / "miasrec_topk_raw.json",
+            run_dir / "export" / "miasrec",
+            run_dir / "miasrec_checkpoints",
+            run_dir / "miasrec_saved",
+            run_dir / "miasrec_logs",
+            run_dir / "miasrec_tensorboard",
+        ]
+    if victim_name == "tron":
+        return [
+            run_dir / "tron_topk_raw.json",
+            run_dir / "export" / "tron",
+            run_dir / "tron_logs",
+            run_dir / "mlruns",
+            run_dir / ".trash",
+        ]
+    if victim_name == "srgnn":
+        return [
+            run_dir / "best_validation.pt",
+        ]
+    return []
+
+
+def _remove_optional_path(path: Path) -> bool:
+    target = Path(path)
+    if not target.exists():
+        return False
+    if target.is_dir():
+        shutil.rmtree(target)
+        return True
+    if target.is_file():
+        target.unlink()
+        return True
+    return False
 
 
 def _update_artifact_manifest(
