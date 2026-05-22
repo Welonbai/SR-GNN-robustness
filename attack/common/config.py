@@ -126,6 +126,7 @@ PTS_FINAL_SELECTION_GLOBAL_BEST_CANDIDATE = "global_best_candidate"
 PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED = "position_opt_seed"
 PTS_CEM_SAMPLER_DIRICHLET = "dirichlet"
 PTS_CEM_SAMPLER_GAUSSIAN = "gaussian"
+PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN = "elite_centered_gaussian"
 PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN = (
     "elite_centered_empirical_gaussian"
 )
@@ -972,15 +973,18 @@ class PTSCEMUpdateRuntimeConfig:
     max_probability: float = 0.90
     min_std: float = 0.25
     elite_min_std: float = 0.25
+    elite_std_scale: float = 1.0
 
     def __post_init__(self) -> None:
         mode = _as_str(self.mode, "attack.pts_construction.cem.update.mode").strip().lower()
         if mode not in {
             "standard",
+            PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN,
             PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN,
         }:
             raise ValueError(
-                "attack.pts_construction.cem.update.mode must be 'standard' or "
+                "attack.pts_construction.cem.update.mode must be 'standard', "
+                "'elite_centered_gaussian', or "
                 "'elite_centered_empirical_gaussian'."
             )
         smoothing = _as_float(self.smoothing, "attack.pts_construction.cem.update.smoothing")
@@ -1010,12 +1014,21 @@ class PTSCEMUpdateRuntimeConfig:
             raise ValueError(
                 "attack.pts_construction.cem.update.elite_min_std must be positive."
             )
+        elite_std_scale = _as_float(
+            self.elite_std_scale,
+            "attack.pts_construction.cem.update.elite_std_scale",
+        )
+        if elite_std_scale < 0.0:
+            raise ValueError(
+                "attack.pts_construction.cem.update.elite_std_scale must be non-negative."
+            )
         object.__setattr__(self, "mode", mode)
         object.__setattr__(self, "smoothing", smoothing)
         object.__setattr__(self, "min_probability", min_probability)
         object.__setattr__(self, "max_probability", max_probability)
         object.__setattr__(self, "min_std", min_std)
         object.__setattr__(self, "elite_min_std", elite_min_std)
+        object.__setattr__(self, "elite_std_scale", elite_std_scale)
 
 
 @dataclass(frozen=True)
@@ -2718,6 +2731,21 @@ def _normalize_pts_construction_config(value: Any, context: str) -> dict[str, An
             "Unknown PTS construction config keys: "
             + ", ".join(sorted(map(str, unknown)))
         )
+    if str(mapping.get("method", "")).strip().lower() == PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM:
+        direct_action_policy = mapping.get("direct_action_policy", {})
+        if isinstance(direct_action_policy, Mapping) and "initial_std" in direct_action_policy:
+            raise ValueError(
+                "direct_action_mlp_cem no longer supports "
+                "direct_action_policy.initial_std; initialization is standard_normal."
+            )
+        cem = mapping.get("cem", {})
+        if isinstance(cem, Mapping):
+            update = cem.get("update", {})
+            if isinstance(update, Mapping) and "elite_std_scale" in update:
+                raise ValueError(
+                    "direct_action_mlp_cem no longer supports "
+                    "cem.update.elite_std_scale; update uses empirical elite std."
+                )
     return _primitive_from_obj(PTSConstructionConfig(**dict(mapping)))
 
 
@@ -3863,6 +3891,7 @@ __all__ = [
     "PTS_CEM_SAMPLER_DIRICHLET",
     "PTS_CEM_SAMPLER_GAUSSIAN",
     "PTS_CEM_SEED_SOURCE_POSITION_OPT_SEED",
+    "PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN",
     "PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN",
     "PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST",
     "PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST",

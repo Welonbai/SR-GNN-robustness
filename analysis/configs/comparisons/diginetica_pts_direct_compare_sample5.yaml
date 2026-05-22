@@ -1,0 +1,8 @@
+comparison_id: diginetica_pts_direct_compare_sample5
+
+runs:
+  - diginetica_clean_pts_direct_compare_sample5
+  - diginetica_randomnz_pts_direct_compare_sample5
+  - diginetica_ptscem_pts_direct_compare_sample5
+  - diginetica_ptscem_mlp_pts_direct_compare_sample5
+  - diginetica_pts_direct_pts_direct_compare_sample5

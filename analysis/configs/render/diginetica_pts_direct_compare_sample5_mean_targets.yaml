@@ -1,0 +1,76 @@
+style_name: diginetica_pts_direct_compare_sample5_mean_targets
+
+output_format: png
+
+title:
+  template: "Diginetica | mean targets 11103 / 39588 / 5334 / 5418 / 14514 | randomNZ / ptscem / ptsMlpCem / ptsDirectCem"
+  align: center
+  font_size: 12
+  color: black
+
+figure:
+  width: 15.5
+  height: 6.8
+  dpi: 220
+  background_color: white
+
+table:
+  font_size: 10
+  round_digits: 6
+  signed_percent_round_digits: 3
+  text_color: black
+  show_grid: true
+  auto_shrink: false
+  wrap_text: false
+  cell_align: center
+  top_level_group_separators: true
+  stub_column_width_weight: 0.8
+
+  display_alias:
+    labels:
+      attack_method: Attack
+      victim_model: Victim
+      metric_name: Metric
+      metric_scope: Scope
+      k: K
+
+    attack_method:
+      random_nonzero_when_possible: randomNZ
+      cem: ptscem
+      pts_continuous_cem: ptsMlpCem
+      pts_direct_cem: ptsDirectCem
+
+    victim_model:
+      miasrec: MiaSRec
+      srgnn: SRGNN
+      tron: TRON
+
+    metric_name:
+      recall: Recall
+      mrr: MRR
+
+    metric_scope:
+      ground_truth: GT
+      targeted: Target
+
+  value_alias: {}
+
+  dimension_value_orders:
+    victim_model:
+      - srgnn
+      - miasrec
+      - tron
+    attack_method:
+      - random_nonzero_when_possible
+      - cem
+      - pts_continuous_cem
+      - pts_direct_cem
+
+  best_value_bolding:
+    compare_along: rows
+    mode: max
+    underline_second_best: true
+    partition_by_levels:
+      - victim_model
+    column_filters:
+      metric_scope: targeted

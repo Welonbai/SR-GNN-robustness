@@ -1,5 +1,5 @@
 experiment:
-  name: valbest_attack_pts_construction_direct_action_mlp_cem_ratio1_target5334
+  name: diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample
 
 data:
   dataset_name: diginetica
@@ -93,14 +93,14 @@ attack:
       mode: global_best_candidate
 
 targets:
-  mode: explicit_list
-  explicit_list: [5334]
+  mode: sampled
+  explicit_list: []
   bucket: popular
-  count: 1
+  count: 5
   reuse_saved_targets: false
 
 victims:
-  enabled: [srgnn]
+  enabled: [srgnn, miasrec, tron]
   params:
     srgnn:
       train:
@@ -117,6 +117,39 @@ victims:
         checkpoint_protocol: validation_best
         best_metric: valid_ground_truth_mrr@20
         patience_metric: recall20_or_mrr20
+    miasrec:
+      train:
+        epochs: 6
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+        train_batch_size: 64
+        eval_batch_size: 32
+    tron:
+      train:
+        epochs: 4
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+  runtime:
+    miasrec:
+      python_executable: "C:\\Users\\User\\anaconda3\\envs\\miasrec\\python.exe"
+      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
+      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\miasrec"
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      logging:
+        show_progress: false
+    tron:
+      python_executable: "C:\\Users\\User\\anaconda3\\envs\\tron-gpu\\python.exe"
+      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
+      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\tron"
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      dataloader:
+        num_workers: 2
 
 evaluation:
   topk: [5, 10, 15, 20, 25, 30, 40, 50]

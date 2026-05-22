@@ -11,7 +11,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from attack.common.artifact_io import save_fake_sessions
-from attack.common.config import load_config
+from attack.common.config import (
+    PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN,
+    PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN,
+    PTSCEMUpdateRuntimeConfig,
+    load_config,
+)
 from attack.pipeline.runs.run_pts_construction_cem import (
     build_pts_cem_shared_cache_identity,
 )
@@ -21,6 +26,7 @@ from attack.pipeline.runs.run_pts_construction_cem import (
     _validate_pts_construction_run_config,
 )
 from attack.pts.cem import PTSCEMCandidateResult, PTSCEMEvaluationResult
+from attack.pts.artifacts import write_pts_cem_artifacts
 from attack.pts.direct_action_cem import (
     PTSDirectActionMLPCEMTrainer,
     direct_action_elite_count,
@@ -46,8 +52,36 @@ SMOKE_CONFIG = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_pts_construction_direct_action_mlp_cem_ratio1_target5334.yaml"
+    / "diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample.yaml"
 )
+CONTINUOUS_CONFIG = (
+    REPO_ROOT
+    / "attack"
+    / "configs"
+    / "diginetica_valbest_attack_pts_construction_continuous_mlp_cem_ratio1_target5334.yaml"
+)
+GROUPED_CONFIG = (
+    REPO_ROOT
+    / "attack"
+    / "configs"
+    / "diginetica_valbest_attack_ptscem_internal_sample.yaml"
+)
+
+
+def test_common_pts_update_config_accepts_old_and_new_modes() -> None:
+    assert PTSCEMUpdateRuntimeConfig(mode="standard").mode == "standard"
+    assert (
+        PTSCEMUpdateRuntimeConfig(
+            mode=PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN,
+        ).mode
+        == PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN
+    )
+    assert (
+        PTSCEMUpdateRuntimeConfig(
+            mode=PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN,
+        ).mode
+        == PTS_CEM_UPDATE_MODE_ELITE_CENTERED_EMPIRICAL_GAUSSIAN
+    )
 
 
 def test_direct_action_smoke_config_loads_and_records_cem_init() -> None:
@@ -63,7 +97,7 @@ def test_direct_action_smoke_config_loads_and_records_cem_init() -> None:
     assert not hasattr(direct_config, "initial_std")
     assert direct_config.elite_min_std == pytest.approx(0.25)
     assert not hasattr(direct_config, "elite_std_scale")
-    assert not hasattr(pts_config.cem.update, "elite_std_scale")
+    assert hasattr(pts_config.cem.update, "elite_std_scale")
 
 
 def test_direct_action_old_exposed_std_fields_are_rejected(tmp_path: Path) -> None:
@@ -74,7 +108,7 @@ def test_direct_action_old_exposed_std_fields_are_rejected(tmp_path: Path) -> No
     )
     old_policy_path = tmp_path / "old_policy.yaml"
     old_policy_path.write_text(old_policy_config, encoding="utf-8")
-    with pytest.raises(TypeError, match="initial_std"):
+    with pytest.raises(ValueError, match="initial_std"):
         load_config(old_policy_path)
 
     old_update_config = text.replace(
@@ -83,8 +117,55 @@ def test_direct_action_old_exposed_std_fields_are_rejected(tmp_path: Path) -> No
     )
     old_update_path = tmp_path / "old_update.yaml"
     old_update_path.write_text(old_update_config, encoding="utf-8")
-    with pytest.raises(TypeError, match="elite_std_scale"):
+    with pytest.raises(ValueError, match="elite_std_scale"):
         load_config(old_update_path)
+
+
+def test_direct_action_rejects_old_elite_centered_gaussian_mode(
+    tmp_path: Path,
+) -> None:
+    old_mode_path = tmp_path / "old_mode.yaml"
+    old_mode_path.write_text(
+        SMOKE_CONFIG.read_text(encoding="utf-8").replace(
+            "        mode: elite_centered_empirical_gaussian",
+            "        mode: elite_centered_gaussian",
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="elite_centered_empirical_gaussian"):
+        load_config(old_mode_path)
+
+
+def test_grouped_and_continuous_configs_still_accept_old_elite_centered_mode(
+    tmp_path: Path,
+) -> None:
+    continuous_path = tmp_path / "continuous_old_mode.yaml"
+    continuous_path.write_text(
+        CONTINUOUS_CONFIG.read_text(encoding="utf-8").replace(
+            "      update:\n",
+            "      update:\n        mode: elite_centered_gaussian\n",
+        ),
+        encoding="utf-8",
+    )
+    continuous = load_config(continuous_path)
+    assert (
+        continuous.attack.pts_construction.cem.update.mode
+        == PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN
+    )
+
+    grouped_path = tmp_path / "grouped_old_mode.yaml"
+    grouped_path.write_text(
+        GROUPED_CONFIG.read_text(encoding="utf-8").replace(
+            "      update:\n",
+            "      update:\n        mode: elite_centered_gaussian\n",
+        ),
+        encoding="utf-8",
+    )
+    grouped = load_config(grouped_path)
+    assert (
+        grouped.attack.pts_construction.cem.update.mode
+        == PTS_CEM_UPDATE_MODE_ELITE_CENTERED_GAUSSIAN
+    )
 
 
 def test_direct_action_contexts_are_target_independent_and_z_stats() -> None:
@@ -409,6 +490,86 @@ def test_direct_action_identity_uses_elite_min_std_not_removed_std_fields(
     assert "elite_centered_empirical_gaussian" in identity_text
     assert "initial_std" not in identity_text
     assert "elite_std_scale" not in identity_text
+
+
+def test_direct_action_artifacts_do_not_serialize_common_update_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = load_config(SMOKE_CONFIG)
+    cem_config = _build_pts_cem_config_from_config(config)
+    cem_config = type(cem_config)(
+        iterations=1,
+        population_schedule=[2],
+        elite_ratio=0.5,
+        sampler=cem_config.sampler,
+        update=cem_config.update,
+        init=cem_config.init,
+        resampling=cem_config.resampling,
+        base_seed=cem_config.base_seed,
+        candidate_seed_stride=cem_config.candidate_seed_stride,
+        save_top_k_candidates=1,
+    )
+    trainer = PTSDirectActionMLPCEMTrainer(
+        cem_config=cem_config,
+        direct_action_config=_build_direct_action_mlp_cem_config(
+            config.attack.pts_construction
+        ),
+        generation_topk=10,
+    )
+    monkeypatch.setattr(
+        "attack.pts.direct_action_executor.generate_poison_model_suffix",
+        lambda *, runner, prefix, suffix_length, topk, rng: [700] * int(suffix_length),
+    )
+
+    def evaluator_fn(
+        *,
+        candidate_sessions,
+        candidate_session_records,
+        candidate_summary,
+        iteration,
+        candidate_id,
+        candidate_seed,
+        policy,
+    ):
+        del candidate_sessions, candidate_session_records, candidate_summary, iteration, candidate_seed, policy
+        reward = float(10 - int(candidate_id))
+        return PTSCEMEvaluationResult(
+            reward=reward,
+            reward_metrics={"reward": reward},
+            metadata={},
+        )
+
+    result = trainer.train(
+        template_sessions=[[1, 2, 3], [4, 5, 6, 7]],
+        target_item=99,
+        poison_runner=object(),
+        evaluator_fn=evaluator_fn,
+    )
+    paths = write_pts_cem_artifacts(
+        result=result,
+        output_dir=tmp_path,
+        save_top_candidate_sessions=True,
+        save_per_session_records=True,
+    )
+    artifact_text = "\n".join(
+        Path(path).read_text(encoding="utf-8")
+        for key, path in paths.items()
+        if key
+        in {
+            "pts_cem_trace",
+            "pts_policy_history",
+            "pts_best_policy",
+            "pts_final_policy",
+            "pts_top_candidates",
+            "pts_top_candidate_policies",
+        }
+    )
+
+    assert "elite_centered_empirical_gaussian" in artifact_text
+    assert "anti_collapse_min_std" in artifact_text
+    assert "elite_std_scale" not in artifact_text
+    assert "initial_std" not in artifact_text
 
 
 def _candidate_with_policy(candidate_id: int, vector: list[float]) -> PTSCEMCandidateResult:
