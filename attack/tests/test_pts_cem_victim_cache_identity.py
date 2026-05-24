@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 from attack.common.artifact_io import load_json, save_json
 from attack.common.config import PTSCEMSurrogateRetrainRuntimeConfig, load_config
 from attack.common.paths import (
+    PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     shared_artifact_paths,
     victim_prediction_key,
@@ -39,11 +40,22 @@ CONFIG_PATH = (
     / "configs"
     / "diginetica_valbest_attack_ptscem_internal_sample.yaml"
 )
+DIRECT_ACTION_CONFIG_PATH = (
+    REPO_ROOT
+    / "attack"
+    / "configs"
+    / "diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample.yaml"
+)
 RUN_TYPE = PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE
+DIRECT_ACTION_RUN_TYPE = PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE
 
 
 def _base_config():
     return load_config(CONFIG_PATH)
+
+
+def _direct_action_config():
+    return load_config(DIRECT_ACTION_CONFIG_PATH)
 
 
 def _metadata(
@@ -70,12 +82,51 @@ def _metadata(
     }
 
 
-def _identity(config, *, target_item: int = 39588, metadata: dict[str, object] | None = None):
+def _direct_action_metadata(
+    *,
+    target_item: int = 11103,
+    shared_cache_key: str = "pts_cem_shared_direct",
+    sessions_sha1: str = "d" * 40,
+) -> dict[str, object]:
+    return {
+        **_metadata(
+            target_item=target_item,
+            shared_cache_key=shared_cache_key,
+            sessions_sha1=sessions_sha1,
+            source_candidate_key="iter0_cand12",
+        ),
+        "pts_construction_method": "direct_action_mlp_cem",
+    }
+
+
+def _identity(
+    config, *, target_item: int = 39588, metadata: dict[str, object] | None = None
+):
     return _pts_cem_victim_attack_identity_context(
         config,
         run_type=RUN_TYPE,
         target_item=target_item,
-        target_metadata=_metadata(target_item=target_item) if metadata is None else metadata,
+        target_metadata=(
+            _metadata(target_item=target_item) if metadata is None else metadata
+        ),
+    )
+
+
+def _direct_action_identity(
+    config,
+    *,
+    target_item: int = 11103,
+    metadata: dict[str, object] | None = None,
+):
+    return _pts_cem_victim_attack_identity_context(
+        config,
+        run_type=DIRECT_ACTION_RUN_TYPE,
+        target_item=target_item,
+        target_metadata=(
+            _direct_action_metadata(target_item=target_item)
+            if metadata is None
+            else metadata
+        ),
     )
 
 
@@ -105,9 +156,61 @@ def test_pts_cem_victim_identity_excludes_target_cohort_mode_and_count() -> None
     assert _identity(explicit) == _identity(sampled)
 
 
+def test_direct_action_pts_cem_victim_identity_excludes_count_and_artifact_knobs() -> (
+    None
+):
+    base = _direct_action_config()
+    pts = base.attack.pts_construction
+    assert pts is not None
+    old_artifact_shape = replace(
+        base,
+        targets=replace(base.targets, count=5),
+        attack=replace(
+            base.attack,
+            pts_construction=replace(
+                pts,
+                artifacts=replace(pts.artifacts, save_per_session_records=True),
+                cem=replace(pts.cem, save_top_k_candidates=3),
+            ),
+        ),
+    )
+    lean_artifact_shape = replace(
+        base,
+        targets=replace(base.targets, count=6),
+        attack=replace(
+            base.attack,
+            pts_construction=replace(
+                pts,
+                artifacts=replace(pts.artifacts, save_per_session_records=False),
+                cem=replace(pts.cem, save_top_k_candidates=1),
+            ),
+        ),
+    )
+
+    old_identity = _direct_action_identity(old_artifact_shape)
+    lean_identity = _direct_action_identity(lean_artifact_shape)
+
+    assert old_identity == lean_identity
+    assert victim_prediction_key(
+        old_artifact_shape,
+        "srgnn",
+        run_type=DIRECT_ACTION_RUN_TYPE,
+        victim_attack_identity_context=old_identity,
+        victim_effective_train_seed=123,
+    ) == victim_prediction_key(
+        lean_artifact_shape,
+        "srgnn",
+        run_type=DIRECT_ACTION_RUN_TYPE,
+        victim_attack_identity_context=lean_identity,
+        victim_effective_train_seed=123,
+    )
+
+
 def test_pts_cem_victim_identity_excludes_experiment_name() -> None:
     base = _base_config()
-    renamed = replace(base, experiment=replace(base.experiment, name="other_experiment"))
+    renamed = replace(
+        base, experiment=replace(base.experiment, name="other_experiment")
+    )
 
     assert _identity(base) == _identity(renamed)
 
@@ -303,7 +406,9 @@ def _context(config) -> RunContext:
     )
 
 
-def _config_for_temp_root(temp_root: Path, *, sampled: bool, target_item: int | None = None):
+def _config_for_temp_root(
+    temp_root: Path, *, sampled: bool, target_item: int | None = None
+):
     base = _base_config()
     targets = (
         replace(base.targets, mode="sampled", explicit_list=(), bucket="all", count=1)
@@ -417,12 +522,9 @@ def test_explicit_to_sampled_pts_cem_victim_prediction_cache_reuse(monkeypatch) 
 
         sampled_metrics = load_json(
             next(
-                (
-                    temp_root
-                    / "runs"
-                    / "diginetica"
-                    / "pts_cem_sampled_reuse"
-                ).rglob("targets/*/victims/srgnn/metrics.json")
+                (temp_root / "runs" / "diginetica" / "pts_cem_sampled_reuse").rglob(
+                    "targets/*/victims/srgnn/metrics.json"
+                )
             )
         )
 

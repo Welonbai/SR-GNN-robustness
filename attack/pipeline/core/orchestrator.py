@@ -19,6 +19,7 @@ from attack.common.artifact_io import (
 )
 from attack.common.config import Config
 from attack.common.paths import (
+    PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     attack_key,
     attack_key_payload,
@@ -66,6 +67,12 @@ PROGRESS_TIMEZONE = "Asia/Taipei"
 _PROGRESS_ZONE = ZoneInfo(PROGRESS_TIMEZONE)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DROP_SHARED_METADATA = object()
+_PTS_CEM_TARGET_LEVEL_VICTIM_RUN_TYPES = frozenset(
+    {
+        PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -219,7 +226,9 @@ def run_targets_and_victims(
     plan_by_target = _group_planned_cells_by_target(planned_cells)
     try:
         overall_index = 0
-        for target_index, (target_item, victim_cells) in enumerate(plan_by_target.items(), start=1):
+        for target_index, (target_item, victim_cells) in enumerate(
+            plan_by_target.items(), start=1
+        ):
             current_run = {
                 "target_index": int(target_index),
                 "target_item": int(target_item),
@@ -252,11 +261,13 @@ def run_targets_and_victims(
                     run_type=run_type,
                     target_item=int(target_item),
                 )
-                victim_attack_identity_context = _pts_cem_victim_attack_identity_context(
-                    config,
-                    run_type=run_type,
-                    target_item=int(target_item),
-                    target_metadata=target_payload.metadata,
+                victim_attack_identity_context = (
+                    _pts_cem_victim_attack_identity_context(
+                        config,
+                        run_type=run_type,
+                        target_item=int(target_item),
+                        target_metadata=target_payload.metadata,
+                    )
                 )
                 victim_cache_effective_seed = (
                     victim_effective_seed
@@ -357,7 +368,9 @@ def run_targets_and_victims(
                         )
                     )
                 if victim_result.poisoned_train_path is not None:
-                    payload["poisoned_train_path"] = _repo_relative_path(victim_result.poisoned_train_path)
+                    payload["poisoned_train_path"] = _repo_relative_path(
+                        victim_result.poisoned_train_path
+                    )
                 if target_payload.metadata:
                     payload.update(target_payload.metadata)
                 if victim_result.extra:
@@ -438,7 +451,11 @@ def run_targets_and_victims(
         save_json(progress_payload, metadata_paths["progress"])
         return summary
     except BaseException as exc:
-        if current_run is not None and current_run.get("victim_name") and not current_cell_committed:
+        if (
+            current_run is not None
+            and current_run.get("victim_name")
+            and not current_cell_committed
+        ):
             _mark_coverage_cell_failed(
                 run_coverage,
                 target_item=int(current_run["target_item"]),
@@ -527,9 +544,12 @@ def _pts_cem_victim_attack_identity_context(
     target_item: int,
     target_metadata: Mapping[str, object],
 ) -> dict[str, object] | None:
-    if run_type != PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE:
+    if run_type not in _PTS_CEM_TARGET_LEVEL_VICTIM_RUN_TYPES:
         return None
-    if str(target_metadata.get("pts_construction_method", "")) != "grouped_cem_v1":
+    construction_method = str(
+        target_metadata.get("pts_construction_method", "")
+    ).strip()
+    if not construction_method:
         return None
 
     shared_cache_key = target_metadata.get("shared_pts_cem_cache_key")
@@ -561,8 +581,8 @@ def _pts_cem_victim_attack_identity_context(
     return {
         "schema_version": "pts_cem_target_level_victim_attack_identity_v1",
         "attack_type": "pts_cem",
-        "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
-        "construction_method": "grouped_cem_v1",
+        "run_type": run_type,
+        "construction_method": construction_method,
         "dataset_split_identity": split_key(config),
         "poison_train_only": bool(config.data.poison_train_only),
         "target_item": int(target_item),
@@ -599,13 +619,19 @@ def _pts_cem_victim_identity_metrics_payload(
 ) -> dict[str, object]:
     return {
         "victim_prediction_attack_identity_mode": "pts_cem_target_level_construction",
-        "shared_pts_cem_cache_key": victim_attack_identity_context["shared_pts_cem_cache_key"],
+        "shared_pts_cem_cache_key": victim_attack_identity_context[
+            "shared_pts_cem_cache_key"
+        ],
         "selected_pts_cem_sessions_sha1": victim_attack_identity_context[
             "selected_pts_cem_sessions_sha1"
         ],
         "target_item": int(victim_attack_identity_context["target_item"]),
-        "source_candidate_rank": victim_attack_identity_context.get("source_candidate_rank"),
-        "source_candidate_key": victim_attack_identity_context.get("source_candidate_key"),
+        "source_candidate_rank": victim_attack_identity_context.get(
+            "source_candidate_rank"
+        ),
+        "source_candidate_key": victim_attack_identity_context.get(
+            "source_candidate_key"
+        ),
         "evaluation": _evaluation_metrics_config_payload(config),
         "old_run_level_attack_key": attack_key(
             config,
@@ -709,9 +735,7 @@ def _execution_request_metadata(config: Config, *, run_type: str) -> dict[str, o
     sampled_mode = config.targets.mode == "sampled"
     explicit_targets = [int(item) for item in config.targets.explicit_list]
     requested_target_count = (
-        int(config.targets.count)
-        if sampled_mode
-        else int(len(explicit_targets))
+        int(config.targets.count) if sampled_mode else int(len(explicit_targets))
     )
     return {
         "request_model": "append_invocation",
@@ -772,7 +796,9 @@ def _current_phase1_legacy_batch_state(
     )
     target_selection_identity = legacy_identities["target_selection_identity"]
     evaluation_identity = legacy_identities["evaluation_identity"]
-    if not isinstance(target_selection_identity, dict) or not isinstance(evaluation_identity, dict):
+    if not isinstance(target_selection_identity, dict) or not isinstance(
+        evaluation_identity, dict
+    ):
         raise TypeError("Legacy identity payloads must be mappings.")
     return {
         "run_type": run_type,
@@ -808,13 +834,20 @@ def _extract_existing_phase1_legacy_batch_state(
         legacy_identities = derived.get("legacy_identities")
     if isinstance(legacy_identities, Mapping):
         target_selection_key_value = _extract_identity_key(
-            legacy_identities.get("target_selection_identity", legacy_identities.get("target_selection_key"))
+            legacy_identities.get(
+                "target_selection_identity",
+                legacy_identities.get("target_selection_key"),
+            )
         )
         evaluation_key_value = _extract_identity_key(
-            legacy_identities.get("evaluation_identity", legacy_identities.get("evaluation_key"))
+            legacy_identities.get(
+                "evaluation_identity", legacy_identities.get("evaluation_key")
+            )
         )
     else:
-        target_selection_key_value = _extract_identity_key(derived.get("target_selection_key"))
+        target_selection_key_value = _extract_identity_key(
+            derived.get("target_selection_key")
+        )
         evaluation_key_value = _extract_identity_key(derived.get("evaluation_key"))
 
     if target_selection_key_value is None or evaluation_key_value is None:
@@ -841,7 +874,10 @@ def _guard_phase1_run_group_reuse(
     if not existing_entries:
         return
 
-    if metadata_paths["run_coverage"].exists() and metadata_paths["execution_log"].exists():
+    if (
+        metadata_paths["run_coverage"].exists()
+        and metadata_paths["execution_log"].exists()
+    ):
         return
 
     current_state = _current_phase1_legacy_batch_state(
@@ -1001,7 +1037,9 @@ def _append_execution_record(
         "requested_target_count": requested_target_count,
         "requested_target_items": [int(item) for item in requested_target_items],
         "requested_victims": list(requested_victims),
-        "added_target_items": [int(item) for item in plan_summary["added_target_items"]],
+        "added_target_items": [
+            int(item) for item in plan_summary["added_target_items"]
+        ],
         "added_victims": list(plan_summary["added_victims"]),
         "planned_cells": [
             {
@@ -1177,7 +1215,9 @@ def _record_execution_cell_completion(
         planned_entry["error"] = None
     completed_cells = execution_record.get("completed_cells")
     if not isinstance(completed_cells, list):
-        raise ValueError("execution_log execution records must contain completed_cells.")
+        raise ValueError(
+            "execution_log execution records must contain completed_cells."
+        )
     completed_cells.append(
         {
             "target_item": int(target_item),
@@ -1306,7 +1346,9 @@ def _artifact_path_if_exists(path: Path | None) -> str | None:
     return _repo_relative_path(path_obj)
 
 
-def _coverage_artifact_payload(artifacts: Mapping[str, Path] | None) -> dict[str, str | None]:
+def _coverage_artifact_payload(
+    artifacts: Mapping[str, Path] | None
+) -> dict[str, str | None]:
     if artifacts is None:
         return {
             "metrics": None,
@@ -1446,7 +1488,9 @@ def _write_legacy_summary_snapshot(
     metadata_paths: Mapping[str, Path],
     summary_current: Mapping[str, Any] | None,
 ) -> dict[str, object]:
-    summary_current_payload = summary_current if isinstance(summary_current, Mapping) else {}
+    summary_current_payload = (
+        summary_current if isinstance(summary_current, Mapping) else {}
+    )
     summary_payload = {
         "run_type": run_type,
         "run_group_key": summary_current_payload.get("run_group_key"),
@@ -1549,22 +1593,34 @@ def _initial_artifact_manifest(
     canonical_paths = canonical_split_paths(config)
     target_selection_artifact = {
         "shared_dir": _repo_relative_path(context.shared_paths["target_shared_dir"]),
-        "config_snapshot": _repo_relative_path(context.shared_paths["target_config_snapshot"]),
-        "selected_targets": _repo_relative_path(context.shared_paths["selected_targets"]),
-        "target_selection_meta": _repo_relative_path(context.shared_paths["target_selection_meta"]),
+        "config_snapshot": _repo_relative_path(
+            context.shared_paths["target_config_snapshot"]
+        ),
+        "selected_targets": _repo_relative_path(
+            context.shared_paths["selected_targets"]
+        ),
+        "target_selection_meta": _repo_relative_path(
+            context.shared_paths["target_selection_meta"]
+        ),
         "legacy_target_info": _repo_relative_path(context.shared_paths["target_info"]),
     }
     poison_artifact: dict[str, object] | None = None
     if run_type != "clean":
         poison_artifact = {
-            "shared_dir": _repo_relative_path(context.shared_paths["attack_shared_dir"]),
+            "shared_dir": _repo_relative_path(
+                context.shared_paths["attack_shared_dir"]
+            ),
             "poison_model": _repo_relative_path(context.shared_paths["poison_model"]),
             "poison_model_identity": _repo_relative_path(
                 context.shared_paths["poison_model_identity"]
             ),
             "fake_sessions": _repo_relative_path(context.shared_paths["fake_sessions"]),
-            "poison_train_history": _repo_relative_path(context.shared_paths["poison_train_history"]),
-            "config_snapshot": _repo_relative_path(context.shared_paths["attack_config_snapshot"]),
+            "poison_train_history": _repo_relative_path(
+                context.shared_paths["poison_train_history"]
+            ),
+            "config_snapshot": _repo_relative_path(
+                context.shared_paths["attack_config_snapshot"]
+            ),
         }
     derived_identity: dict[str, object] | None = None
     if attack_identity_context is not None:
@@ -1584,12 +1640,15 @@ def _initial_artifact_manifest(
         ),
         "shared_artifacts": {
             "canonical_split": {
-                key: _repo_relative_path(path)
-                for key, path in canonical_paths.items()
+                key: _repo_relative_path(path) for key, path in canonical_paths.items()
             },
             "target_cohort": {
-                "shared_dir": _repo_relative_path(context.shared_paths["target_cohort_dir"]),
-                "target_registry": _repo_relative_path(context.shared_paths["target_registry"]),
+                "shared_dir": _repo_relative_path(
+                    context.shared_paths["target_cohort_dir"]
+                ),
+                "target_registry": _repo_relative_path(
+                    context.shared_paths["target_registry"]
+                ),
             },
             "legacy_target_selection": target_selection_artifact,
             "poison_artifact": poison_artifact,
@@ -1598,7 +1657,9 @@ def _initial_artifact_manifest(
             "run_root": _repo_relative_path(metadata_paths["run_root"]),
             "resolved_config": _repo_relative_path(metadata_paths["resolved_config"]),
             "key_payloads": _repo_relative_path(metadata_paths["key_payloads"]),
-            "artifact_manifest": _repo_relative_path(metadata_paths["artifact_manifest"]),
+            "artifact_manifest": _repo_relative_path(
+                metadata_paths["artifact_manifest"]
+            ),
             "run_coverage": _repo_relative_path(metadata_paths["run_coverage"]),
             "execution_log": _repo_relative_path(metadata_paths["execution_log"]),
             "summary_current": _repo_relative_path(metadata_paths["summary_current"]),
@@ -1612,7 +1673,9 @@ def _initial_artifact_manifest(
             "run_root": _repo_relative_path(metadata_paths["run_root"]),
             "resolved_config": _repo_relative_path(metadata_paths["resolved_config"]),
             "key_payloads": _repo_relative_path(metadata_paths["key_payloads"]),
-            "artifact_manifest": _repo_relative_path(metadata_paths["artifact_manifest"]),
+            "artifact_manifest": _repo_relative_path(
+                metadata_paths["artifact_manifest"]
+            ),
             "run_coverage": _repo_relative_path(metadata_paths["run_coverage"]),
             "execution_log": _repo_relative_path(metadata_paths["execution_log"]),
             "summary_current": _repo_relative_path(metadata_paths["summary_current"]),
@@ -1697,7 +1760,9 @@ def _populate_progress_plan_from_cells(
     progress_payload["target_items"] = [int(item) for item in requested_target_items]
     progress_payload["requested_victims"] = list(requested_victims)
     progress_payload["planned_cells"] = [dict(cell) for cell in planned_cells]
-    progress_payload["skipped_completed_cells"] = [dict(cell) for cell in skipped_completed_cells]
+    progress_payload["skipped_completed_cells"] = [
+        dict(cell) for cell in skipped_completed_cells
+    ]
     progress_payload["current"] = None
     progress_payload["runs"] = runs
 
@@ -1789,10 +1854,14 @@ def _progress_run_entry(
     index = int(overall_index) - 1
     if 0 <= index < len(runs):
         entry = runs[index]
-        if isinstance(entry, dict) and int(entry.get("overall_index", -1)) == int(overall_index):
+        if isinstance(entry, dict) and int(entry.get("overall_index", -1)) == int(
+            overall_index
+        ):
             return entry
     for entry in runs:
-        if isinstance(entry, dict) and int(entry.get("overall_index", -1)) == int(overall_index):
+        if isinstance(entry, dict) and int(entry.get("overall_index", -1)) == int(
+            overall_index
+        ):
             return entry
     return None
 
@@ -1845,6 +1914,17 @@ def _maybe_reuse_or_execute_victim(
         artifacts=artifacts,
         predictions_path=predictions_path,
     )
+    if reused is None and victim_attack_identity_context is not None:
+        reused = _load_legacy_pts_cem_victim_result(
+            config,
+            run_type=run_type,
+            victim_name=victim_name,
+            target_item=target_item,
+            run_dir=run_dir,
+            artifacts=artifacts,
+            predictions_path=predictions_path,
+            victim_attack_identity_context=victim_attack_identity_context,
+        )
     if reused is not None:
         print(f"[victim] target={int(target_item)} model={victim_name} reuse")
         return reused, True
@@ -1888,7 +1968,9 @@ def _load_shared_victim_result(
 
     execution_payload = load_json(shared_execution_result)
     predictions_payload = load_json(shared_predictions)
-    if not isinstance(execution_payload, dict) or not isinstance(predictions_payload, dict):
+    if not isinstance(execution_payload, dict) or not isinstance(
+        predictions_payload, dict
+    ):
         raise ValueError("Shared victim artifacts are malformed.")
 
     _save_reused_predictions_payload(
@@ -1926,6 +2008,169 @@ def _load_shared_victim_result(
     )
 
 
+def _load_legacy_pts_cem_victim_result(
+    config: Config,
+    *,
+    run_type: str,
+    victim_name: str,
+    target_item: int,
+    run_dir: Path,
+    artifacts: dict[str, Path],
+    predictions_path: Path,
+    victim_attack_identity_context: Mapping[str, object],
+) -> VictimExecutionResult | None:
+    """Backfill the target-level PTS-CEM victim cache from older run artifacts.
+
+    Older direct-action PTS-CEM runs keyed victim predictions by the batch-level
+    attack_key, so changing target count or artifact persistence knobs could hide
+    otherwise identical target/victim results. The selected-session hash is the
+    stable target-level identity for those results.
+    """
+    expected_shared_key = str(
+        victim_attack_identity_context.get("shared_pts_cem_cache_key", "")
+    )
+    expected_sessions_sha1 = str(
+        victim_attack_identity_context.get("selected_pts_cem_sessions_sha1", "")
+    )
+    if not expected_shared_key or not expected_sessions_sha1:
+        return None
+
+    for metrics_path in _iter_legacy_pts_cem_metrics_paths(
+        config,
+        target_item=target_item,
+        victim_name=victim_name,
+    ):
+        if metrics_path.resolve() == artifacts["metrics"].resolve():
+            continue
+        metrics_payload = load_json(metrics_path)
+        if not isinstance(metrics_payload, Mapping):
+            continue
+        if not _legacy_pts_cem_metrics_match(
+            config,
+            metrics_payload,
+            victim_name=victim_name,
+            target_item=target_item,
+            expected_shared_key=expected_shared_key,
+            expected_sessions_sha1=expected_sessions_sha1,
+        ):
+            continue
+        predictions_source = _legacy_metrics_artifact_path(
+            metrics_payload,
+            "predictions_path",
+            default=metrics_path.parent / "predictions.json",
+        )
+        if predictions_source is None or not predictions_source.exists():
+            continue
+        predictions_payload = load_json(predictions_source)
+        if not isinstance(predictions_payload, Mapping):
+            continue
+
+        _save_reused_predictions_payload(
+            predictions_payload,
+            predictions_path=predictions_path,
+            target_item=target_item,
+        )
+        train_history_source = metrics_path.parent / "train_history.json"
+        _copy_if_exists(train_history_source, artifacts["train_history"])
+        poisoned_train_source = _legacy_metrics_artifact_path(
+            metrics_payload,
+            "poisoned_train_path",
+            default=metrics_path.parent / "poisoned_train.txt",
+        )
+        poisoned_train_local: Path | None = None
+        if poisoned_train_source is not None and poisoned_train_source.exists():
+            _copy_if_exists(poisoned_train_source, artifacts["poisoned_train"])
+            poisoned_train_local = artifacts["poisoned_train"]
+
+        _write_reused_victim_resolved_config(
+            config,
+            victim_name=victim_name,
+            run_dir=run_dir,
+            artifacts=artifacts,
+        )
+
+        rankings_raw = predictions_payload.get("rankings")
+        rankings = None
+        if rankings_raw is not None:
+            rankings = [list(map(int, row)) for row in rankings_raw]
+        result = VictimExecutionResult(
+            predictions=rankings,
+            predictions_path=predictions_path,
+            extra={
+                "reused_from_legacy_pts_cem_victim_cache": True,
+                "legacy_pts_cem_metrics_path": _repo_relative_path(metrics_path),
+                "legacy_pts_cem_predictions_path": _repo_relative_path(
+                    predictions_source
+                ),
+            },
+            poisoned_train_path=poisoned_train_local,
+        )
+        _persist_shared_victim_result(
+            run_type=run_type,
+            victim_result=result,
+            artifacts=artifacts,
+        )
+        return result
+    return None
+
+
+def _iter_legacy_pts_cem_metrics_paths(
+    config: Config,
+    *,
+    target_item: int,
+    victim_name: str,
+) -> list[Path]:
+    runs_dataset_root = _repo_path(
+        Path(config.artifacts.root)
+        / config.artifacts.runs_dir
+        / config.data.dataset_name
+    )
+    if not runs_dataset_root.exists():
+        return []
+    pattern = f"*/*/targets/{int(target_item)}/victims/{victim_name}/metrics.json"
+    paths = [path for path in runs_dataset_root.glob(pattern) if path.is_file()]
+    return sorted(paths, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def _legacy_pts_cem_metrics_match(
+    config: Config,
+    metrics_payload: Mapping[str, object],
+    *,
+    victim_name: str,
+    target_item: int,
+    expected_shared_key: str,
+    expected_sessions_sha1: str,
+) -> bool:
+    if str(metrics_payload.get("victim", "")) != victim_name:
+        return False
+    try:
+        if int(metrics_payload.get("target_item")) != int(target_item):
+            return False
+    except (TypeError, ValueError):
+        return False
+    if str(metrics_payload.get("shared_pts_cem_cache_key", "")) != expected_shared_key:
+        return False
+    if (
+        str(metrics_payload.get("selected_pts_cem_sessions_sha1", ""))
+        != expected_sessions_sha1
+    ):
+        return False
+    metrics_training = metrics_payload.get("training")
+    return metrics_training == _victim_training_summary(config, victim_name)
+
+
+def _legacy_metrics_artifact_path(
+    metrics_payload: Mapping[str, object],
+    key: str,
+    *,
+    default: Path,
+) -> Path | None:
+    value = metrics_payload.get(key)
+    if isinstance(value, str) and value.strip():
+        return _repo_path(value)
+    return default
+
+
 def _persist_shared_victim_result(
     *,
     run_type: str,
@@ -1936,8 +2181,13 @@ def _persist_shared_victim_result(
     _copy_if_exists(artifacts["predictions"], artifacts["shared_predictions"])
     _copy_if_exists(artifacts["train_history"], artifacts["shared_train_history"])
     shared_poisoned_train = None
-    if victim_result.poisoned_train_path is not None and Path(victim_result.poisoned_train_path).exists():
-        _copy_if_exists(Path(victim_result.poisoned_train_path), artifacts["shared_poisoned_train"])
+    if (
+        victim_result.poisoned_train_path is not None
+        and Path(victim_result.poisoned_train_path).exists()
+    ):
+        _copy_if_exists(
+            Path(victim_result.poisoned_train_path), artifacts["shared_poisoned_train"]
+        )
         shared_poisoned_train = str(artifacts["shared_poisoned_train"])
     save_json(
         {
@@ -2051,7 +2301,9 @@ def _update_artifact_manifest(
             "shared_dir": _repo_relative_path(artifacts["shared_dir"]),
             "predictions": _repo_relative_path(artifacts["shared_predictions"]),
             "train_history": _repo_relative_path(artifacts["shared_train_history"]),
-            "execution_result": _repo_relative_path(artifacts["shared_execution_result"]),
+            "execution_result": _repo_relative_path(
+                artifacts["shared_execution_result"]
+            ),
             "poisoned_train": _repo_relative_path(artifacts["shared_poisoned_train"]),
         },
     }
@@ -2114,7 +2366,9 @@ def _sanitize_clean_shared_extra(
                 continue
             sanitized_items.append(cleaned)
         return sanitized_items if sanitized_items else _DROP_SHARED_METADATA
-    if isinstance(value, str) and _looks_like_local_path_metadata(value=value, key=parent_key):
+    if isinstance(value, str) and _looks_like_local_path_metadata(
+        value=value, key=parent_key
+    ):
         return _DROP_SHARED_METADATA
     return value
 
@@ -2125,7 +2379,9 @@ def _looks_like_local_path_metadata(
     key: str | None,
 ) -> bool:
     key_lower = (key or "").strip().lower()
-    if any(token in key_lower for token in ("path", "dir", "root", "checkpoint", "log")):
+    if any(
+        token in key_lower for token in ("path", "dir", "root", "checkpoint", "log")
+    ):
         return True
     normalized = value.replace("\\", "/").strip()
     if not normalized:
@@ -2150,7 +2406,10 @@ def _guard_clean_shared_cache_bootstrap(
 ) -> None:
     if run_type != "clean":
         return
-    if artifacts["shared_predictions"].exists() and artifacts["shared_execution_result"].exists():
+    if (
+        artifacts["shared_predictions"].exists()
+        and artifacts["shared_execution_result"].exists()
+    ):
         return
     if not _coverage_has_completed_victim_cells(run_coverage, victim_name=victim_name):
         return

@@ -31,7 +31,7 @@ from pytorch_code.utils import Data
 RANK_CONVENTION = "rank = 1 + count(scores > target_score); lower is better"
 DEFAULT_CONFIG = (
     "attack/configs/"
-    "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sampled.yaml"
+    "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_sample10.yaml"
 )
 DEFAULT_OUTPUT_DIR = "outputs/analysis/target_action_feature_survey"
 

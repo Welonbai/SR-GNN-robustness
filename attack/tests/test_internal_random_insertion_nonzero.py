@@ -35,7 +35,7 @@ RANDOM_NZ_CONFIG_PATH = (
     REPO_ROOT
     / "attack"
     / "configs"
-    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_srgnn_sampled.yaml"
+    / "diginetica_valbest_attack_random_nonzero_when_possible_ratio1_sample10.yaml"
 )
 RANDOM_INSERTION_PARTIAL4_CONFIG_PATH = (
     REPO_ROOT

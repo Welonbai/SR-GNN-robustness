@@ -1,5 +1,5 @@
 experiment:
-  name: valbest_clean_run_no_attack_srgnn_sample3
+  name: diginetica_valbest_attack_random_nonzero_when_possible_ratio1_sample10
 
 data:
   dataset_name: diginetica
@@ -108,3 +108,4 @@ artifacts:
   root: outputs
   shared_dir: shared
   runs_dir: runs
+  cleanup_victim_intermediates: true

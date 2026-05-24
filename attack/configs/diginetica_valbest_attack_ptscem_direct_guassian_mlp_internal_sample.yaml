@@ -96,7 +96,7 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 5
+  count: 8
   reuse_saved_targets: false
 
 victims:
