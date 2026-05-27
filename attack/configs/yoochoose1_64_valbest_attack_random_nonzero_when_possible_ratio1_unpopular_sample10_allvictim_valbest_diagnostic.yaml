@@ -1,15 +1,15 @@
 experiment:
-  name: diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample
+  name: yoochoose1_64_valbest_attack_random_nonzero_when_possible_ratio1_unpopular_sample10_allvictim_valbest_diagnostic
 
 data:
-  dataset_name: diginetica
+  dataset_name: yoochoose1_64
   split_protocol: unified
   poison_train_only: true
   canonical_split:
     min_item_count: 5
     min_session_len: 2
     valid_ratio: 0.1
-    test_days: 7
+    test_days: 1
 
 seeds:
   fake_session_seed: 20260405
@@ -22,7 +22,6 @@ attack:
   size: 0.01
   fake_session_generation_topk: 100
   replacement_topk_ratio: 1.0
-
   poison_model:
     name: srgnn
     params:
@@ -41,70 +40,19 @@ attack:
         best_metric: valid_ground_truth_mrr@20
         patience_metric: recall20_or_mrr20
 
-  pts_construction:
-    enabled: true
-    method: direct_action_mlp_cem
-
-    prefix_selector:
-      range: internal
-      sampler: uniform
-
-    generation:
-      topk: 100
-      length_policy: same_as_residual_suffix
-
-    direct_action_policy:
-      parameterization: direct_action_mlp_h2
-      length_feature: z_score
-
-    cem:
-      iterations: 3
-      population_schedule: [16, 8, 8]
-      elite_ratio: 0.25
-      sampler:
-        type: gaussian
-        concentration_scale: 20.0
-      update:
-        mode: elite_centered_empirical_gaussian
-        elite_min_std: 0.25
-      seed_source: position_opt_seed
-      candidate_seed_stride: 1000
-      save_top_k_candidates: 1
-      epoch_reward_diagnostics:
-        enabled: false
-
-    reward:
-      target_summary: raw_lowk_mrr_recall_10_20
-      enable_gt_penalty: false
-      gt_penalty_weight: 0.0
-      enable_length_penalty: false
-      length_penalty_weight: 0.0
-
-    artifacts:
-      save_cem_trace: true
-      save_best_policy: true
-      save_final_policy: true
-      save_per_session_records: false
-      save_candidate_sessions: false
-      save_best_sessions: true
-      save_top_candidate_sessions: true
-
-    final_selection:
-      mode: global_best_candidate
-
 targets:
   mode: sampled
   explicit_list: []
-  bucket: popular
-  count: 10
-  reuse_saved_targets: false
+  bucket: unpopular
+  count: 1
+  reuse_saved_targets: true
 
 victims:
   enabled: [srgnn, miasrec, tron]
   params:
     srgnn:
       train:
-        epochs: 4
+        epochs: 30
         batch_size: 100
         hidden_size: 100
         lr: 0.001
@@ -119,17 +67,17 @@ victims:
         patience_metric: recall20_or_mrr20
     miasrec:
       train:
-        epochs: 6
-        checkpoint_protocol: fixed_epoch
-        validation_enabled: false
-        export_model: last
+        epochs: 10
         train_batch_size: 64
         eval_batch_size: 32
+        checkpoint_protocol: validation_best
+        validation_enabled: true
+        export_model: best
     tron:
       train:
-        epochs: 4
-        checkpoint_protocol: fixed_epoch
-        validation_enabled: false
+        max_epochs: 10
+        checkpoint_protocol: validation_best
+        validation_enabled: true
         export_model: last
   runtime:
     miasrec:

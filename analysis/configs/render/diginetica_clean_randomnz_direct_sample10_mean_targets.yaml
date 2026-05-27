@@ -1,0 +1,74 @@
+style_name: diginetica_clean_randomnz_direct_sample10_mean_targets
+
+output_format: png
+
+title:
+  template: "Diginetica | mean targets 10 items | Clean / randomNZ / ptscem"
+  align: center
+  font_size: 12
+  color: black
+
+figure:
+  width: 15.5
+  height: 5.8
+  dpi: 220
+  background_color: white
+
+table:
+  font_size: 10
+  round_digits: 6
+  signed_percent_round_digits: 3
+  text_color: black
+  show_grid: true
+  auto_shrink: false
+  wrap_text: false
+  cell_align: center
+  top_level_group_separators: true
+  stub_column_width_weight: 0.8
+
+  display_alias:
+    labels:
+      attack_method: Attack
+      victim_model: Victim
+      metric_name: Metric
+      metric_scope: Scope
+      k: K
+
+    attack_method:
+      clean: Clean
+      random_nonzero_when_possible: randomNZ
+      pts_direct_cem: ptscem
+
+    victim_model:
+      miasrec: MiaSRec
+      srgnn: SRGNN
+      tron: TRON
+
+    metric_name:
+      recall: Recall
+      mrr: MRR
+
+    metric_scope:
+      ground_truth: GT
+      targeted: Target
+
+  value_alias: {}
+
+  dimension_value_orders:
+    victim_model:
+      - srgnn
+      - miasrec
+      - tron
+    attack_method:
+      - clean
+      - random_nonzero_when_possible
+      - pts_direct_cem
+
+  best_value_bolding:
+    compare_along: rows
+    mode: max
+    underline_second_best: true
+    partition_by_levels:
+      - victim_model
+    column_filters:
+      metric_scope: targeted

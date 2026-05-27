@@ -1662,8 +1662,8 @@ def test_renderer_scales_gt_heatmap_separately_for_positive_and_negative_values_
     assert data_cell_presentation.signed_percent_scales[0][0] is None
     assert data_cell_presentation.signed_percent_scales[4][0].positive_abs_max == pytest.approx(1.0)
     assert data_cell_presentation.signed_percent_scales[4][0].negative_abs_max == pytest.approx(20.0)
-    assert positive_color == "#2ca25f"
-    assert negative_color == "#de2d26"
+    assert positive_color == "#96d0af"
+    assert negative_color == "#ee9692"
 
 
 def test_renderer_keeps_absolute_values_when_gt_relative_metadata_is_absent() -> None:

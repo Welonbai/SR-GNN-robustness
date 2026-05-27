@@ -47,6 +47,7 @@ SIGNED_PERCENT_VALUE_DISPLAY_MODE = "signed_percent"
 RELATIVE_HEATMAP_NEUTRAL_COLOR = "#FFFFFF"
 RELATIVE_HEATMAP_POSITIVE_COLOR = "#2CA25F"
 RELATIVE_HEATMAP_NEGATIVE_COLOR = "#DE2D26"
+RELATIVE_HEATMAP_STRENGTH = 0.5
 
 
 class AnalysisError(ValueError):
@@ -111,6 +112,7 @@ class TableSpec:
     best_value_bolding: BestValueBoldingSpec | None
     top_level_group_separators: bool
     stub_column_width_weight: float
+    signed_percent_heatmap_strength: float
 
 
 @dataclass(frozen=True)
@@ -302,6 +304,10 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
         stub_column_width_weight=require_positive_float(
             table_payload.get("stub_column_width_weight", STUB_COLUMN_WIDTH_WEIGHT),
             label="table.stub_column_width_weight",
+        ),
+        signed_percent_heatmap_strength=require_unit_float(
+            table_payload.get("signed_percent_heatmap_strength", RELATIVE_HEATMAP_STRENGTH),
+            label="table.signed_percent_heatmap_strength",
         ),
     )
 
@@ -720,6 +726,7 @@ def draw_structured_table(
                     raw_value=raw_dataframe.iloc[row_index][value_column_name],
                     display_mode=data_cell_presentation.display_modes[row_index][leaf_column_index],
                     signed_percent_heatmap_scale=data_cell_presentation.signed_percent_scales[row_index][leaf_column_index],
+                    signed_percent_heatmap_strength=render_spec.table.signed_percent_heatmap_strength,
                     leaf_column_fill_color=leaf_column_fill_colors[leaf_column_index],
                     scope_colors=render_spec.table.scope_colors,
                 ),
@@ -963,12 +970,14 @@ def resolve_data_cell_fill_color(
     signed_percent_heatmap_scale: SignedPercentHeatmapScale | None,
     leaf_column_fill_color: str | None,
     scope_colors: Mapping[str, Mapping[str, str]],
+    signed_percent_heatmap_strength: float = RELATIVE_HEATMAP_STRENGTH,
 ) -> str | None:
     """Resolve one semantic fill color for a data cell."""
     if display_mode == SIGNED_PERCENT_VALUE_DISPLAY_MODE:
         heatmap_color = resolve_signed_percent_heatmap_color(
             value=raw_value,
             signed_percent_heatmap_scale=signed_percent_heatmap_scale,
+            signed_percent_heatmap_strength=signed_percent_heatmap_strength,
         )
         if heatmap_color is not None:
             return heatmap_color
@@ -985,6 +994,7 @@ def resolve_signed_percent_heatmap_color(
     *,
     value: Any,
     signed_percent_heatmap_scale: SignedPercentHeatmapScale | None,
+    signed_percent_heatmap_strength: float = RELATIVE_HEATMAP_STRENGTH,
 ) -> str | None:
     """Map one signed GT-relative percentage onto a light-to-dark diverging color."""
     numeric_value = coerce_numeric_value(value)
@@ -1009,7 +1019,7 @@ def resolve_signed_percent_heatmap_color(
     return interpolate_hex_color(
         RELATIVE_HEATMAP_NEUTRAL_COLOR,
         target_color,
-        magnitude,
+        magnitude * signed_percent_heatmap_strength,
     )
 
 
@@ -2543,6 +2553,18 @@ def require_positive_float(value: Any, *, label: str) -> float:
         numeric_value = float(value)
         if numeric_value <= 0:
             raise AnalysisError(f"Expected '{label}' to be greater than zero, got {numeric_value}.")
+        return numeric_value
+    raise AnalysisError(f"Expected '{label}' to be numeric, got {type(value).__name__}.")
+
+
+def require_unit_float(value: Any, *, label: str) -> float:
+    """Require a numeric value between zero and one, inclusive."""
+    if isinstance(value, bool):
+        raise AnalysisError(f"Expected '{label}' to be numeric, got bool.")
+    if isinstance(value, Real):
+        numeric_value = float(value)
+        if numeric_value < 0.0 or numeric_value > 1.0:
+            raise AnalysisError(f"Expected '{label}' to be between 0 and 1, got {numeric_value}.")
         return numeric_value
     raise AnalysisError(f"Expected '{label}' to be numeric, got {type(value).__name__}.")
 

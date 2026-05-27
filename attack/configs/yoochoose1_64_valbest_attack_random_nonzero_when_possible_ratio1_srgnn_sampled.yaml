@@ -26,7 +26,7 @@ attack:
     name: srgnn
     params:
       train:
-        epochs: 1
+        epochs: 30
         batch_size: 100
         hidden_size: 100
         lr: 0.001
@@ -44,7 +44,7 @@ targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 1
+  count: 8
   reuse_saved_targets: true
 
 victims:
@@ -52,7 +52,7 @@ victims:
   params:
     srgnn:
       train:
-        epochs: 1
+        epochs: 30
         batch_size: 100
         hidden_size: 100
         lr: 0.001
@@ -67,7 +67,7 @@ victims:
         patience_metric: recall20_or_mrr20
     miasrec:
       train:
-        epochs: 1
+        epochs: 6
         train_batch_size: 64
         eval_batch_size: 32
         checkpoint_protocol: fixed_epoch
@@ -75,7 +75,7 @@ victims:
         export_model: last
     tron:
       train:
-        epochs: 1
+        max_epochs: 3
         checkpoint_protocol: fixed_epoch
         validation_enabled: false
         export_model: last

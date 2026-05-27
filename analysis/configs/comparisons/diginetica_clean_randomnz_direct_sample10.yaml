@@ -1,0 +1,6 @@
+comparison_id: diginetica_clean_randomnz_direct_sample10
+
+runs:
+  - diginetica_clean_clean_randomnz_direct_sample10
+  - diginetica_randomnz_clean_randomnz_direct_sample10
+  - diginetica_direct_cem_clean_randomnz_direct_sample10

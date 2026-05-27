@@ -1,0 +1,20 @@
+defaults:
+  slice_policy: largest_complete_prefix
+  requested_victims:
+    - srgnn
+    - miasrec
+    - tron
+  requested_target_count: 10
+
+jobs:
+  - summary: outputs/runs/diginetica/diginetica_valbest_clean_sample10/run_group_e0caef2757/summary_current.json
+    output_name: diginetica_clean_clean_randomnz_direct_sample10
+    attack_method_override: clean
+
+  - summary: outputs/runs/diginetica/diginetica_valbest_attack_random_nonzero_when_possible_ratio1_sample10/run_group_7b8bde5ee4/summary_current.json
+    output_name: diginetica_randomnz_clean_randomnz_direct_sample10
+    attack_method_override: random_nonzero_when_possible
+
+  - summary: outputs/runs/diginetica/diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample/run_group_1edddc067f/summary_current.json
+    output_name: diginetica_direct_cem_clean_randomnz_direct_sample10
+    attack_method_override: pts_direct_cem
