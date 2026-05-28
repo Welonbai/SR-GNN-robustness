@@ -135,6 +135,17 @@ _SURROGATE_RETRAIN_REUSE_NOTE = (
     "fixed_last is intentionally excluded from cache identity; reused artifact "
     "may have been generated with validation_best."
 )
+_SURROGATE_TRAIN_IDENTITY_EXCLUDED_PARAM_KEYS = frozenset(
+    {
+        "batch_size",
+        "train_batch_size",
+        "eval_batch_size",
+    }
+)
+_SURROGATE_TRAIN_BATCH_IDENTITY_NOTE = (
+    "Surrogate train batch-size parameters are intentionally excluded from "
+    "PTS-CEM shared cache identity."
+)
 
 
 @dataclass(frozen=True)
@@ -1236,7 +1247,13 @@ def build_pts_cem_shared_cache_identity(
         ),
         "surrogate_reward": {
             "surrogate_model": "srgnn",
-            "surrogate_train_params": _srgnn_candidate_train_config(config),
+            "surrogate_train_params": _srgnn_candidate_train_identity_config(config),
+            "surrogate_train_identity_excluded_params": sorted(
+                _SURROGATE_TRAIN_IDENTITY_EXCLUDED_PARAM_KEYS
+            ),
+            "surrogate_train_batch_identity_note": (
+                _SURROGATE_TRAIN_BATCH_IDENTITY_NOTE
+            ),
             "reward": {
                 "target_summary": pts_config.reward.target_summary,
                 "enable_gt_penalty": bool(pts_config.reward.enable_gt_penalty),
@@ -2871,6 +2888,14 @@ def _srgnn_candidate_train_config(config: Config) -> dict[str, Any]:
     if not isinstance(train_config, Mapping):
         raise ValueError("PTS-CEM Phase 3 requires victims.params.srgnn.train.")
     return dict(train_config)
+
+
+def _srgnn_candidate_train_identity_config(config: Config) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in _srgnn_candidate_train_config(config).items()
+        if key not in _SURROGATE_TRAIN_IDENTITY_EXCLUDED_PARAM_KEYS
+    }
 
 
 def _resolved_pts_candidate_retrain_epochs(config: Config) -> int:
