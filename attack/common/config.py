@@ -55,6 +55,13 @@ COVERAGE_PREFIX_REPRESENTATION_MEAN_ITEM_EMBEDDING = "mean_item_embedding"
 COVERAGE_CANDIDATE_REPRESENTATION_TARGETIZED_PREFIX_MEAN_EMBEDDING = (
     "targetized_prefix_mean_embedding"
 )
+FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED = "poison_model_generated"
+FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED = (
+    "train_template_clean_exact_length_matched"
+)
+TRAIN_TEMPLATE_REFERENCE_SPLIT_TRAIN_SUB = "train_sub"
+TRAIN_TEMPLATE_TARGET_FILTERING_NONE = "none"
+TRAIN_TEMPLATE_LENGTH_MATCHING_EXACT_LARGEST_REMAINDER = "exact_largest_remainder"
 COVERAGE_RANK_WEIGHTING_INVERSE_LOG_RANK = "inverse_log_rank"
 COVERAGE_RANK_WEIGHTING_NONE = "none"
 COVERAGE_SIMILARITY_COSINE = "cosine"
@@ -2220,11 +2227,147 @@ class CarrierSelectionConfig:
 
 
 @dataclass(frozen=True)
+class TrainTemplateFallbackConfig:
+    nearest_length_redistribution: bool = True
+    replacement_if_needed: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "nearest_length_redistribution",
+            _as_bool(
+                self.nearest_length_redistribution,
+                "attack.fake_session_source.train_template.fallback.nearest_length_redistribution",
+            ),
+        )
+        object.__setattr__(
+            self,
+            "replacement_if_needed",
+            _as_bool(
+                self.replacement_if_needed,
+                "attack.fake_session_source.train_template.fallback.replacement_if_needed",
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class TrainTemplateSourceConfig:
+    reference_split: str = TRAIN_TEMPLATE_REFERENCE_SPLIT_TRAIN_SUB
+    target_filtering: str = TRAIN_TEMPLATE_TARGET_FILTERING_NONE
+    replacement: bool = False
+    fallback: TrainTemplateFallbackConfig | Mapping[str, Any] | None = field(
+        default_factory=TrainTemplateFallbackConfig
+    )
+    record_distribution_diagnostics: bool = True
+
+    def __post_init__(self) -> None:
+        reference_split = _as_str(
+            self.reference_split,
+            "attack.fake_session_source.train_template.reference_split",
+        ).strip()
+        if reference_split != TRAIN_TEMPLATE_REFERENCE_SPLIT_TRAIN_SUB:
+            raise ValueError(
+                "attack.fake_session_source.train_template.reference_split currently "
+                f"supports only {TRAIN_TEMPLATE_REFERENCE_SPLIT_TRAIN_SUB!r}."
+            )
+        object.__setattr__(self, "reference_split", reference_split)
+
+        target_filtering = _as_str(
+            self.target_filtering,
+            "attack.fake_session_source.train_template.target_filtering",
+        ).strip().lower()
+        if target_filtering != TRAIN_TEMPLATE_TARGET_FILTERING_NONE:
+            raise ValueError(
+                "attack.fake_session_source.train_template.target_filtering currently "
+                f"supports only {TRAIN_TEMPLATE_TARGET_FILTERING_NONE!r}."
+            )
+        object.__setattr__(self, "target_filtering", target_filtering)
+
+        object.__setattr__(
+            self,
+            "replacement",
+            _as_bool(
+                self.replacement,
+                "attack.fake_session_source.train_template.replacement",
+            ),
+        )
+        if bool(self.replacement):
+            raise ValueError(
+                "train_template.replacement=true is not supported; current "
+                "train-template source uses without-replacement sampling with "
+                "fallback replacement only when needed."
+            )
+        fallback = self.fallback
+        if fallback is None:
+            fallback_config = TrainTemplateFallbackConfig()
+        elif isinstance(fallback, TrainTemplateFallbackConfig):
+            fallback_config = fallback
+        else:
+            fallback_config = TrainTemplateFallbackConfig(
+                **dict(
+                    _as_mapping(
+                        fallback,
+                        "attack.fake_session_source.train_template.fallback",
+                    )
+                )
+            )
+        object.__setattr__(self, "fallback", fallback_config)
+        object.__setattr__(
+            self,
+            "record_distribution_diagnostics",
+            _as_bool(
+                self.record_distribution_diagnostics,
+                "attack.fake_session_source.train_template.record_distribution_diagnostics",
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class FakeSessionSourceConfig:
+    type: str = FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
+    train_template: TrainTemplateSourceConfig | Mapping[str, Any] | None = field(
+        default_factory=TrainTemplateSourceConfig
+    )
+
+    def __post_init__(self) -> None:
+        source_type = _as_str(self.type, "attack.fake_session_source.type").strip().lower()
+        allowed = {
+            FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED,
+            FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+        }
+        if source_type not in allowed:
+            raise ValueError(
+                "attack.fake_session_source.type must be one of: "
+                + ", ".join(sorted(allowed))
+            )
+        object.__setattr__(self, "type", source_type)
+
+        train_template = self.train_template
+        if train_template is None:
+            train_template_config = TrainTemplateSourceConfig()
+        elif isinstance(train_template, TrainTemplateSourceConfig):
+            train_template_config = train_template
+        else:
+            train_template_config = TrainTemplateSourceConfig(
+                **dict(
+                    _as_mapping(
+                        train_template,
+                        "attack.fake_session_source.train_template",
+                    )
+                )
+            )
+        object.__setattr__(self, "train_template", train_template_config)
+
+
+@dataclass(frozen=True)
 class AttackConfig:
     size: float
     fake_session_generation_topk: int
     replacement_topk_ratio: float
     poison_model: PoisonModelConfig
+    fake_session_source: FakeSessionSourceConfig = field(
+        default_factory=FakeSessionSourceConfig
+    )
     position_opt: PositionOptConfig | None = None
     rank_bucket_cem: RankBucketCEMConfig | None = None
     carrier_selection: CarrierSelectionConfig | None = None
@@ -2676,6 +2819,14 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
                 model_name=poison_model_name,
             ),
         },
+        "fake_session_source": (
+            _normalize_primitive(
+                attack["fake_session_source"],
+                "attack.fake_session_source",
+            )
+            if "fake_session_source" in attack and attack["fake_session_source"] is not None
+            else None
+        ),
         "position_opt": (
             _normalize_position_opt_config(
                 attack["position_opt"],
@@ -3752,6 +3903,18 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
                     "attack.poison_model.params",
                 ),
             ),
+            fake_session_source=(
+                FakeSessionSourceConfig(
+                    **dict(
+                        _as_mapping(
+                            attack["fake_session_source"],
+                            "attack.fake_session_source",
+                        )
+                    )
+                )
+                if attack.get("fake_session_source") is not None
+                else FakeSessionSourceConfig()
+            ),
             position_opt=(
                 PositionOptConfig(
                     **dict(
@@ -3871,6 +4034,9 @@ __all__ = [
     "ANCHOR_CONSTRUCTION_STRATEGY_ROUND_ROBIN",
     "CarrierSelectionConfig",
     "Config",
+    "FakeSessionSourceConfig",
+    "FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED",
+    "FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED",
     "PositionOptConfig",
     "PTSArtifactsConfig",
     "PTSActionsConfig",
@@ -3941,6 +4107,11 @@ __all__ = [
     "TARGET_AWARE_CARRIER_SELECTION_LENGTH_BUCKETS_EXACT_UNTIL_4_PLUS",
     "TARGET_AWARE_CARRIER_SELECTION_NORMALIZE_MINMAX",
     "TARGET_AWARE_CARRIER_SELECTION_SCORER",
+    "TrainTemplateFallbackConfig",
+    "TrainTemplateSourceConfig",
+    "TRAIN_TEMPLATE_LENGTH_MATCHING_EXACT_LARGEST_REMAINDER",
+    "TRAIN_TEMPLATE_REFERENCE_SPLIT_TRAIN_SUB",
+    "TRAIN_TEMPLATE_TARGET_FILTERING_NONE",
     "load_config",
     "normalize_config_mapping",
     "parse_config",

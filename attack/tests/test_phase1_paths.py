@@ -5,7 +5,14 @@ from pathlib import Path
 import shutil
 from uuid import uuid4
 
-from attack.common.config import load_config
+from attack.common.config import (
+    FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED,
+    FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+    FakeSessionSourceConfig,
+    TrainTemplateFallbackConfig,
+    TrainTemplateSourceConfig,
+    load_config,
+)
 from attack.common.paths import (
     attack_key_payload,
     run_config_dir,
@@ -52,6 +59,37 @@ def _pts_direct_config():
         f"Missing PTS direct CEM test config at {PTS_DIRECT_CONFIG_PATH}"
     )
     return load_config(PTS_DIRECT_CONFIG_PATH)
+
+
+def _with_train_template_source(
+    config,
+    *,
+    train_template: TrainTemplateSourceConfig | None = None,
+):
+    return replace(
+        config,
+        attack=replace(
+            config.attack,
+            fake_session_source=FakeSessionSourceConfig(
+                type=FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+                train_template=train_template or TrainTemplateSourceConfig(),
+            ),
+        ),
+    )
+
+
+def _with_poison_epochs(config, epochs: int):
+    poison_params = dict(config.attack.poison_model.params)
+    poison_train = dict(poison_params["train"])
+    poison_train["epochs"] = int(epochs)
+    poison_params["train"] = poison_train
+    return replace(
+        config,
+        attack=replace(
+            config.attack,
+            poison_model=replace(config.attack.poison_model, params=poison_params),
+        ),
+    )
 
 
 def test_target_cohort_key_ignores_requested_count_for_sampled_targets() -> None:
@@ -172,6 +210,165 @@ def test_shared_attack_artifact_key_stays_stable_across_phase1_identity_changes(
         changed_victims,
         run_type="attack",
     )
+
+
+def test_poison_generated_fake_session_source_keeps_legacy_shared_identity() -> None:
+    config = _base_config()
+    explicit_poison = replace(
+        config,
+        attack=replace(
+            config.attack,
+            fake_session_source=FakeSessionSourceConfig(
+                type=FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
+            ),
+        ),
+    )
+
+    assert shared_attack_artifact_key_payload(config, run_type="attack") == (
+        shared_attack_artifact_key_payload(explicit_poison, run_type="attack")
+    )
+    assert shared_attack_artifact_key(config, run_type="attack") == shared_attack_artifact_key(
+        explicit_poison,
+        run_type="attack",
+    )
+    assert shared_attack_artifact_key_payload(config, run_type="attack") == (
+        shared_attack_artifact_key_payload(
+            explicit_poison,
+            run_type="attack",
+            require_poison_runner=True,
+        )
+    )
+    assert shared_attack_artifact_key(config, run_type="attack") == shared_attack_artifact_key(
+        explicit_poison,
+        run_type="attack",
+        require_poison_runner=True,
+    )
+    assert attack_key_payload(config, run_type="attack") == attack_key_payload(
+        explicit_poison,
+        run_type="attack",
+    )
+    payload = shared_attack_artifact_key_payload(explicit_poison, run_type="attack")
+    assert "fake_session_source" not in payload["attack_generation"]
+    assert "fake_session_source" not in attack_key_payload(explicit_poison, run_type="attack")[
+        "attack"
+    ]
+
+
+def test_train_template_fake_session_source_uses_source_aware_shared_identity() -> None:
+    config = _base_config()
+    train_template = _with_train_template_source(config)
+
+    legacy_payload = shared_attack_artifact_key_payload(config, run_type="attack")
+    train_payload = shared_attack_artifact_key_payload(train_template, run_type="attack")
+
+    assert train_payload != legacy_payload
+    assert shared_attack_artifact_key(train_template, run_type="attack") != (
+        shared_attack_artifact_key(config, run_type="attack")
+    )
+    assert attack_key_payload(train_template, run_type="attack") != attack_key_payload(
+        config,
+        run_type="attack",
+    )
+    assert attack_key_payload(train_template, run_type="attack")["attack"][
+        "fake_session_source"
+    ]["type"] == FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED
+    source_payload = train_payload["attack_generation"]["fake_session_source"]
+    assert source_payload["type"] == FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED
+    assert source_payload["length_matching_mode"] == "exact_largest_remainder"
+    assert source_payload["target_filtering"] == "none"
+    assert "poison_model" not in train_payload["attack_generation"]
+    assert "fake_session_generation_topk" not in train_payload["attack_generation"]
+    assert train_payload["attack_generation"]["shared_identity_includes_poison_model"] is False
+
+
+def test_train_template_shared_identity_option_b_poison_model_dependency() -> None:
+    config = _with_train_template_source(_base_config())
+    changed_poison = _with_train_template_source(_with_poison_epochs(_base_config(), 30))
+
+    no_runner_payload = shared_attack_artifact_key_payload(
+        config,
+        run_type="attack",
+        require_poison_runner=False,
+    )
+    no_runner_changed_payload = shared_attack_artifact_key_payload(
+        changed_poison,
+        run_type="attack",
+        require_poison_runner=False,
+    )
+    assert no_runner_payload == no_runner_changed_payload
+    assert "poison_model" not in no_runner_payload["attack_generation"]
+
+    with_runner_payload = shared_attack_artifact_key_payload(
+        config,
+        run_type="attack",
+        require_poison_runner=True,
+    )
+    with_runner_changed_payload = shared_attack_artifact_key_payload(
+        changed_poison,
+        run_type="attack",
+        require_poison_runner=True,
+    )
+    assert with_runner_payload != with_runner_changed_payload
+    assert "poison_model" in with_runner_payload["attack_generation"]
+    assert "fake_session_generation_topk" in with_runner_payload["attack_generation"]
+    assert with_runner_payload["attack_generation"][
+        "shared_identity_includes_poison_model"
+    ] is True
+    assert shared_attack_artifact_key(
+        config,
+        run_type="attack",
+        require_poison_runner=True,
+    ) != shared_attack_artifact_key(
+        changed_poison,
+        run_type="attack",
+        require_poison_runner=True,
+    )
+
+
+def test_train_template_record_distribution_diagnostics_does_not_affect_shared_identity() -> None:
+    config = _base_config()
+    enabled = _with_train_template_source(
+        config,
+        train_template=TrainTemplateSourceConfig(record_distribution_diagnostics=True),
+    )
+    disabled = _with_train_template_source(
+        config,
+        train_template=TrainTemplateSourceConfig(record_distribution_diagnostics=False),
+    )
+
+    assert shared_attack_artifact_key_payload(enabled, run_type="attack") == (
+        shared_attack_artifact_key_payload(disabled, run_type="attack")
+    )
+    assert shared_attack_artifact_key(enabled, run_type="attack") == shared_attack_artifact_key(
+        disabled,
+        run_type="attack",
+    )
+    assert shared_attack_artifact_key(
+        enabled,
+        run_type="attack",
+        require_poison_runner=True,
+    ) == shared_attack_artifact_key(
+        disabled,
+        run_type="attack",
+        require_poison_runner=True,
+    )
+
+
+def test_train_template_shared_identity_changes_with_sampling_settings_seed_and_size() -> None:
+    config = _with_train_template_source(_base_config())
+    fallback_changed = _with_train_template_source(
+        _base_config(),
+        train_template=TrainTemplateSourceConfig(
+            fallback=TrainTemplateFallbackConfig(nearest_length_redistribution=False)
+        ),
+    )
+    seed_changed = replace(config, seeds=replace(config.seeds, fake_session_seed=123456))
+    size_changed = replace(config, attack=replace(config.attack, size=config.attack.size + 0.001))
+
+    base_key = shared_attack_artifact_key(config, run_type="attack")
+    assert shared_attack_artifact_key(fallback_changed, run_type="attack") != base_key
+    assert shared_attack_artifact_key(seed_changed, run_type="attack") != base_key
+    assert shared_attack_artifact_key(size_changed, run_type="attack") != base_key
 
 
 def test_shared_attack_artifact_key_records_srgnn_validation_best_protocol() -> None:

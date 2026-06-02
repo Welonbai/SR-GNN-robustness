@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -65,7 +66,23 @@ from attack.models.srgnn_validation_training import (
 from attack.pipeline.core.train_history import save_train_history
 from attack.common.srgnn_training_protocol import srgnn_validation_best_enabled
 
-from attack.common.config import Config
+from attack.common.config import (
+    Config,
+    FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED,
+    FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+)
+from attack.fake_session_sources.train_template_source import (
+    DENOMINATOR_REPRESENTATION,
+    RAW_SESSION_REPRESENTATION,
+    SOURCE_TYPE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+    jensen_shannon_divergence,
+    ks_statistic,
+    length_count_by_int,
+    length_distribution_comparison_rows,
+    length_stats,
+    sample_train_templates_clean_exact_length_matched,
+    validate_train_sub_raw_sessions,
+)
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -1180,7 +1197,11 @@ def prepare_shared_attack_artifacts(
 ) -> SharedAttackArtifacts:
     generation_seed = int(config.seeds.fake_session_seed)
     canonical_dataset = ensure_canonical_dataset(config)
-    shared_paths = shared_artifact_paths(config, run_type=run_type)
+    shared_paths = shared_artifact_paths(
+        config,
+        run_type=run_type,
+        require_poison_runner=require_poison_runner,
+    )
     shared_paths["attack_shared_dir"].mkdir(parents=True, exist_ok=True)
     if config_path:
         snapshot_path = shared_paths["attack_config_snapshot"]
@@ -1193,7 +1214,8 @@ def prepare_shared_attack_artifacts(
             shutil.copyfile(config_path, target_snapshot_path)
 
     stats = compute_session_stats(canonical_dataset.train_sub)
-    clean_sessions, clean_labels = build_clean_pairs(canonical_dataset)
+    clean_prefixes, clean_labels = build_clean_pairs(canonical_dataset)
+    denominator_count = int(len(clean_prefixes))
 
     export_dir = shared_paths["attack_shared_dir"] / "export"
     export_paths = _export_srg_nn_dataset(
@@ -1203,31 +1225,107 @@ def prepare_shared_attack_artifacts(
 
     template_sessions = load_fake_sessions(shared_paths["fake_sessions"])
     poison_runner = None
+    poison_runner_reason: str | None = None
+    fake_session_source_summary: dict[str, Any] | None = None
+    source_type = config.attack.fake_session_source.type
     if template_sessions is None:
         print("No fake sessions found. Generating new fake sessions.")
-        set_seed(derive_seed(generation_seed, "poison_model_generation"))
-        poison_runner = _load_or_train_poison_runner(
-            config,
-            shared_paths=shared_paths,
-            export_paths=export_paths,
-        )
-        sampler = FakeSessionParameterSampler(stats)
-        generator = FakeSessionGenerator(
-            poison_runner,
-            sampler,
-            topk=config.attack.fake_session_generation_topk,
-        )
         fake_count = fake_session_count_from_ratio(
             _fake_session_generation_ratio(config, run_type=run_type),
-            len(clean_sessions),
+            denominator_count,
         )
-        set_seed(derive_seed(generation_seed, "fake_session_generation"))
-        template_sessions = [s.items for s in generator.generate_many(fake_count)]
-        save_fake_sessions(template_sessions, shared_paths["fake_sessions"])
-        print(f"Saved fake sessions to {shared_paths['fake_sessions']}")
+        if source_type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED:
+            set_seed(derive_seed(generation_seed, "poison_model_generation"))
+            poison_runner = _load_or_train_poison_runner(
+                config,
+                shared_paths=shared_paths,
+                export_paths=export_paths,
+            )
+            poison_runner_reason = "poison_model_generated_base_source"
+            sampler = FakeSessionParameterSampler(stats)
+            generator = FakeSessionGenerator(
+                poison_runner,
+                sampler,
+                topk=config.attack.fake_session_generation_topk,
+            )
+            set_seed(derive_seed(generation_seed, "fake_session_generation"))
+            template_sessions = [s.items for s in generator.generate_many(fake_count)]
+            save_fake_sessions(template_sessions, shared_paths["fake_sessions"])
+            print(f"Saved fake sessions to {shared_paths['fake_sessions']}")
+        elif source_type == FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED:
+            train_template = config.attack.fake_session_source.train_template
+            train_raw_sessions = validate_train_sub_raw_sessions(canonical_dataset.train_sub)
+            template_sessions, sampling_metadata, _sample_rows = (
+                sample_train_templates_clean_exact_length_matched(
+                    train_raw_sessions,
+                    n_fake=fake_count,
+                    seed=derive_seed(generation_seed, "fake_session_generation"),
+                    nearest_length_redistribution=bool(
+                        train_template.fallback.nearest_length_redistribution
+                    ),
+                    replacement_if_needed=bool(
+                        train_template.fallback.replacement_if_needed
+                    ),
+                )
+            )
+            save_fake_sessions(template_sessions, shared_paths["fake_sessions"])
+            print(f"Saved train-template fake sessions to {shared_paths['fake_sessions']}")
+            fake_session_source_summary = _train_template_source_summary(
+                config,
+                train_raw_sessions=train_raw_sessions,
+                template_sessions=template_sessions,
+                sampling_metadata=sampling_metadata,
+                denominator_count=denominator_count,
+                fake_count=fake_count,
+                shared_identity_includes_poison_model=require_poison_runner,
+            )
+            if bool(train_template.record_distribution_diagnostics):
+                _write_fake_session_source_length_distribution(
+                    shared_paths["attack_shared_dir"] / "fake_session_source_length_distribution.csv",
+                    train_raw_sessions=train_raw_sessions,
+                    template_sessions=template_sessions,
+                )
+        else:
+            raise ValueError(f"Unsupported fake session source type: {source_type!r}")
     else:
         print(f"Loaded fake sessions from {shared_paths['fake_sessions']}")
         fake_count = len(template_sessions)
+        if source_type == FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED:
+            train_template = config.attack.fake_session_source.train_template
+            source_summary_path = (
+                shared_paths["attack_shared_dir"] / "fake_session_source_summary.json"
+            )
+            existing_source_summary = (
+                load_json(source_summary_path) if source_summary_path.exists() else None
+            )
+            fake_session_source_summary = (
+                existing_source_summary
+                if isinstance(existing_source_summary, dict)
+                else _loaded_train_template_source_summary(
+                    config,
+                    template_sessions=template_sessions,
+                    denominator_count=denominator_count,
+                    fake_count=fake_count,
+                    shared_identity_includes_poison_model=require_poison_runner,
+                )
+            )
+            fake_session_source_summary["cache_status"] = "loaded_existing"
+            length_distribution_path = (
+                shared_paths["attack_shared_dir"]
+                / "fake_session_source_length_distribution.csv"
+            )
+            if (
+                bool(train_template.record_distribution_diagnostics)
+                and not length_distribution_path.exists()
+            ):
+                train_raw_sessions = validate_train_sub_raw_sessions(
+                    canonical_dataset.train_sub
+                )
+                _write_fake_session_source_length_distribution(
+                    length_distribution_path,
+                    train_raw_sessions=train_raw_sessions,
+                    template_sessions=template_sessions,
+                )
 
     if require_poison_runner and poison_runner is None:
         set_seed(derive_seed(generation_seed, "poison_model_generation"))
@@ -1236,10 +1334,25 @@ def prepare_shared_attack_artifacts(
             shared_paths=shared_paths,
             export_paths=export_paths,
         )
+        if source_type == FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED:
+            poison_runner_reason = "required_by_downstream_generated_suffix"
+    elif source_type == FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED:
+        poison_runner_reason = "not_required_by_downstream"
+
+    if fake_session_source_summary is not None:
+        fake_session_source_summary["poison_runner_prepared"] = poison_runner is not None
+        fake_session_source_summary["poison_runner_reason"] = poison_runner_reason
+        fake_session_source_summary["shared_identity_includes_poison_model"] = bool(
+            require_poison_runner
+        )
+        save_json(
+            fake_session_source_summary,
+            shared_paths["attack_shared_dir"] / "fake_session_source_summary.json",
+        )
 
     return SharedAttackArtifacts(
         stats=stats,
-        clean_sessions=clean_sessions,
+        clean_sessions=clean_prefixes,
         clean_labels=clean_labels,
         canonical_dataset=canonical_dataset,
         export_paths=export_paths,
@@ -1248,6 +1361,157 @@ def prepare_shared_attack_artifacts(
         fake_session_count=fake_count,
         shared_paths=shared_paths,
     )
+
+
+def _train_template_source_summary(
+    config: Config,
+    *,
+    train_raw_sessions: list[list[int]],
+    template_sessions: list[list[int]],
+    sampling_metadata: Mapping[str, Any],
+    denominator_count: int,
+    fake_count: int,
+    shared_identity_includes_poison_model: bool,
+) -> dict[str, Any]:
+    train_template = config.attack.fake_session_source.train_template
+    return {
+        "fake_session_source": {
+            "type": SOURCE_TYPE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+            "reference_split": train_template.reference_split,
+            "target_filtering": train_template.target_filtering,
+            "length_matching_mode": "exact_largest_remainder",
+            "replacement": bool(train_template.replacement),
+            "fallback": {
+                "nearest_length_redistribution": bool(
+                    train_template.fallback.nearest_length_redistribution
+                ),
+                "replacement_if_needed": bool(
+                    train_template.fallback.replacement_if_needed
+                ),
+            },
+        },
+        "base_fake_session_source": SOURCE_TYPE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+        "shared_identity_includes_poison_model": bool(
+            shared_identity_includes_poison_model
+        ),
+        "replacement": False,
+        "replacement_policy": "without_replacement_with_last_resort_replacement_if_needed",
+        "raw_session_source": "canonical_dataset.train_sub",
+        "raw_session_representation": RAW_SESSION_REPRESENTATION,
+        "source_pool_representation": RAW_SESSION_REPRESENTATION,
+        "denominator_source": "build_clean_pairs(canonical_dataset)[0]",
+        "denominator_representation": DENOMINATOR_REPRESENTATION,
+        "denominator_count": int(denominator_count),
+        "attack_size": float(config.attack.size),
+        "computed_n_fake": int(fake_count),
+        "n_fake": int(fake_count),
+        "sampling_pool_size": int(len(train_raw_sessions)),
+        "sampled_template_count": int(len(template_sessions)),
+        "fallback_nearest_length_count": int(
+            sampling_metadata.get("fallback_nearest_length_count", 0)
+        ),
+        "replacement_sample_count": int(
+            sampling_metadata.get("replacement_sample_count", 0)
+        ),
+        "record_duplicate_count": int(sampling_metadata.get("record_duplicate_count", 0)),
+        "record_duplicate_ratio": float(
+            sampling_metadata.get("record_duplicate_ratio", 0.0)
+        ),
+        "content_duplicate_count": int(
+            sampling_metadata.get("content_duplicate_count", 0)
+        ),
+        "content_duplicate_ratio": float(
+            sampling_metadata.get("content_duplicate_ratio", 0.0)
+        ),
+        "warnings": [str(item) for item in sampling_metadata.get("warnings", [])],
+        "sampling": dict(sampling_metadata),
+        "length_stats": {
+            "clean_train_sub": length_stats(train_raw_sessions),
+            "sampled_templates": length_stats(template_sessions),
+        },
+        "length_distribution_distance": {
+            "sampled_vs_clean_js": jensen_shannon_divergence(
+                length_count_by_int(train_raw_sessions),
+                length_count_by_int(template_sessions),
+                log_base=2,
+            ),
+            "sampled_vs_clean_js_log_base": 2,
+            "sampled_vs_clean_ks": ks_statistic(
+                [len(session) for session in train_raw_sessions],
+                [len(session) for session in template_sessions],
+            ),
+        },
+        "cache_status": "generated",
+    }
+
+
+def _loaded_train_template_source_summary(
+    config: Config,
+    *,
+    template_sessions: list[list[int]],
+    denominator_count: int,
+    fake_count: int,
+    shared_identity_includes_poison_model: bool,
+) -> dict[str, Any]:
+    train_template = config.attack.fake_session_source.train_template
+    return {
+        "fake_session_source": {
+            "type": SOURCE_TYPE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+            "reference_split": train_template.reference_split,
+            "target_filtering": train_template.target_filtering,
+            "length_matching_mode": "exact_largest_remainder",
+            "replacement": bool(train_template.replacement),
+            "fallback": {
+                "nearest_length_redistribution": bool(
+                    train_template.fallback.nearest_length_redistribution
+                ),
+                "replacement_if_needed": bool(
+                    train_template.fallback.replacement_if_needed
+                ),
+            },
+        },
+        "base_fake_session_source": SOURCE_TYPE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+        "shared_identity_includes_poison_model": bool(
+            shared_identity_includes_poison_model
+        ),
+        "replacement": False,
+        "replacement_policy": "without_replacement_with_last_resort_replacement_if_needed",
+        "denominator_source": "build_clean_pairs(canonical_dataset)[0]",
+        "denominator_representation": DENOMINATOR_REPRESENTATION,
+        "denominator_count": int(denominator_count),
+        "attack_size": float(config.attack.size),
+        "computed_n_fake": int(fake_count),
+        "n_fake": int(fake_count),
+        "sampled_template_count": int(len(template_sessions)),
+        "cache_status": "loaded_existing",
+        "warnings": [],
+    }
+
+
+def _write_fake_session_source_length_distribution(
+    path: Path,
+    *,
+    train_raw_sessions: list[list[int]],
+    template_sessions: list[list[int]],
+) -> None:
+    rows = length_distribution_comparison_rows(
+        train_raw_sessions,
+        template_sessions,
+        generated_sessions=None,
+    )
+    fieldnames = [
+        "length",
+        "clean_train_count",
+        "clean_train_ratio",
+        "sampled_template_count",
+        "sampled_template_ratio",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
 
 
 def _poison_train_config(config: Config) -> dict[str, Any]:

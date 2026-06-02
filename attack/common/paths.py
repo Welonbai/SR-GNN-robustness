@@ -8,6 +8,8 @@ import json
 from .config import (
     Config,
     COVERAGE_AWARE_LOCAL_POSITION_SCORER,
+    FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+    TRAIN_TEMPLATE_LENGTH_MATCHING_EXACT_LARGEST_REMAINDER,
 )
 from .srgnn_training_protocol import (
     SRGNN_VALIDATION_BEST_PROTOCOL,
@@ -370,6 +372,13 @@ def attack_key_payload(
             },
         },
     }
+    if (
+        config.attack.fake_session_source.type
+        == FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED
+    ):
+        payload["attack"][
+            "fake_session_source"
+        ] = _train_template_fake_session_source_identity_payload(config)
     if run_type in _TARGET_AWARE_CANDIDATE_POOL_RUN_TYPES:
         payload["attack"]["carrier_selection"] = carrier_selection_identity_payload(config)
     if run_type in _POSITION_OPT_RUNTIME_RUN_TYPES:
@@ -503,7 +512,12 @@ def attack_key(
     return f"attack_{_hash_token(_stable_json(payload))}"
 
 
-def shared_attack_artifact_key_payload(config: Config, *, run_type: str) -> dict[str, Any]:
+def shared_attack_artifact_key_payload(
+    config: Config,
+    *,
+    run_type: str,
+    require_poison_runner: bool = False,
+) -> dict[str, Any]:
     if run_type == "clean":
         return {
             "run_type": "clean",
@@ -519,6 +533,29 @@ def shared_attack_artifact_key_payload(config: Config, *, run_type: str) -> dict
     if run_type in _TARGET_AWARE_CANDIDATE_POOL_RUN_TYPES:
         carrier_generation_payload = carrier_selection_shared_generation_payload(config)
         generation_size = float(carrier_generation_payload["candidate_pool_size"])
+
+    fake_session_source = config.attack.fake_session_source
+    if fake_session_source.type == FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED:
+        fake_session_source_payload = _train_template_fake_session_source_identity_payload(config)
+        attack_generation = {
+            "split_key": split_key(config),
+            "fake_session_seed": int(config.seeds.fake_session_seed),
+            "attack_generation": {
+                "size": generation_size,
+                "fake_session_source": fake_session_source_payload,
+                "shared_identity_includes_poison_model": bool(require_poison_runner),
+            },
+        }
+        if bool(require_poison_runner):
+            attack_generation["attack_generation"]["poison_model"] = poison_model_payload
+            attack_generation["attack_generation"]["fake_session_generation_topk"] = int(
+                config.attack.fake_session_generation_topk
+            )
+        if carrier_generation_payload is not None:
+            attack_generation["attack_generation"][
+                "carrier_selection_candidate_pool"
+            ] = carrier_generation_payload
+        return attack_generation
 
     attack_generation: dict[str, Any] = {
         "split_key": split_key(config),
@@ -536,8 +573,38 @@ def shared_attack_artifact_key_payload(config: Config, *, run_type: str) -> dict
     return attack_generation
 
 
-def shared_attack_artifact_key(config: Config, *, run_type: str) -> str:
-    payload = shared_attack_artifact_key_payload(config, run_type=run_type)
+def _train_template_fake_session_source_identity_payload(config: Config) -> dict[str, Any]:
+    train_template = config.attack.fake_session_source.train_template
+    return {
+        "type": FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
+        "reference_split": train_template.reference_split,
+        "length_matching_mode": TRAIN_TEMPLATE_LENGTH_MATCHING_EXACT_LARGEST_REMAINDER,
+        "target_filtering": train_template.target_filtering,
+        "replacement": bool(train_template.replacement),
+        "fallback": {
+            "nearest_length_redistribution": bool(
+                train_template.fallback.nearest_length_redistribution
+            ),
+            "replacement_if_needed": bool(
+                train_template.fallback.replacement_if_needed
+            ),
+        },
+        "denominator_source": "build_clean_pairs(canonical_dataset)[0]",
+        "denominator_representation": "expanded_prefix_label_pairs",
+    }
+
+
+def shared_attack_artifact_key(
+    config: Config,
+    *,
+    run_type: str,
+    require_poison_runner: bool = False,
+) -> str:
+    payload = shared_attack_artifact_key_payload(
+        config,
+        run_type=run_type,
+        require_poison_runner=require_poison_runner,
+    )
     return f"attack_shared_{_hash_token(_stable_json(payload))}"
 
 
@@ -799,12 +866,25 @@ def target_registry_path(config: Config) -> Path:
     return target_cohort_dir(config) / "target_registry.json"
 
 
-def shared_attack_dir(config: Config, *, run_type: str) -> Path:
+def shared_attack_dir(
+    config: Config,
+    *,
+    run_type: str,
+    require_poison_runner: bool = False,
+) -> Path:
     # Shared fake-session / poison-model artifacts should only depend on the
     # inputs that actually affect their generation. Final attack/evaluation keys
     # still use attack_key(...), which may include downstream replacement-policy
     # settings such as replacement_topk_ratio.
-    return shared_root(config) / "attack" / shared_attack_artifact_key(config, run_type=run_type)
+    return (
+        shared_root(config)
+        / "attack"
+        / shared_attack_artifact_key(
+            config,
+            run_type=run_type,
+            require_poison_runner=require_poison_runner,
+        )
+    )
 
 
 def shared_victim_dir(
@@ -917,8 +997,17 @@ def victim_dir(
     )
 
 
-def shared_artifact_paths(config: Config, *, run_type: str) -> dict[str, Path]:
-    attack_dir = shared_attack_dir(config, run_type=run_type)
+def shared_artifact_paths(
+    config: Config,
+    *,
+    run_type: str,
+    require_poison_runner: bool = False,
+) -> dict[str, Path]:
+    attack_dir = shared_attack_dir(
+        config,
+        run_type=run_type,
+        require_poison_runner=require_poison_runner,
+    )
     poison_dir_path = poison_model_dir(config)
     legacy_target_dir_path = target_selection_dir(config)
     cohort_dir_path = target_cohort_dir(config)

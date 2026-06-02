@@ -15,8 +15,7 @@ if str(REPO_ROOT) not in sys.path:
 from attack.common.artifact_io import load_json
 from attack.common.config import load_config
 from attack.data.canonical_dataset import CanonicalDataset
-from attack.pipeline.runs import run_train_template_source_diagnostic as diag
-from attack.pipeline.runs.run_train_template_source_diagnostic import (
+from attack.fake_session_sources.train_template_source import (
     allocate_exact_length_quotas,
     jensen_shannon_divergence,
     ks_statistic,
@@ -24,6 +23,7 @@ from attack.pipeline.runs.run_train_template_source_diagnostic import (
     target_pre_existing_stats,
     validate_train_sub_raw_sessions,
 )
+from attack.pipeline.runs import run_train_template_source_diagnostic as diag
 
 
 CONFIG_PATH = (
@@ -169,7 +169,7 @@ def test_cli_smoke_writes_artifacts_without_fake_session_cache(
 
     summary = load_json(summary_path)
     assert summary["raw_session_representation"] == "canonical_dataset.train_sub raw sessions"
-    assert summary["denominator_representation"] == "expanded prefix-label pairs"
+    assert summary["denominator_representation"] == "expanded_prefix_label_pairs"
     assert summary["target_registry_mode"] == "initialized_registry"
     assert summary["generated_fake_cache"]["loaded"] is False
     assert summary["config_path"] == str(config_path)
