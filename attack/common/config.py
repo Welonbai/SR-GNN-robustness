@@ -38,6 +38,8 @@ _ALLOWED_POSITION_OPT_REWARD_MODES = {
     "delta_target_utility",
     "delta_lowk_rank_utility",
 }
+CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE = "score"
+CREAT_ADDITIVE_SBR_SEED_SOURCE_POSITION_OPT_SEED = "position_opt_seed"
 _ALLOWED_POSITION_OPT_FINAL_POLICY_SELECTIONS = {
     "last",
     "best_deterministic",
@@ -1877,6 +1879,102 @@ class PTSConstructionConfig:
             )
 
 
+@dataclass(frozen=True)
+class CreatAdditiveSBRConfig:
+    enabled: bool = False
+    epochs: int = 10
+    batch_size: int = 128
+    lr: float = 1.0e-3
+    hidden_dim: int = 64
+    position_embedding_dim: int = 16
+    max_attack_num: int = 1
+    nonzero_when_possible: bool = True
+    stealth_weight: float = 0.1
+    local_weight: float = 0.0
+    entropy_weight: float = 0.0
+    attack_reward_mode: str = CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE
+    seed_source: str = CREAT_ADDITIVE_SBR_SEED_SOURCE_POSITION_OPT_SEED
+
+    def __post_init__(self) -> None:
+        enabled = _as_bool(self.enabled, "attack.creat_additive_sbr.enabled")
+        epochs = _as_int(self.epochs, "attack.creat_additive_sbr.epochs")
+        batch_size = _as_int(self.batch_size, "attack.creat_additive_sbr.batch_size")
+        lr = _as_float(self.lr, "attack.creat_additive_sbr.lr")
+        hidden_dim = _as_int(self.hidden_dim, "attack.creat_additive_sbr.hidden_dim")
+        position_embedding_dim = _as_int(
+            self.position_embedding_dim,
+            "attack.creat_additive_sbr.position_embedding_dim",
+        )
+        max_attack_num = _as_int(
+            self.max_attack_num,
+            "attack.creat_additive_sbr.max_attack_num",
+        )
+        nonzero_when_possible = _as_bool(
+            self.nonzero_when_possible,
+            "attack.creat_additive_sbr.nonzero_when_possible",
+        )
+        stealth_weight = _as_float(
+            self.stealth_weight,
+            "attack.creat_additive_sbr.stealth_weight",
+        )
+        local_weight = _as_float(
+            self.local_weight,
+            "attack.creat_additive_sbr.local_weight",
+        )
+        entropy_weight = _as_float(
+            self.entropy_weight,
+            "attack.creat_additive_sbr.entropy_weight",
+        )
+        attack_reward_mode = _as_str(
+            self.attack_reward_mode,
+            "attack.creat_additive_sbr.attack_reward_mode",
+        ).strip().lower()
+        seed_source = _as_str(
+            self.seed_source,
+            "attack.creat_additive_sbr.seed_source",
+        ).strip().lower()
+
+        if epochs < 0:
+            raise ValueError("attack.creat_additive_sbr.epochs must be non-negative.")
+        if batch_size <= 0:
+            raise ValueError("attack.creat_additive_sbr.batch_size must be positive.")
+        if lr <= 0.0:
+            raise ValueError("attack.creat_additive_sbr.lr must be positive.")
+        if hidden_dim <= 0:
+            raise ValueError("attack.creat_additive_sbr.hidden_dim must be positive.")
+        if position_embedding_dim <= 0:
+            raise ValueError(
+                "attack.creat_additive_sbr.position_embedding_dim must be positive."
+            )
+        if max_attack_num != 1:
+            raise ValueError("attack.creat_additive_sbr.max_attack_num must be 1 for v1.")
+        if stealth_weight < 0.0 or local_weight < 0.0 or entropy_weight < 0.0:
+            raise ValueError("attack.creat_additive_sbr reward weights must be non-negative.")
+        if attack_reward_mode != CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE:
+            raise ValueError(
+                "attack.creat_additive_sbr.attack_reward_mode currently supports only 'score'."
+            )
+        if seed_source != CREAT_ADDITIVE_SBR_SEED_SOURCE_POSITION_OPT_SEED:
+            raise ValueError(
+                "attack.creat_additive_sbr.seed_source currently supports only "
+                "'position_opt_seed'."
+            )
+
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "epochs", epochs)
+        object.__setattr__(self, "batch_size", batch_size)
+        object.__setattr__(self, "lr", lr)
+        object.__setattr__(self, "hidden_dim", hidden_dim)
+        object.__setattr__(self, "position_embedding_dim", position_embedding_dim)
+        object.__setattr__(self, "max_attack_num", max_attack_num)
+        object.__setattr__(self, "nonzero_when_possible", nonzero_when_possible)
+        object.__setattr__(self, "stealth_weight", stealth_weight)
+        object.__setattr__(self, "local_weight", local_weight)
+        object.__setattr__(self, "entropy_weight", entropy_weight)
+        object.__setattr__(self, "attack_reward_mode", attack_reward_mode)
+        object.__setattr__(self, "seed_source", seed_source)
+
+
 def _coerce_pts_dataclass(value: Any, cls: type[Any], context: str) -> Any:
     if isinstance(value, cls):
         return value
@@ -2372,6 +2470,7 @@ class AttackConfig:
     rank_bucket_cem: RankBucketCEMConfig | None = None
     carrier_selection: CarrierSelectionConfig | None = None
     pts_construction: PTSConstructionConfig | None = None
+    creat_additive_sbr: CreatAdditiveSBRConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -2859,6 +2958,14 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
             if "pts_construction" in attack and attack["pts_construction"] is not None
             else None
         ),
+        "creat_additive_sbr": (
+            _normalize_creat_additive_sbr_config(
+                attack["creat_additive_sbr"],
+                "attack.creat_additive_sbr",
+            )
+            if "creat_additive_sbr" in attack and attack["creat_additive_sbr"] is not None
+            else None
+        ),
     }
 
     if not 0.0 < normalized["size"] <= 1.0:
@@ -2876,6 +2983,18 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
                 "for TACS-NZ v1."
             )
     return normalized
+
+
+def _normalize_creat_additive_sbr_config(value: Any, context: str) -> dict[str, Any]:
+    mapping = _as_mapping(value, context)
+    allowed_fields = {field.name for field in fields(CreatAdditiveSBRConfig)}
+    unknown = set(mapping) - allowed_fields
+    if unknown:
+        raise ValueError(
+            "Unknown CREAT-Additive-SBR config keys: "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+    return _primitive_from_obj(CreatAdditiveSBRConfig(**dict(mapping)))
 
 
 def _normalize_pts_construction_config(value: Any, context: str) -> dict[str, Any]:
@@ -3963,6 +4082,18 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
                 if attack.get("pts_construction") is not None
                 else None
             ),
+            creat_additive_sbr=(
+                CreatAdditiveSBRConfig(
+                    **dict(
+                        _as_mapping(
+                            attack["creat_additive_sbr"],
+                            "attack.creat_additive_sbr",
+                        )
+                    )
+                )
+                if attack.get("creat_additive_sbr") is not None
+                else None
+            ),
         ),
         anchor_construction=AnchorConstructionConfig(
             **dict(anchor_construction)
@@ -4034,6 +4165,9 @@ __all__ = [
     "ANCHOR_CONSTRUCTION_STRATEGY_ROUND_ROBIN",
     "CarrierSelectionConfig",
     "Config",
+    "CreatAdditiveSBRConfig",
+    "CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE",
+    "CREAT_ADDITIVE_SBR_SEED_SOURCE_POSITION_OPT_SEED",
     "FakeSessionSourceConfig",
     "FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED",
     "FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED",

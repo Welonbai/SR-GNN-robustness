@@ -18,6 +18,7 @@ from attack.common.config import (
     load_config,
 )
 from attack.common.paths import shared_artifact_paths
+from attack.creat.candidates import sessions_sha1
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.pipeline.core import pipeline_utils
 
@@ -120,6 +121,7 @@ def test_train_template_shared_artifacts_write_fake_sessions_without_poison_runn
     assert summary["poison_runner_prepared"] is False
     assert summary["poison_runner_reason"] == "not_required_by_downstream"
     assert summary["shared_identity_includes_poison_model"] is False
+    assert summary["template_sessions_sha1"] == sessions_sha1(artifacts.template_sessions)
     assert summary["base_fake_session_source"] == (
         FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED
     )

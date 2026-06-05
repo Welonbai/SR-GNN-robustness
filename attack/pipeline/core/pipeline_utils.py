@@ -1340,6 +1340,9 @@ def prepare_shared_attack_artifacts(
         poison_runner_reason = "not_required_by_downstream"
 
     if fake_session_source_summary is not None:
+        fake_session_source_summary["template_sessions_sha1"] = _sha1_token(
+            [[int(item) for item in session] for session in template_sessions]
+        )
         fake_session_source_summary["poison_runner_prepared"] = poison_runner is not None
         fake_session_source_summary["poison_runner_reason"] = poison_runner_reason
         fake_session_source_summary["shared_identity_includes_poison_model"] = bool(
@@ -1407,6 +1410,9 @@ def _train_template_source_summary(
         "n_fake": int(fake_count),
         "sampling_pool_size": int(len(train_raw_sessions)),
         "sampled_template_count": int(len(template_sessions)),
+        "template_sessions_sha1": _sha1_token(
+            [[int(item) for item in session] for session in template_sessions]
+        ),
         "fallback_nearest_length_count": int(
             sampling_metadata.get("fallback_nearest_length_count", 0)
         ),
@@ -1483,6 +1489,9 @@ def _loaded_train_template_source_summary(
         "computed_n_fake": int(fake_count),
         "n_fake": int(fake_count),
         "sampled_template_count": int(len(template_sessions)),
+        "template_sessions_sha1": _sha1_token(
+            [[int(item) for item in session] for session in template_sessions]
+        ),
         "cache_status": "loaded_existing",
         "warnings": [],
     }

@@ -76,7 +76,7 @@ class SessionGraph(Module):
         for weight in self.parameters():
             weight.data.uniform_(-stdv, stdv)
 
-    def compute_scores(self, hidden, mask):
+    def compute_session_representation(self, hidden, mask):
         ht = hidden[torch.arange(mask.shape[0]).long(), torch.sum(mask, 1) - 1]  # batch_size x latent_size
         q1 = self.linear_one(ht).view(ht.shape[0], 1, ht.shape[1])  # batch_size x 1 x latent_size
         q2 = self.linear_two(hidden)  # batch_size x seq_length x latent_size
@@ -84,6 +84,10 @@ class SessionGraph(Module):
         a = torch.sum(alpha * hidden * mask.view(mask.shape[0], -1, 1).float(), 1)
         if not self.nonhybrid:
             a = self.linear_transform(torch.cat([a, ht], 1))
+        return a
+
+    def compute_scores(self, hidden, mask):
+        a = self.compute_session_representation(hidden, mask)
         b = self.embedding.weight[1:]  # n_nodes x latent_size
         scores = torch.matmul(a, b.transpose(1, 0))
         return scores

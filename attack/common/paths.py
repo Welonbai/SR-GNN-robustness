@@ -25,6 +25,7 @@ POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE = "rank_bucket_cem_candid
 PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE = "pts_construction_grouped_cem"
 PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE = "pts_construction_direct_action_mlp_cem"
 PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE = "pts_construction_candidate_replay"
+CREAT_ADDITIVE_SBR_RUN_TYPE = "creat_additive_sbr"
 TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE = "target_aware_carrier_selection_nz"
 TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE = "target_aware_carrier_local_position"
 TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE = "target_aware_coverage_local_position"
@@ -77,6 +78,20 @@ _ANCHOR_CONSTRUCTION_RUNTIME_RUN_TYPES = {
     VULNERABLE_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE,
 }
 TARGET_COHORT_SELECTION_POLICY_VERSION = "appendable_target_cohort_v1"
+
+
+def shared_attack_identity_requires_poison_runner(run_type: str) -> bool:
+    return run_type in {
+        CREAT_ADDITIVE_SBR_RUN_TYPE,
+        PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+        TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
+        TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
+        TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE,
+        INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        INTERNAL_RANDOM_REPLACEMENT_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        "prefix_nonzero_when_possible",
+    }
 
 
 def output_root(config: Config) -> Path:
@@ -430,6 +445,15 @@ def attack_key_payload(
         payload["attack_runtime_identity"] = _normalize_identity_value(
             attack_identity_context
         )
+    if run_type == CREAT_ADDITIVE_SBR_RUN_TYPE:
+        if config.attack.creat_additive_sbr is None:
+            raise ValueError(
+                "creat_additive_sbr final attack identity requires "
+                "attack.creat_additive_sbr."
+            )
+        payload["attack"]["creat_additive_sbr"] = _normalize_identity_value(
+            config.to_primitive()["attack"]["creat_additive_sbr"]
+        )
     return payload
 
 
@@ -518,6 +542,9 @@ def shared_attack_artifact_key_payload(
     run_type: str,
     require_poison_runner: bool = False,
 ) -> dict[str, Any]:
+    require_poison_runner = bool(
+        require_poison_runner or shared_attack_identity_requires_poison_runner(run_type)
+    )
     if run_type == "clean":
         return {
             "run_type": "clean",
@@ -752,7 +779,11 @@ def run_group_key_payload(
         "run_type": run_type,
         "split_key": split_key(config),
         "target_cohort_key": target_cohort_key(config),
-        "shared_attack_artifact_key": shared_attack_artifact_key(config, run_type=run_type),
+        "shared_attack_artifact_key": shared_attack_artifact_key(
+            config,
+            run_type=run_type,
+            require_poison_runner=shared_attack_identity_requires_poison_runner(run_type),
+        ),
         "final_attack_key": attack_key(
             config,
             run_type=run_type,
@@ -1131,6 +1162,7 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
     "PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE",
+    "CREAT_ADDITIVE_SBR_RUN_TYPE",
     "PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE",
     "PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
@@ -1173,6 +1205,7 @@ __all__ = [
     "runs_root",
     "shared_artifact_paths",
     "shared_attack_dir",
+    "shared_attack_identity_requires_poison_runner",
     "shared_root",
     "shared_victim_dir",
     "split_key",

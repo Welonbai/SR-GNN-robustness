@@ -32,6 +32,7 @@ from attack.common.paths import (
     run_metadata_paths,
     shared_attack_artifact_key,
     shared_attack_artifact_key_payload,
+    shared_attack_identity_requires_poison_runner,
     split_key,
     split_key_payload,
     target_cohort_key,
@@ -683,10 +684,15 @@ def _canonical_identity_sections(
                 ),
             ),
             "shared_attack_artifact_identity": _identity_object(
-                key=shared_attack_artifact_key(config, run_type=run_type),
+                key=shared_attack_artifact_key(
+                    config,
+                    run_type=run_type,
+                    require_poison_runner=shared_attack_identity_requires_poison_runner(run_type),
+                ),
                 payload=shared_attack_artifact_key_payload(
                     config,
                     run_type=run_type,
+                    require_poison_runner=shared_attack_identity_requires_poison_runner(run_type),
                 ),
             ),
         },
