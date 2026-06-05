@@ -14,6 +14,7 @@ from attack.common.config import (
     FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED,
     load_config,
 )
+from attack.common.artifact_io import load_json
 from attack.common.paths import CREAT_ADDITIVE_SBR_RUN_TYPE, target_dir
 from attack.creat import METHOD_LABEL
 from attack.creat.candidates import (
@@ -21,6 +22,7 @@ from attack.creat.candidates import (
     filter_templates_with_valid_candidates,
     position_distribution,
     sessions_sha1,
+    target_exposure_counts,
 )
 from attack.creat.poison_builder import build_creat_poisoned_sessions
 from attack.creat.srgnn_adapter import SRGNNRepresentationAdapter
@@ -56,6 +58,10 @@ def run_creat_additive_sbr(
 
     base_template_sessions = [list(session) for session in shared.template_sessions]
     base_template_hash = sessions_sha1(base_template_sessions)
+    shared_template_sessions_sha1 = _load_shared_template_sessions_sha1(
+        shared.shared_paths,
+        expected_hash=base_template_hash,
+    )
     effective_templates, template_counts = filter_effective_templates(base_template_sessions)
     effective_template_hash = sessions_sha1(effective_templates)
     if not effective_templates:
@@ -89,6 +95,10 @@ def run_creat_additive_sbr(
                 f"candidate for target_item={int(target_item)}."
             )
         target_effective_template_hash = sessions_sha1(target_templates)
+        pre_existing_exposure = target_exposure_counts(
+            target_templates,
+            target_item=int(target_item),
+        )
 
         trainer = CreatAdditiveSBRTrainer(
             adapter=adapter,
@@ -114,6 +124,14 @@ def run_creat_additive_sbr(
             shared.clean_labels,
             build_result.poisoned_sessions,
         )
+        post_poison_exposure = target_exposure_counts(
+            build_result.poisoned_sessions,
+            target_item=int(target_item),
+        )
+        original_template_count = int(template_counts["original_template_count"])
+        effective_poisoned_count = int(
+            build_result.metadata["effective_poisoned_copied_session_count"]
+        )
 
         position_stats_path = save_position_stats(
             target_root / "position_stats.json",
@@ -135,8 +153,11 @@ def run_creat_additive_sbr(
             "target_item": int(target_item),
             **template_counts,
             **target_filter_counts,
-            "effective_poisoned_copied_session_count": int(
-                build_result.metadata["effective_poisoned_copied_session_count"]
+            "effective_poisoned_copied_session_count": effective_poisoned_count,
+            "effective_budget_ratio": (
+                0.0
+                if original_template_count <= 0
+                else float(effective_poisoned_count) / float(original_template_count)
             ),
             "expanded_poisoned_prefix_label_pair_count": int(
                 build_result.metadata["expanded_poisoned_prefix_label_pair_count"]
@@ -150,10 +171,27 @@ def run_creat_additive_sbr(
             "expanded_target_label_pair_count": int(
                 build_result.metadata["expanded_target_label_pair_count"]
             ),
+            "pre_existing_target_session_count": int(
+                pre_existing_exposure["target_session_count"]
+            ),
+            "pre_existing_target_item_count": int(
+                pre_existing_exposure["target_item_count"]
+            ),
+            "pre_existing_target_label_pair_count": int(
+                pre_existing_exposure["target_label_pair_count"]
+            ),
+            "post_poison_target_label_pair_count": int(
+                post_poison_exposure["target_label_pair_count"]
+            ),
+            "new_target_label_pair_count": int(
+                post_poison_exposure["target_label_pair_count"]
+                - pre_existing_exposure["target_label_pair_count"]
+            ),
             "selected_position_distribution": position_distribution(
                 build_result.selected_positions
             ),
             "base_template_hash": base_template_hash,
+            "shared_template_sessions_sha1": shared_template_sessions_sha1,
             "effective_template_hash": effective_template_hash,
             "target_effective_template_hash": target_effective_template_hash,
             "template_source": {
@@ -203,6 +241,29 @@ def _validate_creat_run_config(config: Config) -> None:
         raise ValueError("CREAT-Additive-SBR requires attack.creat_additive_sbr.")
     if not bool(config.attack.creat_additive_sbr.enabled):
         raise ValueError("CREAT-Additive-SBR requires attack.creat_additive_sbr.enabled == true.")
+
+
+def _load_shared_template_sessions_sha1(
+    shared_paths: dict[str, Path],
+    *,
+    expected_hash: str,
+) -> str | None:
+    summary_path = Path(shared_paths["attack_shared_dir"]) / "fake_session_source_summary.json"
+    if not summary_path.exists():
+        return None
+    summary = load_json(summary_path)
+    if not isinstance(summary, dict):
+        raise ValueError(f"Malformed fake session source summary: {summary_path}")
+    value = summary.get("template_sessions_sha1")
+    if value is None:
+        return None
+    shared_hash = str(value)
+    if shared_hash != str(expected_hash):
+        raise ValueError(
+            "Shared template_sessions_sha1 does not match loaded base templates: "
+            f"{shared_hash} != {expected_hash}"
+        )
+    return shared_hash
 
 
 def _save_json(payload: object, path: Path) -> None:

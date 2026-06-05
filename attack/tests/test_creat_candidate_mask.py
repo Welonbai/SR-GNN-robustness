@@ -13,6 +13,7 @@ from attack.creat.candidates import (
     candidate_positions,
     filter_effective_templates,
     filter_templates_with_valid_candidates,
+    target_exposure_counts,
     valid_position_mask,
     valid_position_mask_for_session,
 )
@@ -66,6 +67,18 @@ def test_creat_filters_templates_with_no_valid_target_specific_candidate() -> No
     assert counts == {
         "filtered_no_valid_candidate_count": 2,
         "target_effective_template_count": 1,
+    }
+
+
+def test_creat_target_exposure_counts_use_expanded_labels() -> None:
+    counts = target_exposure_counts(
+        [[1, 9, 2], [3, 4, 9], [9, 9]],
+        target_item=9,
+    )
+    assert counts == {
+        "target_session_count": 3,
+        "target_item_count": 4,
+        "target_label_pair_count": 3,
     }
 
 

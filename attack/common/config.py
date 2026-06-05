@@ -1936,6 +1936,11 @@ class CreatAdditiveSBRConfig:
 
         if epochs < 0:
             raise ValueError("attack.creat_additive_sbr.epochs must be non-negative.")
+        if enabled and epochs <= 0:
+            raise ValueError(
+                "attack.creat_additive_sbr.epochs must be positive when "
+                "attack.creat_additive_sbr.enabled is true."
+            )
         if batch_size <= 0:
             raise ValueError("attack.creat_additive_sbr.batch_size must be positive.")
         if lr <= 0.0:

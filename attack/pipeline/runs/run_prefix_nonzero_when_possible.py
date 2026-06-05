@@ -10,7 +10,7 @@ if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from attack.common.config import Config, load_config
-from attack.common.paths import target_dir
+from attack.common.paths import PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE, target_dir
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.insertion.prefix_nonzero_when_possible import (
     PrefixNonzeroWhenPossiblePolicy,
@@ -32,7 +32,7 @@ def run_prefix_nonzero_when_possible(
         raise ValueError("Batch 6 expects data.poison_train_only to be true.")
     shared = prepare_shared_attack_artifacts(
         config,
-        run_type="prefix_nonzero_when_possible",
+        run_type=PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
         require_poison_runner=True,
         config_path=config_path,
     )
@@ -68,14 +68,14 @@ def run_prefix_nonzero_when_possible(
         target_root = target_dir(
             config,
             target_item,
-            run_type="prefix_nonzero_when_possible",
+            run_type=PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
         )
         target_root.mkdir(parents=True, exist_ok=True)
         position_stats_path = save_position_stats(
             target_root / "position_stats.json",
             sessions=shared.template_sessions,
             positions=selected_positions,
-            run_type="prefix_nonzero_when_possible",
+            run_type=PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
             target_item=int(target_item),
         )
         positions_path = target_root / "prefix_nonzero_when_possible_metadata.pkl"
@@ -94,7 +94,7 @@ def run_prefix_nonzero_when_possible(
         config,
         config_path=config_path,
         context=context,
-        run_type="prefix_nonzero_when_possible",
+        run_type=PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
         build_poisoned=build_poisoned,
     )
 

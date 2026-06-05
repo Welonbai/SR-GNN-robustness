@@ -6,6 +6,8 @@ import math
 from collections import Counter
 from typing import Sequence
 
+from attack.data.poisoned_dataset_builder import expand_session_to_samples
+
 
 def candidate_positions(
     length: int,
@@ -123,12 +125,41 @@ def target_label_pair_count(positions: Sequence[int]) -> int:
     return int(sum(1 for position in positions if int(position) > 0))
 
 
+def target_exposure_counts(
+    sessions: Sequence[Sequence[int]],
+    *,
+    target_item: int,
+) -> dict[str, int]:
+    target = int(target_item)
+    if target <= 0:
+        raise ValueError("target_item must be positive.")
+    normalized = [[int(item) for item in session] for session in sessions]
+    target_session_count = int(
+        sum(1 for session in normalized if any(item == target for item in session))
+    )
+    target_item_count = int(
+        sum(1 for session in normalized for item in session if item == target)
+    )
+    target_label_pair_count_value = 0
+    for session in normalized:
+        _prefixes, labels = expand_session_to_samples(session)
+        target_label_pair_count_value += sum(
+            1 for label in labels if int(label) == target
+        )
+    return {
+        "target_session_count": target_session_count,
+        "target_item_count": target_item_count,
+        "target_label_pair_count": int(target_label_pair_count_value),
+    }
+
+
 __all__ = [
     "candidate_positions",
     "filter_effective_templates",
     "filter_templates_with_valid_candidates",
     "position_distribution",
     "sessions_sha1",
+    "target_exposure_counts",
     "target_label_pair_count",
     "valid_position_mask",
     "valid_position_mask_for_session",

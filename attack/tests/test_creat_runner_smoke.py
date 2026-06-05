@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -101,6 +102,13 @@ def test_creat_runner_filters_after_hashing_and_calls_orchestrator(
         ),
     )
     templates = [[9], [1, 2], [3, 4, 5]]
+    attack_shared_dir = tmp_path / "shared_attack"
+    attack_shared_dir.mkdir(parents=True)
+    with (attack_shared_dir / "fake_session_source_summary.json").open(
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump({"template_sessions_sha1": sessions_sha1(templates)}, handle)
     shared = SharedAttackArtifacts(
         stats=SimpleNamespace(item_counts={item: 1 for item in range(1, 20)}),
         clean_sessions=[[1], [1, 2]],
@@ -110,7 +118,10 @@ def test_creat_runner_filters_after_hashing_and_calls_orchestrator(
         template_sessions=templates,
         poison_runner=SimpleNamespace(model=object()),
         fake_session_count=len(templates),
-        shared_paths={"fake_sessions": tmp_path / "fake_sessions.pkl"},
+        shared_paths={
+            "fake_sessions": tmp_path / "fake_sessions.pkl",
+            "attack_shared_dir": attack_shared_dir,
+        },
     )
     monkeypatch.setattr(creat_runner, "prepare_shared_attack_artifacts", lambda *args, **kwargs: shared)
     monkeypatch.setattr(creat_runner, "SRGNNRepresentationAdapter", _FakeAdapter)
@@ -131,15 +142,22 @@ def test_creat_runner_filters_after_hashing_and_calls_orchestrator(
     assert summary == {"status": "ok"}
     metadata = captured["metadata"]
     assert metadata["base_template_hash"] == sessions_sha1(templates)
+    assert metadata["shared_template_sessions_sha1"] == sessions_sha1(templates)
     assert metadata["effective_template_hash"] == sessions_sha1([[1, 2], [3, 4, 5]])
     assert metadata["original_template_count"] == 3
     assert metadata["filtered_template_count"] == 1
     assert metadata["filtered_no_valid_candidate_count"] == 0
     assert metadata["effective_poisoned_copied_session_count"] == 2
+    assert metadata["effective_budget_ratio"] == 2 / 3
     assert metadata["expanded_poisoned_prefix_label_pair_count"] == 3
     assert metadata["target_label_poisoned_pair_count"] == 2
     assert metadata["selected_replacement_target_pair_count"] == 2
     assert metadata["expanded_target_label_pair_count"] == 2
+    assert metadata["pre_existing_target_session_count"] == 0
+    assert metadata["pre_existing_target_item_count"] == 0
+    assert metadata["pre_existing_target_label_pair_count"] == 0
+    assert metadata["post_poison_target_label_pair_count"] == 2
+    assert metadata["new_target_label_pair_count"] == 2
     assert captured["poisoned"].clean_count == 2
     assert captured["poisoned"].fake_count == 2
 

@@ -7,6 +7,7 @@ import torch
 
 from attack.creat.candidates import (
     position_distribution,
+    target_exposure_counts,
     target_label_pair_count,
 )
 from attack.data.poisoned_dataset_builder import expand_session_to_samples
@@ -77,12 +78,7 @@ def build_creat_poisoned_sessions(
     expanded_pair_count = sum(
         len(expand_session_to_samples(session)[0]) for session in poisoned
     )
-    expanded_target_label_pair_count = 0
-    for session in poisoned:
-        _prefixes, labels = expand_session_to_samples(session)
-        expanded_target_label_pair_count += sum(
-            1 for label in labels if int(label) == int(target)
-        )
+    post_exposure = target_exposure_counts(poisoned, target_item=target)
     selected_replacement_target_pair_count = target_label_pair_count(selected_positions)
     metadata = {
         "effective_poisoned_copied_session_count": int(len(poisoned)),
@@ -90,7 +86,9 @@ def build_creat_poisoned_sessions(
         "selected_replacement_target_pair_count": int(
             selected_replacement_target_pair_count
         ),
-        "expanded_target_label_pair_count": int(expanded_target_label_pair_count),
+        "expanded_target_label_pair_count": int(
+            post_exposure["target_label_pair_count"]
+        ),
         "target_label_poisoned_pair_count": int(selected_replacement_target_pair_count),
         "selected_position_distribution": position_distribution(selected_positions),
     }

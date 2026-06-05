@@ -15,6 +15,7 @@ from attack.common.paths import (
     CREAT_ADDITIVE_SBR_RUN_TYPE,
     INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
     INTERNAL_RANDOM_REPLACEMENT_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+    PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
     PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
     TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
     TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
@@ -39,6 +40,9 @@ def test_creat_config_parses_defaults_from_yaml() -> None:
 
 
 def test_creat_config_rejects_unsupported_v1_values() -> None:
+    with pytest.raises(ValueError, match="epochs"):
+        CreatAdditiveSBRConfig(enabled=True, epochs=0)
+    assert CreatAdditiveSBRConfig(enabled=False, epochs=0).epochs == 0
     with pytest.raises(ValueError, match="max_attack_num"):
         CreatAdditiveSBRConfig(max_attack_num=2)
     with pytest.raises(ValueError, match="attack_reward_mode"):
@@ -96,6 +100,6 @@ def test_shared_identity_helper_covers_known_poison_runner_run_types() -> None:
         TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE,
         INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
         INTERNAL_RANDOM_REPLACEMENT_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
-        "prefix_nonzero_when_possible",
+        PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
     ):
         assert shared_attack_identity_requires_poison_runner(run_type)
