@@ -202,6 +202,7 @@ class MiaSRecRunner(VictimRunnerBase):
         ]
         env = os.environ.copy()
         env["PYTHONHASHSEED"] = str(effective_seed)
+        env["RECBOLE_DISABLE_TENSORBOARD"] = "1"
         if bool(self.device_config["use_gpu"]):
             env["CUDA_VISIBLE_DEVICES"] = requested_gpu_id
         else:
