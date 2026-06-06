@@ -144,4 +144,4 @@ artifacts:
   root: outputs
   shared_dir: shared
   runs_dir: runs
-  cleanup_victim_intermediates: true
+  cleanup_victim_intermediates: false
