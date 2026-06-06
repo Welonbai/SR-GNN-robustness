@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 if __package__ is None or __package__ == "":
@@ -76,6 +78,14 @@ def run_creat_additive_sbr(
     max_item_id = int(adapter.max_item_id)
 
     def build_poisoned(target_item: int) -> TargetPoisonOutput:
+        creat_attack_started_at = _timestamp_utc()
+        creat_attack_started_monotonic = time.monotonic()
+        print(
+            "[CREAT-Additive-SBR] "
+            f"target={int(target_item)} attack construction started at "
+            f"{creat_attack_started_at}",
+            flush=True,
+        )
         target_root = target_dir(
             config,
             target_item,
@@ -110,6 +120,8 @@ def run_creat_additive_sbr(
             target_item=int(target_item),
             template_sessions=target_templates,
         )
+        poison_build_started_at = _timestamp_utc()
+        poison_build_started_monotonic = time.monotonic()
         build_result = build_creat_poisoned_sessions(
             adapter=adapter,
             masker=train_result.masker,
@@ -124,6 +136,8 @@ def run_creat_additive_sbr(
             shared.clean_labels,
             build_result.poisoned_sessions,
         )
+        poison_build_completed_at = _timestamp_utc()
+        poison_build_elapsed_seconds = time.monotonic() - poison_build_started_monotonic
         post_poison_exposure = target_exposure_counts(
             build_result.poisoned_sessions,
             target_item=int(target_item),
@@ -147,10 +161,36 @@ def run_creat_additive_sbr(
             [int(position) for position in build_result.selected_positions],
             selected_positions_path,
         )
+        creat_attack_completed_at = _timestamp_utc()
+        creat_attack_elapsed_seconds = time.monotonic() - creat_attack_started_monotonic
+        print(
+            "[CREAT-Additive-SBR] "
+            f"target={int(target_item)} attack construction completed at "
+            f"{creat_attack_completed_at}; "
+            f"elapsed_seconds={round(float(creat_attack_elapsed_seconds), 3)}",
+            flush=True,
+        )
         metadata = {
             "run_type": CREAT_ADDITIVE_SBR_RUN_TYPE,
             "method_label": METHOD_LABEL,
             "target_item": int(target_item),
+            "creat_attack_started_at": creat_attack_started_at,
+            "creat_attack_completed_at": creat_attack_completed_at,
+            "creat_attack_elapsed_seconds": round(
+                float(creat_attack_elapsed_seconds),
+                3,
+            ),
+            "creat_masker_train_started_at": train_result.history.get("started_at"),
+            "creat_masker_train_completed_at": train_result.history.get("completed_at"),
+            "creat_masker_train_elapsed_seconds": train_result.history.get(
+                "elapsed_seconds"
+            ),
+            "poison_build_started_at": poison_build_started_at,
+            "poison_build_completed_at": poison_build_completed_at,
+            "poison_build_elapsed_seconds": round(
+                float(poison_build_elapsed_seconds),
+                3,
+            ),
             **template_counts,
             **target_filter_counts,
             "effective_poisoned_copied_session_count": effective_poisoned_count,
@@ -270,6 +310,10 @@ def _save_json(payload: object, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, sort_keys=True)
+
+
+def _timestamp_utc() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def main() -> None:

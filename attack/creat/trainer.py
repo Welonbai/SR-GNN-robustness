@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import random
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Sequence
 
 import torch
@@ -54,7 +56,23 @@ class CreatAdditiveSBRTrainer:
         torch.manual_seed(self.seed + int(target_item))
 
         epoch_rows: list[dict[str, object]] = []
-        for epoch in range(int(self.config.epochs)):
+        total_epochs = int(self.config.epochs)
+        train_started_at = _timestamp_utc()
+        train_started_monotonic = time.monotonic()
+        print(
+            "[CREAT-Additive-SBR] "
+            f"target={int(target_item)} masker training started at {train_started_at}; "
+            f"epochs={total_epochs}, templates={len(sessions)}",
+            flush=True,
+        )
+        for epoch in range(total_epochs):
+            epoch_started_at = _timestamp_utc()
+            epoch_started_monotonic = time.monotonic()
+            print(
+                "[CREAT-Additive-SBR] "
+                f"target={int(target_item)} epoch {epoch + 1}/{total_epochs} started",
+                flush=True,
+            )
             order = list(range(len(sessions)))
             rng.shuffle(order)
             losses: list[float] = []
@@ -125,23 +143,46 @@ class CreatAdditiveSBRTrainer:
                     optimizer.step()
                     losses.append(float(batch_loss.detach().cpu().item()))
 
-            epoch_rows.append(
-                {
-                    "epoch": int(epoch + 1),
-                    "loss": _mean(losses),
-                    "attack_reward": _mean(attack_rewards),
-                    "stealth_reward": _mean(stealth_rewards),
-                    "local_reward": _mean(local_rewards),
-                    "entropy": _mean(entropies),
-                    "total_reward": _mean(total_rewards),
-                    "average_selected_position": _mean(selected_positions),
-                    "position_distribution": position_distribution(selected_positions),
-                }
+            epoch_completed_at = _timestamp_utc()
+            epoch_elapsed_seconds = time.monotonic() - epoch_started_monotonic
+            epoch_row = {
+                "epoch": int(epoch + 1),
+                "started_at": epoch_started_at,
+                "completed_at": epoch_completed_at,
+                "elapsed_seconds": round(float(epoch_elapsed_seconds), 3),
+                "loss": _mean(losses),
+                "attack_reward": _mean(attack_rewards),
+                "stealth_reward": _mean(stealth_rewards),
+                "local_reward": _mean(local_rewards),
+                "entropy": _mean(entropies),
+                "total_reward": _mean(total_rewards),
+                "average_selected_position": _mean(selected_positions),
+                "position_distribution": position_distribution(selected_positions),
+            }
+            epoch_rows.append(epoch_row)
+            print(
+                "[CREAT-Additive-SBR] "
+                f"target={int(target_item)} epoch {epoch + 1}/{total_epochs} completed "
+                f"in {epoch_row['elapsed_seconds']}s; "
+                f"loss={_format_optional_float(epoch_row['loss'])}, "
+                f"total_reward={_format_optional_float(epoch_row['total_reward'])}",
+                flush=True,
             )
 
+        train_completed_at = _timestamp_utc()
+        train_elapsed_seconds = time.monotonic() - train_started_monotonic
+        print(
+            "[CREAT-Additive-SBR] "
+            f"target={int(target_item)} masker training completed at {train_completed_at}; "
+            f"elapsed_seconds={round(float(train_elapsed_seconds), 3)}",
+            flush=True,
+        )
         history = {
             "target_item": int(target_item),
             "config": self.config.__dict__,
+            "started_at": train_started_at,
+            "completed_at": train_completed_at,
+            "elapsed_seconds": round(float(train_elapsed_seconds), 3),
             "epochs": epoch_rows,
         }
         return CreatTrainingResult(masker=masker, history=history)
@@ -151,6 +192,16 @@ def _mean(values: Sequence[float | int]) -> float | None:
     if not values:
         return None
     return float(sum(float(value) for value in values) / float(len(values)))
+
+
+def _timestamp_utc() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _format_optional_float(value: object) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value):.6g}"
 
 
 __all__ = ["CreatAdditiveSBRTrainer", "CreatTrainingResult"]
