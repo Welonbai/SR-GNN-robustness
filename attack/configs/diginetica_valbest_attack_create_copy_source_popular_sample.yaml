@@ -1,5 +1,5 @@
 experiment:
-  name: diginetica_valbest_attack_creat_copy_source_popular_sample
+  name: diginetica_valbest_attack_create_copy_source_popular_sample
 
 data:
   dataset_name: diginetica
@@ -53,7 +53,10 @@ attack:
 
   creat_additive_sbr:
     enabled: true
+    variant: v2
     epochs: 10
+    attack_epochs: 10
+    consistency_epochs: 10
     batch_size: 128
     lr: 0.001
     hidden_dim: 64
@@ -64,13 +67,22 @@ attack:
     stealth_weight: 0.1
     local_weight: 0.0
     entropy_weight: 0.0
+    pattern_reward_weight: 0.1
+    dpp_reward_weight: 0.0
+    dpp_score_mode: bounded_determinant
+    dpp_eps: 1.0e-6
+    global_consistency_weight: 0.1
+    local_consistency_weight: 0.1
+    local_window_size: 3
+    consistency_mode: local_global
+    final_policy_selection: last
     seed_source: position_opt_seed
 
 targets:
   mode: sampled
   explicit_list: []
   bucket: popular
-  count: 1
+  count: 10
   reuse_saved_targets: false
 
 victims:

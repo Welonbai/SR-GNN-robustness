@@ -40,6 +40,12 @@ _ALLOWED_POSITION_OPT_REWARD_MODES = {
 }
 CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE = "score"
 CREAT_ADDITIVE_SBR_SEED_SOURCE_POSITION_OPT_SEED = "position_opt_seed"
+CREAT_ADDITIVE_SBR_VARIANT_V1 = "v1"
+CREAT_ADDITIVE_SBR_VARIANT_V2 = "v2"
+CREAT_ADDITIVE_SBR_DPP_BOUNDED_DETERMINANT = "bounded_determinant"
+CREAT_ADDITIVE_SBR_DPP_RAW_LOGDET = "raw_logdet"
+CREAT_ADDITIVE_SBR_CONSISTENCY_LOCAL_GLOBAL = "local_global"
+CREAT_ADDITIVE_SBR_FINAL_POLICY_LAST = "last"
 _ALLOWED_POSITION_OPT_FINAL_POLICY_SELECTIONS = {
     "last",
     "best_deterministic",
@@ -1882,7 +1888,10 @@ class PTSConstructionConfig:
 @dataclass(frozen=True)
 class CreatAdditiveSBRConfig:
     enabled: bool = False
+    variant: str = CREAT_ADDITIVE_SBR_VARIANT_V1
     epochs: int = 10
+    attack_epochs: int = 10
+    consistency_epochs: int = 10
     batch_size: int = 128
     lr: float = 1.0e-3
     hidden_dim: int = 64
@@ -1892,12 +1901,28 @@ class CreatAdditiveSBRConfig:
     stealth_weight: float = 0.1
     local_weight: float = 0.0
     entropy_weight: float = 0.0
+    pattern_reward_weight: float = 0.1
+    dpp_reward_weight: float = 0.0
+    dpp_score_mode: str = CREAT_ADDITIVE_SBR_DPP_BOUNDED_DETERMINANT
+    dpp_eps: float = 1.0e-6
+    global_consistency_weight: float = 0.1
+    local_consistency_weight: float = 0.1
+    local_window_size: int = 3
+    consistency_mode: str = CREAT_ADDITIVE_SBR_CONSISTENCY_LOCAL_GLOBAL
+    final_policy_selection: str = CREAT_ADDITIVE_SBR_FINAL_POLICY_LAST
     attack_reward_mode: str = CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE
     seed_source: str = CREAT_ADDITIVE_SBR_SEED_SOURCE_POSITION_OPT_SEED
 
     def __post_init__(self) -> None:
         enabled = _as_bool(self.enabled, "attack.creat_additive_sbr.enabled")
+        variant = _as_str(self.variant, "attack.creat_additive_sbr.variant").strip().lower()
         epochs = _as_int(self.epochs, "attack.creat_additive_sbr.epochs")
+        attack_epochs = _as_int(
+            self.attack_epochs, "attack.creat_additive_sbr.attack_epochs"
+        )
+        consistency_epochs = _as_int(
+            self.consistency_epochs, "attack.creat_additive_sbr.consistency_epochs"
+        )
         batch_size = _as_int(self.batch_size, "attack.creat_additive_sbr.batch_size")
         lr = _as_float(self.lr, "attack.creat_additive_sbr.lr")
         hidden_dim = _as_int(self.hidden_dim, "attack.creat_additive_sbr.hidden_dim")
@@ -1925,6 +1950,39 @@ class CreatAdditiveSBRConfig:
             self.entropy_weight,
             "attack.creat_additive_sbr.entropy_weight",
         )
+        pattern_reward_weight = _as_float(
+            self.pattern_reward_weight,
+            "attack.creat_additive_sbr.pattern_reward_weight",
+        )
+        dpp_reward_weight = _as_float(
+            self.dpp_reward_weight,
+            "attack.creat_additive_sbr.dpp_reward_weight",
+        )
+        dpp_score_mode = _as_str(
+            self.dpp_score_mode,
+            "attack.creat_additive_sbr.dpp_score_mode",
+        ).strip().lower()
+        dpp_eps = _as_float(self.dpp_eps, "attack.creat_additive_sbr.dpp_eps")
+        global_consistency_weight = _as_float(
+            self.global_consistency_weight,
+            "attack.creat_additive_sbr.global_consistency_weight",
+        )
+        local_consistency_weight = _as_float(
+            self.local_consistency_weight,
+            "attack.creat_additive_sbr.local_consistency_weight",
+        )
+        local_window_size = _as_int(
+            self.local_window_size,
+            "attack.creat_additive_sbr.local_window_size",
+        )
+        consistency_mode = _as_str(
+            self.consistency_mode,
+            "attack.creat_additive_sbr.consistency_mode",
+        ).strip().lower()
+        final_policy_selection = _as_str(
+            self.final_policy_selection,
+            "attack.creat_additive_sbr.final_policy_selection",
+        ).strip().lower()
         attack_reward_mode = _as_str(
             self.attack_reward_mode,
             "attack.creat_additive_sbr.attack_reward_mode",
@@ -1934,13 +1992,23 @@ class CreatAdditiveSBRConfig:
             "attack.creat_additive_sbr.seed_source",
         ).strip().lower()
 
+        if variant not in {CREAT_ADDITIVE_SBR_VARIANT_V1, CREAT_ADDITIVE_SBR_VARIANT_V2}:
+            raise ValueError("attack.creat_additive_sbr.variant must be 'v1' or 'v2'.")
         if epochs < 0:
             raise ValueError("attack.creat_additive_sbr.epochs must be non-negative.")
-        if enabled and epochs <= 0:
+        if enabled and variant == CREAT_ADDITIVE_SBR_VARIANT_V1 and epochs <= 0:
             raise ValueError(
                 "attack.creat_additive_sbr.epochs must be positive when "
-                "attack.creat_additive_sbr.enabled is true."
+                "v1 is enabled."
             )
+        if attack_epochs < 0 or consistency_epochs < 0:
+            raise ValueError("attack.creat_additive_sbr v2 epochs must be non-negative.")
+        if enabled and variant == CREAT_ADDITIVE_SBR_VARIANT_V2:
+            if attack_epochs <= 0 or consistency_epochs <= 0:
+                raise ValueError(
+                    "attack.creat_additive_sbr attack_epochs and consistency_epochs "
+                    "must be positive when v2 is enabled."
+                )
         if batch_size <= 0:
             raise ValueError("attack.creat_additive_sbr.batch_size must be positive.")
         if lr <= 0.0:
@@ -1952,9 +2020,42 @@ class CreatAdditiveSBRConfig:
                 "attack.creat_additive_sbr.position_embedding_dim must be positive."
             )
         if max_attack_num != 1:
-            raise ValueError("attack.creat_additive_sbr.max_attack_num must be 1 for v1.")
-        if stealth_weight < 0.0 or local_weight < 0.0 or entropy_weight < 0.0:
+            raise ValueError("attack.creat_additive_sbr.max_attack_num must be 1.")
+        reward_weights = (
+            stealth_weight,
+            local_weight,
+            entropy_weight,
+            pattern_reward_weight,
+            dpp_reward_weight,
+            global_consistency_weight,
+            local_consistency_weight,
+        )
+        if any(weight < 0.0 for weight in reward_weights):
             raise ValueError("attack.creat_additive_sbr reward weights must be non-negative.")
+        if dpp_score_mode not in {
+            CREAT_ADDITIVE_SBR_DPP_BOUNDED_DETERMINANT,
+            CREAT_ADDITIVE_SBR_DPP_RAW_LOGDET,
+        }:
+            raise ValueError(
+                "attack.creat_additive_sbr.dpp_score_mode must be "
+                "'bounded_determinant' or 'raw_logdet'."
+            )
+        if dpp_eps <= 0.0:
+            raise ValueError("attack.creat_additive_sbr.dpp_eps must be positive.")
+        if local_window_size <= 0 or local_window_size % 2 == 0:
+            raise ValueError(
+                "attack.creat_additive_sbr.local_window_size must be a positive odd integer."
+            )
+        if consistency_mode != CREAT_ADDITIVE_SBR_CONSISTENCY_LOCAL_GLOBAL:
+            raise ValueError(
+                "attack.creat_additive_sbr.consistency_mode currently supports "
+                "only 'local_global'."
+            )
+        if final_policy_selection != CREAT_ADDITIVE_SBR_FINAL_POLICY_LAST:
+            raise ValueError(
+                "attack.creat_additive_sbr.final_policy_selection currently supports "
+                "only 'last'."
+            )
         if attack_reward_mode != CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE:
             raise ValueError(
                 "attack.creat_additive_sbr.attack_reward_mode currently supports only 'score'."
@@ -1966,7 +2067,10 @@ class CreatAdditiveSBRConfig:
             )
 
         object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "variant", variant)
         object.__setattr__(self, "epochs", epochs)
+        object.__setattr__(self, "attack_epochs", attack_epochs)
+        object.__setattr__(self, "consistency_epochs", consistency_epochs)
         object.__setattr__(self, "batch_size", batch_size)
         object.__setattr__(self, "lr", lr)
         object.__setattr__(self, "hidden_dim", hidden_dim)
@@ -1976,6 +2080,15 @@ class CreatAdditiveSBRConfig:
         object.__setattr__(self, "stealth_weight", stealth_weight)
         object.__setattr__(self, "local_weight", local_weight)
         object.__setattr__(self, "entropy_weight", entropy_weight)
+        object.__setattr__(self, "pattern_reward_weight", pattern_reward_weight)
+        object.__setattr__(self, "dpp_reward_weight", dpp_reward_weight)
+        object.__setattr__(self, "dpp_score_mode", dpp_score_mode)
+        object.__setattr__(self, "dpp_eps", dpp_eps)
+        object.__setattr__(self, "global_consistency_weight", global_consistency_weight)
+        object.__setattr__(self, "local_consistency_weight", local_consistency_weight)
+        object.__setattr__(self, "local_window_size", local_window_size)
+        object.__setattr__(self, "consistency_mode", consistency_mode)
+        object.__setattr__(self, "final_policy_selection", final_policy_selection)
         object.__setattr__(self, "attack_reward_mode", attack_reward_mode)
         object.__setattr__(self, "seed_source", seed_source)
 
@@ -4172,7 +4285,13 @@ __all__ = [
     "Config",
     "CreatAdditiveSBRConfig",
     "CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE",
+    "CREAT_ADDITIVE_SBR_CONSISTENCY_LOCAL_GLOBAL",
+    "CREAT_ADDITIVE_SBR_DPP_BOUNDED_DETERMINANT",
+    "CREAT_ADDITIVE_SBR_DPP_RAW_LOGDET",
+    "CREAT_ADDITIVE_SBR_FINAL_POLICY_LAST",
     "CREAT_ADDITIVE_SBR_SEED_SOURCE_POSITION_OPT_SEED",
+    "CREAT_ADDITIVE_SBR_VARIANT_V1",
+    "CREAT_ADDITIVE_SBR_VARIANT_V2",
     "FakeSessionSourceConfig",
     "FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED",
     "FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED",

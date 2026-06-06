@@ -158,6 +158,12 @@ def test_creat_runner_filters_after_hashing_and_calls_orchestrator(
     assert metadata["pre_existing_target_label_pair_count"] == 0
     assert metadata["post_poison_target_label_pair_count"] == 2
     assert metadata["new_target_label_pair_count"] == 2
+    assert metadata["candidate_reward_stats"] is None
+    assert metadata["selected_reward_stats"] is None
+    assert metadata["candidate_composed_reward_stats"] is None
+    assert metadata["selected_composed_reward_stats"] is None
+    assert "position_entropy" in metadata
+    assert metadata["creat_fidelity"]["variant"] == "v1"
     assert captured["poisoned"].clean_count == 2
     assert captured["poisoned"].fake_count == 2
 

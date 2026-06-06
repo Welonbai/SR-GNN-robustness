@@ -80,11 +80,26 @@ class SRGNNRepresentationAdapter:
     def target_score_for_prefix(self, prefix: Sequence[int], target_item: int) -> float:
         if not prefix:
             return 0.0
-        scores = self.runner.score_session(prefix)
+        return float(self.target_scores_for_prefixes([prefix], target_item)[0])
+
+    def target_scores_for_prefixes(
+        self,
+        prefixes: Sequence[Sequence[int]],
+        target_item: int,
+    ) -> list[float]:
+        normalized = _normalize_sessions(prefixes)
         target_index = int(target_item) - 1
-        if target_index < 0 or target_index >= scores.shape[0]:
+        if target_index < 0 or target_index >= self.model.embedding.num_embeddings - 1:
             raise ValueError("target_item is outside the score vector range.")
-        return float(scores[target_index].item())
+        data = Data((normalized, [1] * len(normalized)), shuffle=False)
+        target_scores: list[float] = []
+        with torch.no_grad():
+            for batch_indices in data.generate_batch(self.model.batch_size):
+                seq_hidden, mask = self._seq_hidden_and_mask(data, batch_indices)
+                scores = self.model.compute_scores(seq_hidden, mask)
+                values = trans_to_cpu(scores[:, target_index].detach()).tolist()
+                target_scores.extend(float(value) for value in values)
+        return target_scores
 
     def _seq_hidden_and_mask(self, data: Data, batch_indices) -> tuple[torch.Tensor, torch.Tensor]:
         alias_inputs, A, items, mask, _targets = data.get_slice(batch_indices)

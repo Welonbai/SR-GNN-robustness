@@ -26,6 +26,7 @@ PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE = "pts_construction_grouped_cem"
 PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE = "pts_construction_direct_action_mlp_cem"
 PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE = "pts_construction_candidate_replay"
 CREAT_ADDITIVE_SBR_RUN_TYPE = "creat_additive_sbr"
+CREAT_ADDITIVE_SBR_GENERATE_ONLY_RUN_TYPE = "creat_additive_sbr_generate_only"
 PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE = "prefix_nonzero_when_possible"
 TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE = "target_aware_carrier_selection_nz"
 TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE = "target_aware_carrier_local_position"
@@ -84,6 +85,7 @@ TARGET_COHORT_SELECTION_POLICY_VERSION = "appendable_target_cohort_v1"
 def shared_attack_identity_requires_poison_runner(run_type: str) -> bool:
     return run_type in {
         CREAT_ADDITIVE_SBR_RUN_TYPE,
+        CREAT_ADDITIVE_SBR_GENERATE_ONLY_RUN_TYPE,
         PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
         PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
         TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
@@ -446,7 +448,7 @@ def attack_key_payload(
         payload["attack_runtime_identity"] = _normalize_identity_value(
             attack_identity_context
         )
-    if run_type == CREAT_ADDITIVE_SBR_RUN_TYPE:
+    if run_type in {CREAT_ADDITIVE_SBR_RUN_TYPE, CREAT_ADDITIVE_SBR_GENERATE_ONLY_RUN_TYPE}:
         if config.attack.creat_additive_sbr is None:
             raise ValueError(
                 "creat_additive_sbr final attack identity requires "
@@ -1165,6 +1167,7 @@ __all__ = [
     "PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE",
     "CREAT_ADDITIVE_SBR_RUN_TYPE",
+    "CREAT_ADDITIVE_SBR_GENERATE_ONLY_RUN_TYPE",
     "PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE",
     "PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",

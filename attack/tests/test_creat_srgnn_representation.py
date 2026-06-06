@@ -45,3 +45,22 @@ def test_srgnn_compute_scores_reuses_same_representation_math() -> None:
     representation = model.compute_session_representation(hidden, mask)
     expected_scores = torch.matmul(representation, model.embedding.weight[1:].transpose(1, 0))
     assert torch.allclose(model.compute_scores(hidden, mask), expected_scores)
+
+
+def test_srgnn_adapter_batch_target_scores_match_score_session() -> None:
+    from attack.creat.srgnn_adapter import SRGNNRepresentationAdapter
+
+    config = load_config(
+        "attack/configs/diginetica_valbest_attack_creat_additive_sbr_ratio1_sample10.yaml"
+    )
+    runner = SRGNNBaseRunner(config, n_node=20)
+    runner.build_model(build_srgnn_opt_from_train_config(config.attack.poison_model.params["train"]))
+    adapter = SRGNNRepresentationAdapter(runner)
+    prefixes = [[1], [1, 2], [3, 4, 5]]
+    target_item = 7
+    batched = adapter.target_scores_for_prefixes(prefixes, target_item)
+    expected = [
+        float(runner.score_session(prefix)[target_item - 1].item())
+        for prefix in prefixes
+    ]
+    assert np.allclose(batched, expected)
