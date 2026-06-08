@@ -1,0 +1,8 @@
+comparison_id: diginetica_popular_source_methods_sample10
+
+runs:
+  - diginetica_clean_popular_source_methods_sample10
+  - diginetica_randomnz_popular_source_methods_sample10
+  - diginetica_generated_direct_cem_popular_source_methods_sample10
+  - diginetica_copy_direct_cem_popular_source_methods_sample10
+  - diginetica_creat_popular_source_methods_sample10
