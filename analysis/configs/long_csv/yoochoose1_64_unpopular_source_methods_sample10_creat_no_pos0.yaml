@@ -1,0 +1,28 @@
+defaults:
+  slice_policy: largest_complete_prefix
+  requested_victims:
+    - srgnn
+    - miasrec
+    - tron
+  requested_target_count: 10
+
+jobs:
+  - summary: outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_clean_sample10_unpopular/run_group_85c27125a3/summary_current.json
+    output_name: yoochoose1_64_clean_unpopular_source_methods_sample10_creat_no_pos0
+    attack_method_override: clean
+
+  - summary: outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_attack_random_nonzero_when_possible_ratio1_sample_unpopular/run_group_d7372f9886/summary_current.json
+    output_name: yoochoose1_64_randomnz_unpopular_source_methods_sample10_creat_no_pos0
+    attack_method_override: random_nz
+
+  - summary: outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_attack_ptscem_direct_guassian_mlp_internal_sample_unpopular/run_group_b49188992d/summary_current.json
+    output_name: yoochoose1_64_generated_direct_cem_unpopular_source_methods_sample10_creat_no_pos0
+    attack_method_override: generated_direct_cem
+
+  - summary: outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_attack_ptscem_direct_guassian_mlp_internal_sample_unpopular_copy_train/run_group_0b0d454daf/summary_current.json
+    output_name: yoochoose1_64_copy_direct_cem_unpopular_source_methods_sample10_creat_no_pos0
+    attack_method_override: copy_direct_cem
+
+  - summary: outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_attack_create_copy_source_unpopular_sample/run_group_36067fda59/summary_current.json
+    output_name: yoochoose1_64_creat_no_pos0_unpopular_source_methods_sample10
+    attack_method_override: creat_no_pos0

@@ -1,0 +1,66 @@
+style_name: yoochoose1_64_popular_source_methods_sample10_creat_no_pos0_mean_targets
+
+output_format: png
+
+title:
+  template: "Yoochoose 1/64 popular | mean of 10 target items | 3 victims | CREAT no position 0"
+  align: center
+  font_size: 12
+  color: black
+
+figure:
+  width: 15.5
+  height: 8.2
+  dpi: 220
+  background_color: white
+
+table:
+  font_size: 9
+  round_digits: 6
+  signed_percent_round_digits: 3
+  text_color: black
+  show_grid: true
+  auto_shrink: true
+  wrap_text: false
+  cell_align: center
+  top_level_group_separators: true
+  stub_column_width_weight: 1.0
+
+  display_alias:
+    labels:
+      attack_method: Attack
+      victim_model: Victim
+      metric_name: Metric
+      metric_scope: Scope
+      k: K
+    attack_method:
+      clean: Clean
+      random_nz: randomNZ
+      generated_direct_cem: generated cem
+      copy_direct_cem: copy cem
+      creat_no_pos0: creat no-pos0
+    victim_model:
+      miasrec: MiaSRec
+      srgnn: SRGNN
+      tron: TRON
+    metric_name:
+      recall: Recall
+      mrr: MRR
+    metric_scope:
+      ground_truth: GT
+      targeted: Target
+
+  value_alias: {}
+
+  dimension_value_orders:
+    victim_model: [srgnn, miasrec, tron]
+    attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem, creat_no_pos0]
+
+  best_value_bolding:
+    compare_along: rows
+    mode: max
+    underline_second_best: true
+    partition_by_levels:
+      - victim_model
+    column_filters:
+      metric_scope: targeted
