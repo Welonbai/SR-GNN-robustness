@@ -119,6 +119,7 @@ def run_tail_insertion_nonzero(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "insertion_slot_stats_path": str(insertion_slot_stats_path),
                 "tail_insertion_slot_metadata_path": str(metadata_path),

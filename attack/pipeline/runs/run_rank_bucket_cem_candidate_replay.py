@@ -193,6 +193,7 @@ def run_rank_bucket_cem_candidate_replay(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=poisoned_fake_sessions,
             metadata={
                 "position_opt_method": POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE,
                 "rank_bucket_cem_candidate_replay": replay_metadata,

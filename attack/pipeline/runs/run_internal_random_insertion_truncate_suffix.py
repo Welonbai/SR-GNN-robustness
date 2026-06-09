@@ -129,6 +129,7 @@ def run_internal_random_insertion_truncate_suffix_nonzero(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "internal_insertion_truncate_suffix_slot_stats_path": str(
                     slot_stats_path

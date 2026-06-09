@@ -152,6 +152,7 @@ def _build_clean_poisoned(target_item: int) -> TargetPoisonOutput:
             clean_count=1,
             fake_count=0,
         ),
+        raw_fake_sessions=[],
         metadata={"clean_shared_reuse_test": True, "target_item_for_metrics": int(target_item)},
     )
 
@@ -175,6 +176,9 @@ def _install_fake_clean_execution(
                 "target_item": target_item,
                 "victim_name": victim_name,
                 "poisoned_labels": list(kwargs["poisoned_labels"]),
+                "raw_fake_sessions": [
+                    list(session) for session in kwargs["raw_fake_sessions"]
+                ],
             }
         )
         save_json(
@@ -339,6 +343,7 @@ def test_clean_initial_run_executes_each_victim_once_and_reuses_predictions(monk
     assert execute_calls[0]["run_type"] == "clean"
     assert execute_calls[0]["target_item"] == int(expected_targets[0])
     assert execute_calls[0]["poisoned_labels"] == [999]
+    assert execute_calls[0]["raw_fake_sessions"] == []
     assert summary["target_items"] == [int(item) for item in expected_targets]
 
     assert first_artifacts["shared_dir"] == second_artifacts["shared_dir"]
@@ -521,6 +526,7 @@ def test_run_clean_reuses_one_target_invariant_poisoned_bundle(monkeypatch) -> N
             for target_item in (101, 202, 303):
                 payload = build_poisoned(target_item)
                 poisoned_ids.append(id(payload.poisoned))
+                assert payload.raw_fake_sessions == []
                 assert payload.metadata["position_stats_path"].endswith("position_stats.json")
             return {"target_items": [101, 202, 303]}
 

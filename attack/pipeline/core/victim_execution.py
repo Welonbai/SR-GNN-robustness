@@ -38,6 +38,7 @@ def execute_single_victim(
     canonical_dataset: CanonicalDataset,
     poisoned_sessions: Sequence[Sequence[int]],
     poisoned_labels: Sequence[int],
+    raw_fake_sessions: Sequence[Sequence[int]],
     run_dir: Path,
     poisoned_train_path: Path,
     target_item: int,
@@ -215,10 +216,9 @@ def execute_single_victim(
     if victim_name == "tron":
         export_root = run_dir / "export" / "tron"
         tron_export = TRONExporter()
-        export_result = tron_export.export_with_poisoned_train(
+        export_result = tron_export.export_with_raw_poisoned_train(
             canonical_dataset,
-            poisoned_sessions=poisoned_sessions,
-            poisoned_labels=poisoned_labels,
+            raw_fake_sessions=raw_fake_sessions,
             output_dir=export_root,
             dataset_name=config.data.dataset_name,
         )

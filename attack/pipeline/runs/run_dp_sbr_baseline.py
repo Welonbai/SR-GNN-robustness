@@ -84,6 +84,7 @@ def run_dp_sbr_baseline(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "position_stats_path": str(position_stats_path),
                 "dpsbr_position_metadata_path": str(positions_path),

@@ -273,7 +273,11 @@ def run_position_opt_shared_policy(
                 "pos0_prefix_handling"
             ),
         }
-        return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+        return TargetPoisonOutput(
+            poisoned=poisoned,
+            raw_fake_sessions=optimized_poisoned_sessions,
+            metadata=metadata,
+        )
 
     summary = run_targets_and_victims(
         config,

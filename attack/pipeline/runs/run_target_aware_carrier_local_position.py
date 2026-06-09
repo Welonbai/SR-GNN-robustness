@@ -224,6 +224,7 @@ def run_target_aware_carrier_local_position(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=targetized.fake_sessions,
             metadata={
                 "carrier_local_position_metadata_path": str(
                     carrier_local_position_metadata_path

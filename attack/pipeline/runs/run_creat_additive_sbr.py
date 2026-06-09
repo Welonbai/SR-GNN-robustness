@@ -59,7 +59,11 @@ def run_creat_additive_sbr(
             shared.clean_labels,
             generated.poisoned_sessions,
         )
-        return TargetPoisonOutput(poisoned=poisoned, metadata=generated.metadata)
+        return TargetPoisonOutput(
+            poisoned=poisoned,
+            raw_fake_sessions=generated.poisoned_sessions,
+            metadata=generated.metadata,
+        )
 
     return run_targets_and_victims(
         config,

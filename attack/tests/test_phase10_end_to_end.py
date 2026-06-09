@@ -203,6 +203,7 @@ def _build_poisoned(target_item: int) -> TargetPoisonOutput:
             clean_count=1,
             fake_count=0,
         ),
+        raw_fake_sessions=[],
         metadata={"phase10_smoke": True},
     )
 

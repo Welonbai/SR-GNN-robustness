@@ -138,6 +138,7 @@ def run_random_insertion_then_crop_nonzero(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "insertion_then_crop_stats_path": str(stats_path),
                 "random_insertion_then_crop_metadata_path": str(metadata_path),

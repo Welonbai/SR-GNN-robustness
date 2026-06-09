@@ -15,6 +15,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from attack.common.artifact_io import save_json
 from attack.common.config import load_config
+from attack.data.canonical_dataset import CanonicalDataset
+from attack.data.poisoned_dataset_builder import PoisonedDataset
+from attack.pipeline.runs import run_victim_valbest_epoch_diagnostic as diagnostic_runner
 from attack.pipeline.runs.run_victim_valbest_epoch_diagnostic import (
     EXPECTED_ACTIONS,
     SourcePTSArtifact,
@@ -256,6 +259,96 @@ def test_tron_summary_records_best_checkpoint_flags() -> None:
     assert summary["formal_export_behavior"] == "last_model"
     assert summary["diagnostic_compared_best_checkpoint"] is True
     assert summary["used_best_checkpoint_for_formal_export"] is False
+
+
+def test_tron_diagnostic_exports_source_raw_sessions_not_poisoned_pairs(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    base_config = load_config("attack/configs/diginetica_valbest_clean_sample10.yaml")
+    config = replace(
+        base_config,
+        artifacts=replace(base_config.artifacts, root=str(tmp_path / "outputs")),
+        experiment=replace(base_config.experiment, name="pytest_tron_diag_raw_sessions"),
+    )
+    run_root = tmp_path / "completed_run" / "run_group_abc"
+    _write_source_artifact(run_root)
+    source = resolve_source_pts_artifact(
+        config,
+        target_item=39588,
+        candidate_rank=1,
+        source_run=run_root,
+        expected_candidate_key="iter1_cand5",
+        manual_raw_lowk=None,
+    )
+    captured: dict[str, object] = {}
+
+    def fail_pair_export(*args, **kwargs):
+        raise AssertionError("TRON diagnostic must not call pair-based export")
+
+    def fake_raw_export(self, dataset, *, raw_fake_sessions, output_dir, dataset_name=None):
+        captured["raw_fake_sessions"] = [list(session) for session in raw_fake_sessions]
+
+    class FakeTRONRunner:
+        def __init__(self, config):
+            pass
+
+        def run(self, **kwargs):
+            save_json(
+                {
+                    "best_model_path": None,
+                    "best_checkpoint_validation": False,
+                },
+                kwargs["diagnostic_summary_path"],
+            )
+            return {"log_dir": str(tmp_path / "logs")}
+
+    monkeypatch.setattr(
+        diagnostic_runner,
+        "ensure_canonical_dataset",
+        lambda config: CanonicalDataset(
+            train_sub=[[1, 2, 3]],
+            valid=[[1, 2]],
+            test=[[2, 3]],
+            item_map={},
+            metadata={"dataset_name": "diginetica"},
+        ),
+    )
+    monkeypatch.setattr(
+        diagnostic_runner.TRONExporter,
+        "export_with_poisoned_train",
+        fail_pair_export,
+    )
+    monkeypatch.setattr(
+        diagnostic_runner.TRONExporter,
+        "export_with_raw_poisoned_train",
+        fake_raw_export,
+    )
+    monkeypatch.setattr(diagnostic_runner, "TRONRunner", FakeTRONRunner)
+    monkeypatch.setattr(
+        diagnostic_runner,
+        "load_tron_epoch_metrics",
+        lambda *args, **kwargs: [
+            {"epoch": 1, "recall@20": 0.1, "mrr@20": 0.05, "valid_loss": 1.0}
+        ],
+    )
+    monkeypatch.setattr(diagnostic_runner, "_write_json_and_csv", lambda *args, **kwargs: None)
+
+    diagnostic_runner._run_tron_diagnostic(
+        config,
+        source=source,
+        poisoned=PoisonedDataset(
+            sessions=[[1], [1, 2]],
+            labels=[2, 3],
+            clean_count=2,
+            fake_count=0,
+        ),
+        out_dir=tmp_path / "diagnostic",
+        max_epochs=1,
+        diagnostic_config={},
+    )
+
+    assert captured["raw_fake_sessions"] == source.sessions
 
 
 def test_tron_epoch_metric_parsing_excludes_posthoc_validation_rows(tmp_path: Path) -> None:

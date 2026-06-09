@@ -447,7 +447,15 @@ def _install_fake_victim(monkeypatch, execute_calls: list[dict[str, object]]) ->
             },
             predictions_path,
         )
-        execute_calls.append({"target_item": target_item, "victim_name": victim_name})
+        execute_calls.append(
+            {
+                "target_item": target_item,
+                "victim_name": victim_name,
+                "raw_fake_sessions": [
+                    list(session) for session in kwargs["raw_fake_sessions"]
+                ],
+            }
+        )
         return VictimExecutionResult(
             predictions=[[7, 8, 9]],
             predictions_path=predictions_path,
@@ -495,6 +503,7 @@ def test_explicit_to_sampled_pts_cem_victim_prediction_cache_reuse(monkeypatch) 
                     clean_count=1,
                     fake_count=1,
                 ),
+                raw_fake_sessions=[[11, 22, int(target_item)]],
                 metadata={
                     **_metadata(
                         target_item=int(target_item),
@@ -529,7 +538,11 @@ def test_explicit_to_sampled_pts_cem_victim_prediction_cache_reuse(monkeypatch) 
         )
 
     assert execute_calls == [
-        {"target_item": sampled_target, "victim_name": victim_name}
+        {
+            "target_item": sampled_target,
+            "victim_name": victim_name,
+            "raw_fake_sessions": [[11, 22, sampled_target]],
+        }
         for victim_name in explicit_config.victims.enabled
     ]
     assert sampled_metrics["reused_predictions"] is True

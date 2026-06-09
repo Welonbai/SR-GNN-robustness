@@ -130,6 +130,7 @@ def run_internal_random_replacement_nonzero(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "position_stats_path": str(position_stats_path),
                 "internal_random_replacement_metadata_path": str(metadata_path),

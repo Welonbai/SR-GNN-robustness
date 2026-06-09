@@ -63,6 +63,7 @@ def run_always_pos0(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={"position_stats_path": str(position_stats_path)},
         )
 

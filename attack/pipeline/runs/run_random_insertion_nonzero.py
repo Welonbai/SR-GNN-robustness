@@ -122,6 +122,7 @@ def run_random_insertion_nonzero(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "insertion_slot_stats_path": str(insertion_slot_stats_path),
                 "random_insertion_slot_metadata_path": str(metadata_path),

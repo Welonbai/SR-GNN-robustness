@@ -102,6 +102,7 @@ class RunContext:
 @dataclass(frozen=True)
 class TargetPoisonOutput:
     poisoned: PoisonedDataset
+    raw_fake_sessions: list[list[int]]
     metadata: dict[str, object]
 
 
@@ -313,6 +314,7 @@ def run_targets_and_victims(
                     canonical_dataset=context.canonical_dataset,
                     poisoned_sessions=target_payload.poisoned.sessions,
                     poisoned_labels=target_payload.poisoned.labels,
+                    raw_fake_sessions=target_payload.raw_fake_sessions,
                     run_dir=run_dir,
                     poisoned_train_path=artifacts["poisoned_train"],
                     target_item=int(target_item),
@@ -1896,6 +1898,7 @@ def _maybe_reuse_or_execute_victim(
     canonical_dataset: CanonicalDataset,
     poisoned_sessions: list[list[int]],
     poisoned_labels: list[int],
+    raw_fake_sessions: list[list[int]],
     run_dir: Path,
     poisoned_train_path: Path,
     target_item: int,
@@ -1942,6 +1945,7 @@ def _maybe_reuse_or_execute_victim(
         canonical_dataset=canonical_dataset,
         poisoned_sessions=poisoned_sessions,
         poisoned_labels=poisoned_labels,
+        raw_fake_sessions=raw_fake_sessions,
         run_dir=run_dir,
         poisoned_train_path=poisoned_train_path,
         target_item=target_item,

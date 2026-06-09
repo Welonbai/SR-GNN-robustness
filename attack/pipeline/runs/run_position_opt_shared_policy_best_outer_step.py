@@ -203,6 +203,7 @@ def run_position_opt_shared_policy_best_outer_step(
         )
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=optimized_poisoned_sessions,
             metadata={
                 "position_opt_method": POSITION_OPT_SHARED_POLICY_RUN_TYPE,
                 "position_opt_replay_mode": "best_sampled_outer_step",

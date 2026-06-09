@@ -269,6 +269,7 @@ def run_target_aware_coverage_local_position(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=targetized.fake_sessions,
             metadata={
                 "coverage_local_position_metadata_path": str(coverage_metadata_path),
                 "tacs_coverage_local_position_metadata_path": str(tacs_metadata_path),

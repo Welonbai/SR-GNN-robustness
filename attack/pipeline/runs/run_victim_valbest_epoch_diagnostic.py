@@ -558,10 +558,9 @@ def _run_tron_diagnostic(
     diagnostic_summary_path = victim_dir / "tron_diagnostic_summary.json"
     raw_topk_path = victim_dir / "tron_topk_raw.json"
     exporter = TRONExporter()
-    exporter.export_with_poisoned_train(
+    exporter.export_with_raw_poisoned_train(
         ensure_canonical_dataset(config),
-        poisoned_sessions=poisoned.sessions,
-        poisoned_labels=poisoned.labels,
+        raw_fake_sessions=source.sessions,
         output_dir=export_root,
         dataset_name=config.data.dataset_name,
     )

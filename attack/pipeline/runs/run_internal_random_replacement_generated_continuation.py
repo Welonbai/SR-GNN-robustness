@@ -142,6 +142,7 @@ def run_internal_random_replacement_generated_continuation_nonzero(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "internal_replacement_generated_continuation_slot_stats_path": str(
                     position_stats_path

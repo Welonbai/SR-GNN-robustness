@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +25,7 @@ from attack.common.config import (
 )
 from attack.common.artifact_io import save_json
 from attack.common.paths import run_group_key, target_cohort_key
+from attack.pipeline.core.pipeline_utils import SharedAttackArtifacts
 from attack.pipeline.runs import run_pts_construction_cem
 from attack.pipeline.runs.run_pts_construction_cem import (
     PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION,
@@ -593,6 +595,93 @@ def test_pts_cache_legacy_fallback_loads_rank1_sessions() -> None:
         assert cached.complete_marker_path is None
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def test_pts_cached_runner_propagates_cached_final_raw_sessions(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config = _with_output_root(load_config(CONFIG_PATH), tmp_path)
+    cached_sessions = [[1, 2, 5334], [3, 4, 5334]]
+    cached = run_pts_construction_cem.CachedPTSBestCandidate(
+        sessions=cached_sessions,
+        metadata={"target_item": 5334, "reward": 0.5},
+        sessions_path=tmp_path / "sessions.json",
+        metadata_path=tmp_path / "metadata.json",
+        top_candidates_path=None,
+        complete_marker_path=None,
+        cache_mode="complete_marker",
+        cache_marker_missing=False,
+    )
+    shared = SharedAttackArtifacts(
+        stats=SimpleNamespace(),
+        clean_sessions=[[1]],
+        clean_labels=[2],
+        canonical_dataset=object(),
+        export_paths={},
+        template_sessions=[],
+        poison_runner=None,
+        fake_session_count=0,
+        shared_paths={"fake_sessions": tmp_path / "fake_sessions.pkl"},
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "prepare_shared_attack_artifacts",
+        lambda *args, **kwargs: shared,
+    )
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "_pts_construction_artifact_dir",
+        lambda *args, **kwargs: tmp_path / "pts_construction_cem",
+    )
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "build_pts_cem_shared_cache_identity",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "pts_cem_shared_cache_key",
+        lambda identity: "shared-key",
+    )
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "pts_cem_shared_cache_dir",
+        lambda *args, **kwargs: tmp_path / "shared-cache",
+    )
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "_current_pts_construction_cache_identity",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "_try_load_cached_pts_best_candidate",
+        lambda *args, **kwargs: cached,
+    )
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "_target_metadata_from_cache",
+        lambda *args, **kwargs: {},
+    )
+
+    def fake_run_targets_and_victims(*args, **kwargs):
+        payload = kwargs["build_poisoned"](5334)
+        captured["raw_fake_sessions"] = payload.raw_fake_sessions
+        return {"status": "ok"}
+
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "run_targets_and_victims",
+        fake_run_targets_and_victims,
+    )
+
+    assert run_pts_construction_cem.run_pts_construction_grouped_cem(config) == {
+        "status": "ok"
+    }
+    assert captured["raw_fake_sessions"] == cached_sessions
 
 
 def test_epoch_reward_diagnostics_cache_reuse_warning(capsys) -> None:

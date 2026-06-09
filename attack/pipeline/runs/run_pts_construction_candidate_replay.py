@@ -116,6 +116,7 @@ def run_pts_construction_candidate_replay(
         )
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=source.sessions,
             metadata=_target_replay_metadata(
                 source=source,
                 replay_metadata=replay_metadata,

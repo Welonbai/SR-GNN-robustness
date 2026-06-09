@@ -192,6 +192,7 @@ def test_batch_execution_behavior_is_unchanged_apart_from_metadata_semantics(
                     clean_count=1,
                     fake_count=0,
                 ),
+                raw_fake_sessions=[],
                 metadata={"phase3_smoke": True},
             )
 

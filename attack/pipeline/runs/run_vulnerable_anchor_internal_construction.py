@@ -152,6 +152,7 @@ def run_vulnerable_anchor_internal_construction(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "vulnerable_anchor_internal_construction_stats_path": str(stats_path),
                 "vulnerable_anchor_internal_construction_metadata_path": str(

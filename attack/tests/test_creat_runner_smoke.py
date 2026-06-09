@@ -133,6 +133,7 @@ def test_creat_runner_filters_after_hashing_and_calls_orchestrator(
         output = kwargs["build_poisoned"](11)
         captured["metadata"] = output.metadata
         captured["poisoned"] = output.poisoned
+        captured["raw_fake_sessions"] = output.raw_fake_sessions
         return {"status": "ok"}
 
     monkeypatch.setattr(creat_runner, "run_targets_and_victims", fake_run_targets_and_victims)
@@ -166,6 +167,7 @@ def test_creat_runner_filters_after_hashing_and_calls_orchestrator(
     assert metadata["creat_fidelity"]["variant"] == "v1"
     assert captured["poisoned"].clean_count == 2
     assert captured["poisoned"].fake_count == 2
+    assert captured["raw_fake_sessions"] == [[1, 11], [3, 4, 11]]
 
 
 def test_creat_runner_requires_train_template_source(tmp_path: Path) -> None:

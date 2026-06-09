@@ -182,6 +182,7 @@ def run_popular_anchor_internal_construction(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "popular_anchor_internal_construction_stats_path": str(stats_path),
                 "popular_anchor_internal_construction_metadata_path": str(

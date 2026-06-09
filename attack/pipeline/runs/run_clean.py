@@ -62,6 +62,7 @@ def run_clean(
         )
         return TargetPoisonOutput(
             poisoned=clean_poisoned,
+            raw_fake_sessions=[],
             metadata={"position_stats_path": str(position_stats_path)},
         )
 

@@ -261,7 +261,11 @@ def run_pts_construction_grouped_cem(
                     target_item=int(target_item),
                     cached=cached,
                 )
-                return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+                return TargetPoisonOutput(
+                    poisoned=poisoned,
+                    raw_fake_sessions=cached.sessions,
+                    metadata=metadata,
+                )
             shared_cached = _try_load_shared_pts_cem_cache(
                 shared_cache_dir=shared_cache_dir,
                 target_item=int(target_item),
@@ -306,7 +310,11 @@ def run_pts_construction_grouped_cem(
                     target_item=int(target_item),
                     cached=cached,
                 )
-                return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+                return TargetPoisonOutput(
+                    poisoned=poisoned,
+                    raw_fake_sessions=cached.sessions,
+                    metadata=metadata,
+                )
             print(
                 f"{_LOG_PREFIX} target={int(target_item)} run CEM"
             )
@@ -449,7 +457,11 @@ def run_pts_construction_grouped_cem(
             f"best_candidate={int(result.best_candidate.candidate_id)} "
             f"artifacts={pts_artifact_dir}"
         )
-        return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+        return TargetPoisonOutput(
+            poisoned=poisoned,
+            raw_fake_sessions=final_sessions,
+            metadata=metadata,
+        )
 
     return run_targets_and_victims(
         config,

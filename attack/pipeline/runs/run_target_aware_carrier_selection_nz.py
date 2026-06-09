@@ -196,6 +196,7 @@ def run_target_aware_carrier_selection_nz(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=targetized.fake_sessions,
             metadata={
                 "carrier_selection_metadata_path": str(carrier_selection_metadata_path),
                 "position_stats_path": str(position_stats_path),

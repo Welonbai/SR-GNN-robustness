@@ -36,6 +36,25 @@ class TRONExporter(BaseExporter):
             dataset_name=dataset_name,
         )
 
+    def export_with_raw_poisoned_train(
+        self,
+        dataset: CanonicalDataset,
+        *,
+        raw_fake_sessions: Sequence[Sequence[int]],
+        output_dir: str | Path,
+        dataset_name: str | None = None,
+    ) -> ExportResult:
+        train_sequences = (
+            [list(session) for session in dataset.train_sub]
+            + [list(session) for session in raw_fake_sessions]
+        )
+        return self._export_sequences(
+            dataset,
+            output_dir=output_dir,
+            train_sequences=train_sequences,
+            dataset_name=dataset_name,
+        )
+
     def _export_with_train_override(
         self,
         dataset: CanonicalDataset,
@@ -45,15 +64,30 @@ class TRONExporter(BaseExporter):
         train_labels: Sequence[int] | None,
         dataset_name: str | None = None,
     ) -> ExportResult:
+        if train_sessions is None or train_labels is None:
+            train_sequences = [list(session) for session in dataset.train_sub]
+        else:
+            train_sequences = _pairs_to_sequences(train_sessions, train_labels)
+        return self._export_sequences(
+            dataset,
+            output_dir=output_dir,
+            train_sequences=train_sequences,
+            dataset_name=dataset_name,
+        )
+
+    def _export_sequences(
+        self,
+        dataset: CanonicalDataset,
+        *,
+        output_dir: str | Path,
+        train_sequences: Sequence[Sequence[int]],
+        dataset_name: str | None = None,
+    ) -> ExportResult:
         dataset_name = dataset_name or dataset.metadata.get("dataset_name", "dataset")
         output_root = Path(output_dir)
         dataset_dir = output_root / dataset_name
         dataset_dir.mkdir(parents=True, exist_ok=True)
 
-        if train_sessions is None or train_labels is None:
-            train_sequences = dataset.train_sub
-        else:
-            train_sequences = _pairs_to_sequences(train_sessions, train_labels)
         valid_sequences = dataset.valid
         test_sequences = dataset.test
 

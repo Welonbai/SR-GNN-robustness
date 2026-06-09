@@ -90,6 +90,7 @@ def run_random_nonzero(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "position_stats_path": str(position_stats_path),
                 "random_nonzero_position_metadata_path": str(positions_path),

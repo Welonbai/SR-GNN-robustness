@@ -741,6 +741,8 @@ def victim_prediction_key_payload(
     }
     if victim_effective_train_seed is not None:
         payload["victim_effective_train_seed"] = int(victim_effective_train_seed)
+    if victim_name == "tron":
+        payload["victim_data_semantics"] = "tron_raw_session_export_v1"
     if victim_name == "srgnn":
         train_config = config.victims.params[victim_name].get("train", {})
         if (

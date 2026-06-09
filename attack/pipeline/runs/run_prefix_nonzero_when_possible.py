@@ -84,6 +84,7 @@ def run_prefix_nonzero_when_possible(
 
         return TargetPoisonOutput(
             poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
             metadata={
                 "position_stats_path": str(position_stats_path),
                 "prefix_nonzero_when_possible_metadata_path": str(positions_path),

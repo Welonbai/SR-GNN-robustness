@@ -167,7 +167,11 @@ def run_bucket_position_baseline(
             "bucket_resolved_target_prefix": [int(item) for item in resolved_target_prefix],
             "bucket_cohort_validation": cohort_validation,
         }
-        return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+        return TargetPoisonOutput(
+            poisoned=poisoned,
+            raw_fake_sessions=fake_sessions,
+            metadata=metadata,
+        )
 
     return run_targets_and_victims(
         config,

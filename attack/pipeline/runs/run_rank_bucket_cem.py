@@ -295,7 +295,11 @@ def run_rank_bucket_cem(
                 "clean_target_metrics"
             ),
         }
-        return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+        return TargetPoisonOutput(
+            poisoned=poisoned,
+            raw_fake_sessions=optimized_poisoned_sessions,
+            metadata=metadata,
+        )
 
     summary = run_targets_and_victims(
         config,
@@ -422,7 +426,11 @@ def _load_cached_rank_bucket_cem_target_output(
         ),
     )
     metadata["rank_bucket_cem_reused_artifacts"] = True
-    return TargetPoisonOutput(poisoned=poisoned, metadata=metadata)
+    return TargetPoisonOutput(
+        poisoned=poisoned,
+        raw_fake_sessions=optimized_poisoned_sessions,
+        metadata=metadata,
+    )
 
 
 def _validate_cached_rank_bucket_cem_surrogate_evaluator(
