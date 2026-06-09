@@ -1,0 +1,28 @@
+defaults:
+  slice_policy: largest_complete_prefix
+  requested_victims:
+    - srgnn
+    - miasrec
+    - tron
+  requested_target_count: 10
+
+jobs:
+  - summary: outputs/runs/diginetica/diginetica_valbest_clean_unpopular_sample10_fixed_epoch/run_group_faff1966b8/summary_current.json
+    output_name: diginetica_clean_unpopular_source_methods_sample10
+    attack_method_override: clean
+
+  - summary: outputs/runs/diginetica/diginetica_valbest_attack_random_nonzero_when_possible_ratio1_unpopular_sample10_fixed_epoch/run_group_5fdeb4524a/summary_current.json
+    output_name: diginetica_randomnz_unpopular_source_methods_sample10
+    attack_method_override: random_nz
+
+  - summary: outputs/runs/diginetica/diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_unpopular_sample10_fixed_epoch/run_group_f0d23205ae/summary_current.json
+    output_name: diginetica_generated_direct_cem_unpopular_source_methods_sample10
+    attack_method_override: generated_direct_cem
+
+  - summary: outputs/runs/diginetica/ssh_diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample_unpopular_copy_train/run_group_e9d162312a/summary_current.json
+    output_name: diginetica_copy_direct_cem_unpopular_source_methods_sample10
+    attack_method_override: copy_direct_cem
+
+  - summary: outputs/runs/diginetica/ssh_diginetica_valbest_attack_create_copy_source_unpopular_sample_openpos0_dpp001_consistency03/run_group_79f25ab7b5/summary_current.json
+    output_name: diginetica_creat_unpopular_source_methods_sample10
+    attack_method_override: creat

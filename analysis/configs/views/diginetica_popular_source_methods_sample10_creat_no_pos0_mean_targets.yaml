@@ -1,0 +1,56 @@
+name: mean_targets
+
+input: results/comparisons/diginetica_popular_source_methods_sample10_creat_no_pos0/merged_long_table.csv
+output: results/comparisons/diginetica_popular_source_methods_sample10_creat_no_pos0/mean_targets
+
+filters:
+  target_item: [11103, 39588, 5334, 5418, 14514, 32614, 1440, 4092, 3316, 9496]
+  victim_model: [srgnn, miasrec, tron]
+  attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem, creat_no_pos0]
+  poison_model: srgnn
+  target_type: popular
+  attack_size: 0.01
+  metric_name: [recall, mrr]
+  metric_scope: [ground_truth, targeted]
+  k: [10, 20]
+
+split_by: []
+
+rows:
+  - victim_model
+  - attack_method
+
+cols:
+  - metric_name
+  - k
+  - metric_scope
+
+value_col: value
+agg: mean
+auto_context: true
+require_unique_cells: false
+
+mean_std:
+  enabled: true
+  ddof: 1
+  std_round_digits: 3
+
+ground_truth_relative_to_clean:
+  enabled: true
+  baseline_attack_method: clean
+  ignore_pairing_columns:
+    - run_id
+    - replacement_topk_ratio
+
+mean_completeness:
+  enabled: true
+  complete_over: target_item
+  expected_values: [11103, 39588, 5334, 5418, 14514, 32614, 1440, 4092, 3316, 9496]
+  group_by:
+    - victim_model
+    - attack_method
+    - metric_name
+    - metric_scope
+    - k
+  on_missing: error
+  write_missing_report: true

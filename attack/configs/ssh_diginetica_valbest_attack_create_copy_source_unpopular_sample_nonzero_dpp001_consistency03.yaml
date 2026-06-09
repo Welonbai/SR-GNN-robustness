@@ -1,5 +1,5 @@
 experiment:
-  name: ssh_diginetica_valbest_attack_create_copy_source_unpopular_sample_openpos0_dpp001_consistency03
+  name: ssh_diginetica_valbest_attack_create_copy_source_unpopular_sample_nonzero_dpp001_consistency03
 
 data:
   dataset_name: diginetica
@@ -62,7 +62,7 @@ attack:
     hidden_dim: 64
     position_embedding_dim: 16
     max_attack_num: 1
-    nonzero_when_possible: false
+    nonzero_when_possible: true
     attack_reward_mode: score
     stealth_weight: 0.1
     local_weight: 0.0
@@ -86,7 +86,7 @@ targets:
   reuse_saved_targets: false
 
 victims:
-  enabled: [srgnn, miasrec, tron]
+  enabled: [srgnn, miasrec]
   params:
     srgnn:
       train:

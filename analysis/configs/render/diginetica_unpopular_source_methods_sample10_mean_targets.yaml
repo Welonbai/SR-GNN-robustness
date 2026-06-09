@@ -1,9 +1,9 @@
-style_name: diginetica_popular_source_methods_sample10_mean_targets
+style_name: diginetica_unpopular_source_methods_sample10_mean_targets
 
 output_format: png
 
 title:
-  template: "Diginetica popular | mean of 10 target items | 3 victims"
+  template: "Diginetica unpopular | mean of 10 target items | 3 victims"
   align: center
   font_size: 12
   color: black

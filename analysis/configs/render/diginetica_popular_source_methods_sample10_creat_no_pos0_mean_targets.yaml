@@ -1,9 +1,9 @@
-style_name: diginetica_popular_source_methods_sample10_mean_targets
+style_name: diginetica_popular_source_methods_sample10_creat_no_pos0_mean_targets
 
 output_format: png
 
 title:
-  template: "Diginetica popular | mean of 10 target items | 3 victims"
+  template: "Diginetica popular | mean of 10 target items | 3 victims | CREAT no position 0"
   align: center
   font_size: 12
   color: black
@@ -39,7 +39,7 @@ table:
       random_nz: randomNZ
       generated_direct_cem: generated cem
       copy_direct_cem: copy cem
-      creat: creat
+      creat_no_pos0: creat no-pos0
 
     victim_model:
       miasrec: MiaSRec
@@ -66,7 +66,7 @@ table:
       - random_nz
       - generated_direct_cem
       - copy_direct_cem
-      - creat
+      - creat_no_pos0
 
   best_value_bolding:
     compare_along: rows

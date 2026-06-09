@@ -1,16 +1,16 @@
-style_name: diginetica_popular_source_methods_sample10_mean_targets
+style_name: diginetica_unpopular_source_methods_sample10_mean_targets_no_creat
 
 output_format: png
 
 title:
-  template: "Diginetica popular | mean of 10 target items | 3 victims"
+  template: "Diginetica unpopular | mean of 10 target items | 3 victims"
   align: center
   font_size: 12
   color: black
 
 figure:
   width: 15.5
-  height: 8.2
+  height: 7.0
   dpi: 220
   background_color: white
 
@@ -39,7 +39,6 @@ table:
       random_nz: randomNZ
       generated_direct_cem: generated cem
       copy_direct_cem: copy cem
-      creat: creat
 
     victim_model:
       miasrec: MiaSRec
@@ -66,7 +65,6 @@ table:
       - random_nz
       - generated_direct_cem
       - copy_direct_cem
-      - creat
 
   best_value_bolding:
     compare_along: rows

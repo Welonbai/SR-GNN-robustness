@@ -1,0 +1,8 @@
+comparison_id: diginetica_unpopular_source_methods_sample10_creat_no_pos0
+
+runs:
+  - diginetica_clean_unpopular_source_methods_sample10_creat_no_pos0
+  - diginetica_randomnz_unpopular_source_methods_sample10_creat_no_pos0
+  - diginetica_generated_direct_cem_unpopular_source_methods_sample10_creat_no_pos0
+  - diginetica_copy_direct_cem_unpopular_source_methods_sample10_creat_no_pos0
+  - diginetica_creat_no_pos0_unpopular_source_methods_sample10
