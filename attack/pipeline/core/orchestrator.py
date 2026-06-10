@@ -2042,6 +2042,7 @@ def _load_legacy_pts_cem_victim_result(
     expected_sessions_sha1 = str(
         victim_attack_identity_context.get("selected_pts_cem_sessions_sha1", "")
     )
+    expected_victim_prediction_key = artifacts["shared_dir"].parent.parent.name
     if not expected_shared_key or not expected_sessions_sha1:
         return None
 
@@ -2062,6 +2063,7 @@ def _load_legacy_pts_cem_victim_result(
             target_item=target_item,
             expected_shared_key=expected_shared_key,
             expected_sessions_sha1=expected_sessions_sha1,
+            expected_victim_prediction_key=expected_victim_prediction_key,
         ):
             continue
         predictions_source = _legacy_metrics_artifact_path(
@@ -2150,6 +2152,7 @@ def _legacy_pts_cem_metrics_match(
     target_item: int,
     expected_shared_key: str,
     expected_sessions_sha1: str,
+    expected_victim_prediction_key: str,
 ) -> bool:
     if str(metrics_payload.get("victim", "")) != victim_name:
         return False
@@ -2163,6 +2166,12 @@ def _legacy_pts_cem_metrics_match(
     if (
         str(metrics_payload.get("selected_pts_cem_sessions_sha1", ""))
         != expected_sessions_sha1
+    ):
+        return False
+    if (
+        victim_name == "tron"
+        and str(metrics_payload.get("victim_prediction_key", ""))
+        != expected_victim_prediction_key
     ):
         return False
     metrics_training = metrics_payload.get("training")

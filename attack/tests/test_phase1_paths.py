@@ -14,6 +14,7 @@ from attack.common.config import (
     load_config,
 )
 from attack.common.paths import (
+    PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
     attack_key_payload,
     run_config_dir,
     run_group_dir,
@@ -23,12 +24,16 @@ from attack.common.paths import (
     shared_artifact_paths,
     shared_attack_artifact_key,
     shared_attack_artifact_key_payload,
+    shared_attack_identity_requires_poison_runner,
     target_dir,
     target_cohort_key,
     target_cohort_key_payload,
     victim_prediction_key,
     victim_prediction_key_payload,
     victim_dir,
+)
+from attack.pipeline.runs.run_pts_construction_cem import (
+    build_pts_construction_attack_identity_context,
 )
 from attack.common.artifact_io import save_json
 from attack.pipeline.core.orchestrator import (
@@ -193,6 +198,34 @@ def test_pts_direct_artifact_persistence_knobs_do_not_affect_identity() -> None:
     assert victim_prediction_key(config, "tron", run_type=run_type) == victim_prediction_key(
         changed,
         "tron",
+        run_type=run_type,
+    )
+
+
+def test_pts_direct_copy_source_run_group_excludes_runtime_poison_runner_requirement() -> None:
+    config = _with_train_template_source(_pts_direct_config())
+    run_type = PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE
+    context = build_pts_construction_attack_identity_context(config)
+
+    assert shared_attack_identity_requires_poison_runner(run_type) is False
+    assert shared_attack_artifact_key_payload(config, run_type=run_type) == (
+        shared_attack_artifact_key_payload(
+            config,
+            run_type=run_type,
+            require_poison_runner=False,
+        )
+    )
+    assert shared_attack_artifact_key_payload(
+        config,
+        run_type=run_type,
+        require_poison_runner=True,
+    ) != shared_attack_artifact_key_payload(config, run_type=run_type)
+    assert run_group_key_payload(
+        config,
+        run_type=run_type,
+        attack_identity_context=context,
+    )["shared_attack_artifact_key"] == shared_attack_artifact_key(
+        config,
         run_type=run_type,
     )
 

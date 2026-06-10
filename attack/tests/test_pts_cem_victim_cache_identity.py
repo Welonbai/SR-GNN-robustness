@@ -26,8 +26,10 @@ from attack.data.session_stats import compute_session_stats
 from attack.pipeline.core.orchestrator import (
     RunContext,
     TargetPoisonOutput,
+    _legacy_pts_cem_metrics_match,
     _pts_cem_victim_attack_identity_context,
     _pts_cem_victim_identity_metrics_payload,
+    _victim_training_summary,
     run_targets_and_victims,
 )
 from attack.pipeline.core.pipeline_utils import build_ordered_target_cohort
@@ -361,6 +363,50 @@ def test_pts_cem_victim_key_includes_victim_effective_seed() -> None:
         run_type=RUN_TYPE,
         victim_attack_identity_context=identity,
         victim_effective_train_seed=456,
+    )
+
+
+def test_legacy_pts_cem_tron_cache_requires_current_victim_prediction_key() -> None:
+    config = _direct_action_config()
+    metrics = {
+        "victim": "tron",
+        "target_item": 11103,
+        "shared_pts_cem_cache_key": "pts_cem_shared_direct",
+        "selected_pts_cem_sessions_sha1": "d" * 40,
+        "victim_prediction_key": "old-tron-key",
+        "training": _victim_training_summary(config, "tron"),
+    }
+
+    assert not _legacy_pts_cem_metrics_match(
+        config,
+        metrics,
+        victim_name="tron",
+        target_item=11103,
+        expected_shared_key="pts_cem_shared_direct",
+        expected_sessions_sha1="d" * 40,
+        expected_victim_prediction_key="new-tron-key",
+    )
+
+
+def test_legacy_pts_cem_non_tron_cache_keeps_legacy_key_compatibility() -> None:
+    config = _direct_action_config()
+    metrics = {
+        "victim": "srgnn",
+        "target_item": 11103,
+        "shared_pts_cem_cache_key": "pts_cem_shared_direct",
+        "selected_pts_cem_sessions_sha1": "d" * 40,
+        "victim_prediction_key": "old-srgnn-key",
+        "training": _victim_training_summary(config, "srgnn"),
+    }
+
+    assert _legacy_pts_cem_metrics_match(
+        config,
+        metrics,
+        victim_name="srgnn",
+        target_item=11103,
+        expected_shared_key="pts_cem_shared_direct",
+        expected_sessions_sha1="d" * 40,
+        expected_victim_prediction_key="new-srgnn-key",
     )
 
 

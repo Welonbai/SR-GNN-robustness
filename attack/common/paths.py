@@ -80,14 +80,13 @@ _ANCHOR_CONSTRUCTION_RUNTIME_RUN_TYPES = {
     VULNERABLE_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE,
 }
 TARGET_COHORT_SELECTION_POLICY_VERSION = "appendable_target_cohort_v1"
+TRON_VICTIM_DATA_SEMANTICS = "tron_raw_session_export_v1"
 
 
 def shared_attack_identity_requires_poison_runner(run_type: str) -> bool:
     return run_type in {
         CREAT_ADDITIVE_SBR_RUN_TYPE,
         CREAT_ADDITIVE_SBR_GENERATE_ONLY_RUN_TYPE,
-        PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
-        PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
         TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
         TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
         TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE,
@@ -742,7 +741,7 @@ def victim_prediction_key_payload(
     if victim_effective_train_seed is not None:
         payload["victim_effective_train_seed"] = int(victim_effective_train_seed)
     if victim_name == "tron":
-        payload["victim_data_semantics"] = "tron_raw_session_export_v1"
+        payload["victim_data_semantics"] = TRON_VICTIM_DATA_SEMANTICS
     if victim_name == "srgnn":
         train_config = config.victims.params[victim_name].get("train", {})
         if (
@@ -1186,6 +1185,7 @@ __all__ = [
     "TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE",
     "TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE",
     "TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE",
+    "TRON_VICTIM_DATA_SEMANTICS",
     "attack_key",
     "attack_key_payload",
     "carrier_selection_identity_payload",

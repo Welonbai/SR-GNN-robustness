@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import attack.common.paths as paths
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -23,8 +24,16 @@ from attack.common.config import (
     PTSRewardConfig,
     load_config,
 )
-from attack.common.artifact_io import save_json
-from attack.common.paths import run_group_key, target_cohort_key
+from attack.common.artifact_io import save_fake_sessions, save_json
+from attack.common.paths import (
+    PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+    attack_key,
+    run_group_key,
+    shared_attack_artifact_key,
+    target_cohort_key,
+    target_selection_key,
+    victim_prediction_key,
+)
 from attack.pipeline.core.pipeline_utils import SharedAttackArtifacts
 from attack.pipeline.runs import run_pts_construction_cem
 from attack.pipeline.runs.run_pts_construction_cem import (
@@ -43,6 +52,7 @@ from attack.pipeline.runs.run_pts_construction_cem import (
     _write_shared_pts_cem_cache,
     _write_pts_construction_complete_marker,
 )
+from attack.tools.invalidate_victim_cells import invalidate_victim_cells
 
 
 CONFIG_PATH = (
@@ -226,6 +236,151 @@ class FakeBestCandidate:
 def test_runner_imports_without_training() -> None:
     assert run_pts_construction_cem.DEFAULT_PTS_CONSTRUCTION_CEM_CONFIG_PATH
     assert callable(run_pts_construction_cem.run_pts_construction_grouped_cem)
+
+
+def test_pts_runner_runtime_still_explicitly_requires_poison_runner(monkeypatch) -> None:
+    config = load_config(CONFIG_PATH)
+    captured: dict[str, object] = {}
+
+    def fake_prepare_shared_attack_artifacts(config, **kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after runtime preparation request")
+
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "prepare_shared_attack_artifacts",
+        fake_prepare_shared_attack_artifacts,
+    )
+
+    with pytest.raises(RuntimeError, match="stop after runtime preparation request"):
+        run_pts_construction_cem.run_pts_construction_grouped_cem(config)
+
+    assert captured["require_poison_runner"] is True
+
+
+def test_generated_source_pts_shared_attack_identity_is_unchanged_by_runtime_requirement() -> None:
+    config = load_config(
+        REPO_ROOT
+        / "attack"
+        / "configs"
+        / "diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample.yaml"
+    )
+
+    assert shared_attack_artifact_key(
+        config,
+        run_type=PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+    ) == shared_attack_artifact_key(
+        config,
+        run_type=PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+        require_poison_runner=True,
+    )
+
+
+def test_tron_semantics_version_does_not_change_pts_cem_identities(
+    monkeypatch,
+) -> None:
+    config = load_config(
+        REPO_ROOT
+        / "attack"
+        / "configs"
+        / "diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample.yaml"
+    )
+    run_type = PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE
+    attack_identity_context = (
+        run_pts_construction_cem.build_pts_construction_attack_identity_context(config)
+    )
+    work_dir = _make_test_output_dir()
+    try:
+        fake_sessions = work_dir / "fake_sessions.pkl"
+        poison_model = work_dir / "poison_model.pt"
+        save_fake_sessions([[1, 2, 3]], fake_sessions)
+        poison_model.write_bytes(b"poison")
+        shared_identity = build_pts_cem_shared_cache_identity(
+            config,
+            target_item=5334,
+            fake_sessions_path=fake_sessions,
+            poison_model_path=poison_model,
+        )
+        before = {
+            "attack": attack_key(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+            "run_group": run_group_key(
+                config,
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+            "target_cohort": target_cohort_key(config),
+            "target_selection": target_selection_key(config),
+            "shared_cem": pts_cem_shared_cache_key(shared_identity),
+            "srgnn": victim_prediction_key(
+                config,
+                "srgnn",
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+            "miasrec": victim_prediction_key(
+                config,
+                "miasrec",
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+            "tron": victim_prediction_key(
+                config,
+                "tron",
+                run_type=run_type,
+                attack_identity_context=attack_identity_context,
+            ),
+        }
+
+        monkeypatch.setattr(
+            paths,
+            "TRON_VICTIM_DATA_SEMANTICS",
+            "tron_raw_session_export_v2_test",
+        )
+
+        assert attack_key(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ) == before["attack"]
+        assert run_group_key(
+            config,
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ) == before["run_group"]
+        assert target_cohort_key(config) == before["target_cohort"]
+        assert target_selection_key(config) == before["target_selection"]
+        assert pts_cem_shared_cache_key(
+            build_pts_cem_shared_cache_identity(
+                config,
+                target_item=5334,
+                fake_sessions_path=fake_sessions,
+                poison_model_path=poison_model,
+            )
+        ) == before["shared_cem"]
+        assert victim_prediction_key(
+            config,
+            "srgnn",
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ) == before["srgnn"]
+        assert victim_prediction_key(
+            config,
+            "miasrec",
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ) == before["miasrec"]
+        assert victim_prediction_key(
+            config,
+            "tron",
+            run_type=run_type,
+            attack_identity_context=attack_identity_context,
+        ) != before["tron"]
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def test_runner_help_exits_successfully() -> None:
@@ -666,6 +821,16 @@ def test_pts_cached_runner_propagates_cached_final_raw_sessions(
         "_target_metadata_from_cache",
         lambda *args, **kwargs: {},
     )
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "PTSDirectActionMLPCEMTrainer",
+        lambda *args, **kwargs: pytest.fail("CEM trainer must not be built on cache reuse"),
+    )
+    monkeypatch.setattr(
+        run_pts_construction_cem,
+        "PTSGroupedCEMTrainer",
+        lambda *args, **kwargs: pytest.fail("CEM trainer must not be built on cache reuse"),
+    )
 
     def fake_run_targets_and_victims(*args, **kwargs):
         payload = kwargs["build_poisoned"](5334)
@@ -682,6 +847,89 @@ def test_pts_cached_runner_propagates_cached_final_raw_sessions(
         "status": "ok"
     }
     assert captured["raw_fake_sessions"] == cached_sessions
+
+
+def test_tron_only_invalidation_preserves_resolvable_pts_cem_cache(
+    tmp_path: Path,
+) -> None:
+    config = _with_output_root(load_config(CONFIG_PATH), tmp_path)
+    attack_identity_context = (
+        run_pts_construction_cem.build_pts_construction_attack_identity_context(config)
+    )
+    run_type = PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE
+    original_run_group = run_group_key(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    run_dir = tmp_path / "runs" / "diginetica" / "test" / original_run_group
+    artifact_dir = run_dir / "targets" / "5334" / "pts_construction_cem"
+    _write_minimal_pts_artifacts(artifact_dir)
+    current_identity = run_pts_construction_cem._current_pts_construction_cache_identity(
+        config,
+        attack_identity_context=attack_identity_context,
+        target_item=5334,
+    )
+    save_json(
+        {
+            "status": "completed",
+            "run_type": run_type,
+            "target_item": 5334,
+            "identity": current_identity,
+            "best_candidate": {
+                "sessions_path": "top_candidates/rank_1/sessions.json",
+                "metadata_path": "top_candidates/rank_1/metadata.json",
+            },
+        },
+        artifact_dir / "pts_construction_complete.json",
+    )
+    (run_dir / "targets" / "5334" / "victims" / "tron").mkdir(parents=True)
+    save_json(
+        {
+            "run_group_key": original_run_group,
+            "target_cohort_key": target_cohort_key(config),
+            "targets_order": [5334],
+            "victims": {
+                "srgnn": {"victim_prediction_key": "srgnn-key"},
+                "miasrec": {"victim_prediction_key": "miasrec-key"},
+                "tron": {"victim_prediction_key": "old-tron-key"},
+            },
+            "cells": {
+                "5334": {
+                    "srgnn": {"status": "completed"},
+                    "miasrec": {"status": "completed"},
+                    "tron": {"status": "completed"},
+                }
+            },
+            "created_at": "old",
+            "updated_at": "old",
+        },
+        run_dir / "run_coverage.json",
+    )
+
+    invalidate_victim_cells(
+        [run_dir],
+        victim="tron",
+        allowed_roots=[tmp_path],
+    )
+
+    assert run_group_key(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    ) == original_run_group
+    assert artifact_dir.is_dir()
+    cached = _try_load_cached_pts_best_candidate(
+        artifact_dir=artifact_dir,
+        target_item=5334,
+        current_identity=current_identity,
+    )
+    assert cached is not None
+    assert cached.sessions == [[1, 2, 5334]]
+    coverage = json.loads((run_dir / "run_coverage.json").read_text(encoding="utf-8"))
+    assert coverage["cells"]["5334"]["srgnn"]["status"] == "completed"
+    assert coverage["cells"]["5334"]["miasrec"]["status"] == "completed"
+    assert coverage["cells"]["5334"]["tron"]["status"] == "requested"
 
 
 def test_epoch_reward_diagnostics_cache_reuse_warning(capsys) -> None:

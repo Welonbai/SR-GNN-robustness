@@ -6,7 +6,14 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from attack.common.config import ArtifactsConfig, load_config
-from attack.common.paths import victim_prediction_key_payload
+import attack.common.paths as paths
+from attack.common.paths import (
+    run_group_key,
+    target_cohort_key,
+    target_selection_key,
+    victim_prediction_key,
+    victim_prediction_key_payload,
+)
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.base_exporter import ExportResult
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
@@ -181,6 +188,28 @@ def test_only_tron_victim_key_has_raw_session_semantics_version() -> None:
     assert tron_payload["victim_data_semantics"] == "tron_raw_session_export_v1"
     assert "victim_data_semantics" not in srgnn_payload
     assert "victim_data_semantics" not in miasrec_payload
+
+
+def test_tron_semantics_version_changes_only_tron_victim_identity(monkeypatch) -> None:
+    config = load_config(CONFIG_PATH)
+    run_type = "clean"
+    before = {
+        "run_group": run_group_key(config, run_type=run_type),
+        "target_cohort": target_cohort_key(config),
+        "target_selection": target_selection_key(config),
+        "srgnn": victim_prediction_key(config, "srgnn", run_type=run_type),
+        "miasrec": victim_prediction_key(config, "miasrec", run_type=run_type),
+        "tron": victim_prediction_key(config, "tron", run_type=run_type),
+    }
+
+    monkeypatch.setattr(paths, "TRON_VICTIM_DATA_SEMANTICS", "tron_raw_session_export_v2_test")
+
+    assert run_group_key(config, run_type=run_type) == before["run_group"]
+    assert target_cohort_key(config) == before["target_cohort"]
+    assert target_selection_key(config) == before["target_selection"]
+    assert victim_prediction_key(config, "srgnn", run_type=run_type) == before["srgnn"]
+    assert victim_prediction_key(config, "miasrec", run_type=run_type) == before["miasrec"]
+    assert victim_prediction_key(config, "tron", run_type=run_type) != before["tron"]
 
 
 def test_random_nonzero_returns_final_modified_raw_fake_sessions(
