@@ -81,6 +81,7 @@ _ANCHOR_CONSTRUCTION_RUNTIME_RUN_TYPES = {
 }
 TARGET_COHORT_SELECTION_POLICY_VERSION = "appendable_target_cohort_v1"
 TRON_VICTIM_DATA_SEMANTICS = "tron_raw_session_export_v1"
+MDHG_VICTIM_DATA_SEMANTICS = "mdhg_expanded_pairs_plus_raw_sessions_v1"
 
 
 def shared_attack_identity_requires_poison_runner(run_type: str) -> bool:
@@ -730,7 +731,7 @@ def victim_prediction_key_payload(
     # resource-only batch-size adjustments.
     victim_params = _victim_identity_params(
         config.victims.params[victim_name],
-        exclude_external_protocol=victim_name in {"miasrec", "tron"},
+        exclude_external_protocol=victim_name in {"miasrec", "tron", "mdhg"},
     )
     payload = {
         **base_context,
@@ -742,6 +743,8 @@ def victim_prediction_key_payload(
         payload["victim_effective_train_seed"] = int(victim_effective_train_seed)
     if victim_name == "tron":
         payload["victim_data_semantics"] = TRON_VICTIM_DATA_SEMANTICS
+    if victim_name == "mdhg":
+        payload["victim_data_semantics"] = MDHG_VICTIM_DATA_SEMANTICS
     if victim_name == "srgnn":
         train_config = config.victims.params[victim_name].get("train", {})
         if (
@@ -1186,6 +1189,7 @@ __all__ = [
     "TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE",
     "TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE",
     "TRON_VICTIM_DATA_SEMANTICS",
+    "MDHG_VICTIM_DATA_SEMANTICS",
     "attack_key",
     "attack_key_payload",
     "carrier_selection_identity_payload",

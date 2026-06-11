@@ -18,7 +18,7 @@ from attack.common.srgnn_training_protocol import (
 )
 
 
-_ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron"}
+_ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron", "mdhg"}
 _ALLOWED_TARGET_BUCKETS = {"popular", "unpopular", "all"}
 _ALLOWED_EVAL_METRICS = {"precision", "recall", "mrr", "ndcg"}
 VICTIM_VALIDATION_BEST_PROTOCOL = "validation_best"
@@ -3727,6 +3727,10 @@ def _normalize_victims_config(victims: Mapping[str, Any]) -> dict[str, Any]:
         if runtime is None or "tron" not in runtime:
             raise ValueError("Missing required runtime configuration: victims.runtime.tron")
         _validate_tron_runtime(runtime["tron"], "victims.runtime.tron")
+    if "mdhg" in enabled:
+        if runtime is None or "mdhg" not in runtime:
+            raise ValueError("Missing required runtime configuration: victims.runtime.mdhg")
+        _validate_mdhg_runtime(runtime["mdhg"], "victims.runtime.mdhg")
 
     return {
         "enabled": enabled,
@@ -3759,6 +3763,8 @@ def _normalize_victim_params(value: Any, context: str) -> dict[str, dict[str, An
             primitive["train"] = _normalize_miasrec_train(train, f"{context}.{victim_name}.train")
         elif victim_name == "tron":
             primitive["train"] = _normalize_tron_train(train, f"{context}.{victim_name}.train")
+        elif victim_name == "mdhg":
+            primitive["train"] = _normalize_mdhg_train(train, f"{context}.{victim_name}.train")
         normalized[victim_name] = primitive
     return normalized
 
@@ -3814,6 +3820,20 @@ def _validate_tron_runtime(runtime: dict[str, Any], context: str) -> None:
     )
     if num_workers < 0:
         raise ValueError(f"{context}.dataloader.num_workers must be non-negative.")
+
+
+def _validate_mdhg_runtime(runtime: dict[str, Any], context: str) -> None:
+    _as_str(_require(runtime, "python_executable", context), f"{context}.python_executable")
+    _as_str(_require(runtime, "repo_root", context), f"{context}.repo_root")
+    _as_str(_require(runtime, "working_dir", context), f"{context}.working_dir")
+    device = _as_mapping(_require(runtime, "device", context), f"{context}.device")
+    use_gpu = _as_bool(
+        _require(device, "use_gpu", f"{context}.device"),
+        f"{context}.device.use_gpu",
+    )
+    if not use_gpu:
+        raise ValueError(f"{context}.device.use_gpu must be true; MDHG Phase 1A is GPU-only.")
+    _as_gpu_id(_require(device, "gpu_id", f"{context}.device"), f"{context}.device.gpu_id")
 
 
 def _normalize_srgnn_train(train: Mapping[str, Any], context: str) -> dict[str, Any]:
@@ -3941,6 +3961,38 @@ def _normalize_tron_train(train: Mapping[str, Any], context: str) -> dict[str, A
         context,
         default_export_model=VICTIM_EXPORT_LAST,
     )
+    return normalized
+
+
+def _normalize_mdhg_train(train: Mapping[str, Any], context: str) -> dict[str, Any]:
+    normalized = _normalize_primitive(train, context)
+    if not isinstance(normalized, dict):
+        raise TypeError(f"Expected {context} to be a mapping.")
+    for key in ("epochs", "batch_size", "lr"):
+        _require(normalized, key, context)
+    normalized["epochs"] = _as_int(normalized["epochs"], f"{context}.epochs")
+    normalized["batch_size"] = _as_int(normalized["batch_size"], f"{context}.batch_size")
+    normalized["lr"] = _as_float(normalized["lr"], f"{context}.lr")
+    if normalized["epochs"] <= 0:
+        raise ValueError(f"{context}.epochs must be positive.")
+    if normalized["batch_size"] <= 0:
+        raise ValueError(f"{context}.batch_size must be positive.")
+    if normalized["lr"] <= 0:
+        raise ValueError(f"{context}.lr must be positive.")
+    normalized.setdefault("checkpoint_protocol", VICTIM_FIXED_EPOCH_PROTOCOL)
+    normalized.setdefault("validation_enabled", False)
+    normalized.setdefault("export_model", VICTIM_EXPORT_LAST)
+    _normalize_external_victim_train_protocol(
+        normalized,
+        context,
+        default_export_model=VICTIM_EXPORT_LAST,
+    )
+    if normalized["checkpoint_protocol"] != VICTIM_FIXED_EPOCH_PROTOCOL:
+        raise ValueError(f"{context}.checkpoint_protocol must be fixed_epoch for MDHG.")
+    if normalized["validation_enabled"]:
+        raise ValueError(f"{context}.validation_enabled must be false for MDHG.")
+    if normalized["export_model"] != VICTIM_EXPORT_LAST:
+        raise ValueError(f"{context}.export_model must be last for MDHG.")
     return normalized
 
 

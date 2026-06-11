@@ -135,6 +135,35 @@ def test_run_group_key_ignores_enabled_victim_set() -> None:
     assert "attack_key" not in run_group_key_payload(single_victim, run_type="clean")
 
 
+def test_mdhg_data_semantics_only_changes_mdhg_victim_prediction_identity(monkeypatch) -> None:
+    from attack.common import paths
+
+    config = _base_config()
+    mdhg_params = dict(config.victims.params)
+    mdhg_params["mdhg"] = {
+        "train": {
+            "epochs": 2,
+            "batch_size": 4,
+            "lr": 0.001,
+            "checkpoint_protocol": "fixed_epoch",
+            "validation_enabled": False,
+            "export_model": "last",
+        }
+    }
+    mdhg_config = replace(config, victims=replace(config.victims, params=mdhg_params))
+    before_run_group = run_group_key(mdhg_config, run_type="clean")
+    before_shared_attack = shared_attack_artifact_key(mdhg_config, run_type="clean")
+    before_mdhg = victim_prediction_key(mdhg_config, "mdhg", run_type="clean")
+    before_srgnn = victim_prediction_key(mdhg_config, "srgnn", run_type="clean")
+
+    monkeypatch.setattr(paths, "MDHG_VICTIM_DATA_SEMANTICS", "changed_for_test")
+
+    assert run_group_key(mdhg_config, run_type="clean") == before_run_group
+    assert shared_attack_artifact_key(mdhg_config, run_type="clean") == before_shared_attack
+    assert victim_prediction_key(mdhg_config, "mdhg", run_type="clean") != before_mdhg
+    assert victim_prediction_key(mdhg_config, "srgnn", run_type="clean") == before_srgnn
+
+
 def test_run_group_key_changes_with_attack_or_evaluation_identity() -> None:
     config = _base_config()
     different_attack = replace(
