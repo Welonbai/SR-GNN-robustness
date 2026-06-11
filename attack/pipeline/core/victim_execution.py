@@ -18,6 +18,7 @@ from attack.models.srgnn_validation_training import (
     train_srgnn_validation_best,
 )
 from attack.models.victim.registry import get_victim_runner
+from attack.models.victim.mdhg_diagnostics import summarize_mdhg_epoch_diagnostics
 from attack.pipeline.core.evaluator import save_predictions
 from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
 from attack.pipeline.core.train_history import save_train_history
@@ -290,6 +291,7 @@ def execute_single_victim(
         )
         runner = get_victim_runner(victim_name)(config)
         raw_predictions_path = run_dir / "mdhg_topk_raw.json"
+        epoch_pipeline_metrics_path = run_dir / "mdhg_epoch_pipeline_metrics.jsonl"
         victim_train_config = _require_victim_train_config(config, victim_name)
         pipeline_injected = {
             "data_dir": export_result.data_dir,
@@ -301,6 +303,12 @@ def execute_single_victim(
             "log_path": run_dir / "mdhg_stdout.log",
             "victim_train_seed": int(victim_stage_seed),
             "train_pairs_match_raw_expansion": export_result.train_pairs_match_raw_expansion,
+            "target_item": int(target_item),
+            "evaluation_topk": [int(k) for k in eval_topk],
+            "targeted_metrics": list(config.evaluation.targeted_metrics),
+            "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
+            "mdhg_test_data_path": export_result.files["test"].resolve(),
+            "epoch_pipeline_metrics_output_path": epoch_pipeline_metrics_path.resolve(),
         }
         _write_victim_resolved_config(
             config,
@@ -320,6 +328,24 @@ def execute_single_victim(
             victim_train_seed=int(victim_stage_seed),
             target_item=int(target_item),
         )
+        per_epoch_prediction_dir = run_info.get("per_epoch_prediction_dir")
+        if per_epoch_prediction_dir is not None:
+            summarize_mdhg_epoch_diagnostics(
+                run_dir,
+                target_item=int(target_item),
+                evaluation_topk=eval_topk,
+                targeted_metrics=config.evaluation.targeted_metrics,
+                ground_truth_metrics=config.evaluation.ground_truth_metrics,
+                test_data_path=export_result.files["test"],
+                expected_test_count=export_result.test_example_count,
+                n_node=export_result.n_node,
+                requested_topk=max_topk,
+                per_epoch_prediction_dir=Path(per_epoch_prediction_dir),
+                output_path=epoch_pipeline_metrics_path,
+            )
+            run_info["epoch_pipeline_metrics_output_path"] = str(
+                epoch_pipeline_metrics_path
+            )
         _write_victim_resolved_config(
             config,
             victim_name,

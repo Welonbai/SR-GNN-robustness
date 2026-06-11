@@ -3834,6 +3834,12 @@ def _validate_mdhg_runtime(runtime: dict[str, Any], context: str) -> None:
     if not use_gpu:
         raise ValueError(f"{context}.device.use_gpu must be true; MDHG Phase 1A is GPU-only.")
     _as_gpu_id(_require(device, "gpu_id", f"{context}.device"), f"{context}.device.gpu_id")
+    diagnostics_value = runtime.get("diagnostics")
+    if diagnostics_value is not None:
+        diagnostics = _as_mapping(diagnostics_value, f"{context}.diagnostics")
+        for key in ("epoch_metrics", "per_epoch_predictions"):
+            if key in diagnostics:
+                _as_bool(diagnostics[key], f"{context}.diagnostics.{key}")
 
 
 def _normalize_srgnn_train(train: Mapping[str, Any], context: str) -> dict[str, Any]:

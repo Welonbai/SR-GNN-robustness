@@ -22,6 +22,8 @@ class MDHGRunner(VictimRunnerBase):
         self.repo_root = Path(repo_root) if repo_root is not None else Path(runtime["repo_root"])
         self.working_dir = Path(runtime["working_dir"])
         self.device_config = dict(runtime["device"])
+        diagnostics = runtime.get("diagnostics", {})
+        self.diagnostics_config = dict(diagnostics) if isinstance(diagnostics, dict) else {}
 
     def build_model(self, opt=None):
         return None
@@ -77,6 +79,12 @@ class MDHGRunner(VictimRunnerBase):
         gpu_id = str(self.device_config["gpu_id"]).strip()
         run_dir.mkdir(parents=True, exist_ok=True)
         log_path = run_dir / "mdhg_stdout.log"
+        epoch_metrics_path = run_dir / "mdhg_epoch_metrics.jsonl"
+        per_epoch_prediction_dir = run_dir / "mdhg_per_epoch_predictions"
+        epoch_metrics_enabled = bool(self.diagnostics_config.get("epoch_metrics", False))
+        per_epoch_predictions_enabled = bool(
+            self.diagnostics_config.get("per_epoch_predictions", False)
+        )
 
         cmd = [
             self.python_executable,
@@ -102,6 +110,20 @@ class MDHGRunner(VictimRunnerBase):
             "--prediction_output_path",
             str(export_topk_path.resolve()),
         ]
+        if epoch_metrics_enabled:
+            cmd.extend(
+                [
+                    "--epoch_metrics_output_path",
+                    str(epoch_metrics_path.resolve()),
+                ]
+            )
+        if per_epoch_predictions_enabled:
+            cmd.extend(
+                [
+                    "--per_epoch_prediction_dir",
+                    str(per_epoch_prediction_dir.resolve()),
+                ]
+            )
         env = os.environ.copy()
         env["PYTHONHASHSEED"] = str(effective_seed)
         result = run_subprocess_with_epoch_progress(
@@ -124,7 +146,7 @@ class MDHGRunner(VictimRunnerBase):
             requested_topk=topk,
         )
         effective_topk = len(rankings[0]) if rankings else min(int(topk), int(n_node))
-        return {
+        run_info: dict[str, str | int | bool | None] = {
             "returncode": int(result.returncode),
             "log_path": str(log_path),
             "export_topk_path": str(export_topk_path),
@@ -150,6 +172,11 @@ class MDHGRunner(VictimRunnerBase):
             "validation_metrics_recorded": False,
             "prediction_count": len(rankings),
         }
+        if epoch_metrics_enabled:
+            run_info["epoch_metrics_output_path"] = str(epoch_metrics_path.resolve())
+        if per_epoch_predictions_enabled:
+            run_info["per_epoch_prediction_dir"] = str(per_epoch_prediction_dir.resolve())
+        return run_info
 
     def predict_topk(
         self,

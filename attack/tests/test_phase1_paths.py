@@ -164,6 +164,53 @@ def test_mdhg_data_semantics_only_changes_mdhg_victim_prediction_identity(monkey
     assert victim_prediction_key(mdhg_config, "srgnn", run_type="clean") == before_srgnn
 
 
+def test_mdhg_runtime_diagnostics_do_not_change_identities() -> None:
+    config = _base_config()
+    params = dict(config.victims.params)
+    params["mdhg"] = {
+        "train": {
+            "epochs": 20,
+            "batch_size": 100,
+            "lr": 0.001,
+            "checkpoint_protocol": "fixed_epoch",
+            "validation_enabled": False,
+            "export_model": "last",
+        }
+    }
+    runtime = dict(config.victims.runtime or {})
+    runtime["mdhg"] = {
+        "python_executable": "python",
+        "repo_root": "third_party/mdhg",
+        "working_dir": "third_party/mdhg",
+        "device": {"use_gpu": True, "gpu_id": "0"},
+    }
+    base = replace(config, victims=replace(config.victims, params=params, runtime=runtime))
+    diagnostic_runtime = dict(runtime)
+    diagnostic_runtime["mdhg"] = {
+        **runtime["mdhg"],
+        "diagnostics": {
+            "epoch_metrics": True,
+            "per_epoch_predictions": True,
+        },
+    }
+    diagnostic = replace(
+        base,
+        victims=replace(base.victims, runtime=diagnostic_runtime),
+    )
+
+    assert run_group_key(base, run_type="clean") == run_group_key(
+        diagnostic, run_type="clean"
+    )
+    assert target_cohort_key(base) == target_cohort_key(diagnostic)
+    assert shared_attack_artifact_key(base, run_type="clean") == shared_attack_artifact_key(
+        diagnostic, run_type="clean"
+    )
+    for victim_name in ("srgnn", "miasrec", "tron", "mdhg"):
+        assert victim_prediction_key(base, victim_name, run_type="clean") == (
+            victim_prediction_key(diagnostic, victim_name, run_type="clean")
+        )
+
+
 def test_run_group_key_changes_with_attack_or_evaluation_identity() -> None:
     config = _base_config()
     different_attack = replace(
