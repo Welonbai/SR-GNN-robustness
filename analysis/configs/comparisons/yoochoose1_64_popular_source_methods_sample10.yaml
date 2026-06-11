@@ -1,0 +1,7 @@
+comparison_id: yoochoose1_64_popular_source_methods_sample10
+
+runs:
+  - yoochoose1_64_clean_popular_source_methods_sample10
+  - yoochoose1_64_randomnz_popular_source_methods_sample10
+  - yoochoose1_64_generated_direct_cem_popular_source_methods_sample10
+  - yoochoose1_64_copy_direct_cem_popular_source_methods_sample10

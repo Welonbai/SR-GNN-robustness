@@ -1,8 +1,0 @@
-comparison_id: yoochoose1_64_unpopular_source_methods_sample10_creat_no_pos0
-
-runs:
-  - yoochoose1_64_clean_unpopular_source_methods_sample10_creat_no_pos0
-  - yoochoose1_64_randomnz_unpopular_source_methods_sample10_creat_no_pos0
-  - yoochoose1_64_generated_direct_cem_unpopular_source_methods_sample10_creat_no_pos0
-  - yoochoose1_64_copy_direct_cem_unpopular_source_methods_sample10_creat_no_pos0
-  - yoochoose1_64_creat_no_pos0_unpopular_source_methods_sample10

@@ -931,26 +931,34 @@ def resolve_considered_targets(
         raise AnalysisError("target_registry.json has an invalid current_count.")
 
     materialized_prefix_value = run_coverage_payload.get("materialized_target_prefix_count")
+    requested_victim_targets, _ = select_largest_complete_prefix(
+        run_coverage_payload,
+        target_order=run_coverage_targets,
+        requested_victims=requested_victims,
+    )
+    requested_victim_prefix_count = len(requested_victim_targets)
     if materialized_prefix_value is None:
-        inferred_targets, _ = select_largest_complete_prefix(
-            run_coverage_payload,
-            target_order=run_coverage_targets,
-            requested_victims=requested_victims,
-        )
-        local_materialized_prefix_count = len(inferred_targets)
+        local_materialized_prefix_count = requested_victim_prefix_count
     else:
-        local_materialized_prefix_count = require_int(
+        stored_materialized_prefix_count = require_int(
             materialized_prefix_value,
             label="run_coverage.materialized_target_prefix_count",
         )
         if (
-            local_materialized_prefix_count < 0
-            or local_materialized_prefix_count > len(run_coverage_targets)
+            stored_materialized_prefix_count < 0
+            or stored_materialized_prefix_count > len(run_coverage_targets)
         ):
             raise AnalysisError(
                 "run_coverage.materialized_target_prefix_count must fall within "
                 "run_coverage.targets_order."
             )
+        # A later append can lower the global prefix by requesting a new victim.
+        # Analysis of an explicitly requested completed victim subset must retain
+        # the prefix already materialized for that subset.
+        local_materialized_prefix_count = max(
+            stored_materialized_prefix_count,
+            requested_victim_prefix_count,
+        )
 
     considered_targets = run_coverage_targets[:local_materialized_prefix_count]
     if requested_target_count is None:
