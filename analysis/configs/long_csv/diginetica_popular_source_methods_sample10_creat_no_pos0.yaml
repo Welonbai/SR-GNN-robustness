@@ -3,7 +3,6 @@ defaults:
   requested_victims:
     - srgnn
     - miasrec
-    - tron
   requested_target_count: 10
 
 jobs:
@@ -23,6 +22,6 @@ jobs:
     output_name: diginetica_copy_direct_cem_popular_source_methods_sample10_creat_no_pos0
     attack_method_override: copy_direct_cem
 
-  - summary: outputs/runs/diginetica/ssh_diginetica_valbest_attack_create_copy_source_popular_sample/run_group_deb38baf86/summary_current.json
+  - summary: outputs/runs/diginetica/ssh_diginetica_valbest_attack_create_copy_source_popular_sample_nonzero_dpp001_consistency03/run_group_3061baa4c2/summary_current.json
     output_name: diginetica_creat_no_pos0_popular_source_methods_sample10
     attack_method_override: creat_no_pos0

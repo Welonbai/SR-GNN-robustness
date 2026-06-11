@@ -3,14 +3,14 @@ style_name: diginetica_popular_source_methods_sample10_creat_no_pos0_mean_target
 output_format: png
 
 title:
-  template: "Diginetica popular | mean of 10 target items | 3 victims | CREAT no position 0"
+  template: "Diginetica popular | mean of 10 target items | SRGNN / MiaSRec | CREAT nonzero DPP 0.01 consistency 0.3"
   align: center
   font_size: 12
   color: black
 
 figure:
   width: 15.5
-  height: 8.2
+  height: 6.5
   dpi: 220
   background_color: white
 
@@ -39,12 +39,11 @@ table:
       random_nz: randomNZ
       generated_direct_cem: generated cem
       copy_direct_cem: copy cem
-      creat_no_pos0: creat no-pos0
+      creat_no_pos0: creat
 
     victim_model:
       miasrec: MiaSRec
       srgnn: SRGNN
-      tron: TRON
 
     metric_name:
       recall: Recall
@@ -60,7 +59,6 @@ table:
     victim_model:
       - srgnn
       - miasrec
-      - tron
     attack_method:
       - clean
       - random_nz

@@ -5,7 +5,7 @@ output: results/comparisons/diginetica_unpopular_source_methods_sample10_creat_n
 
 filters:
   target_item: [17290, 20222, 21325, 23414, 28865, 29122, 32561, 33995, 3660, 8829]
-  victim_model: [srgnn, miasrec, tron]
+  victim_model: [srgnn, miasrec]
   attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem, creat_no_pos0]
   poison_model: srgnn
   target_type: unpopular

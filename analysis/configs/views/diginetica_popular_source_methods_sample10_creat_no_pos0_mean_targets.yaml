@@ -5,7 +5,7 @@ output: results/comparisons/diginetica_popular_source_methods_sample10_creat_no_
 
 filters:
   target_item: [11103, 39588, 5334, 5418, 14514, 32614, 1440, 4092, 3316, 9496]
-  victim_model: [srgnn, miasrec, tron]
+  victim_model: [srgnn, miasrec]
   attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem, creat_no_pos0]
   poison_model: srgnn
   target_type: popular
