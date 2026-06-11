@@ -1,4 +1,4 @@
-# Phase 1C one-target MDHG clean append smoke template only.
+# Phase 1C Windows-local one-target MDHG clean append smoke template only.
 # This is not the formal full-result MDHG completion configuration.
 experiment:
   name: diginetica_valbest_clean_sample10
@@ -54,7 +54,7 @@ victims:
   params:
     mdhg:
       train:
-        epochs: 20
+        epochs: 1
         batch_size: 100
         lr: 0.001
         checkpoint_protocol: fixed_epoch
@@ -62,9 +62,9 @@ victims:
         export_model: last
   runtime:
     mdhg:
-      python_executable: "/data2/welon/miniconda3/envs/mdhg/bin/python"
-      repo_root: "/data2/welon/SR-GNN-robustness/third_party/mdhg"
-      working_dir: "/data2/welon/SR-GNN-robustness/third_party/mdhg"
+      python_executable: "C:\\Users\\User\\anaconda3\\python.exe"
+      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\mdhg"
+      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\mdhg"
       device:
         use_gpu: true
         gpu_id: "0"
@@ -78,4 +78,4 @@ artifacts:
   root: outputs
   shared_dir: shared
   runs_dir: runs
-  cleanup_victim_intermediates: true
+  cleanup_victim_intermediates: false

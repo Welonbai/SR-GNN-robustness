@@ -20,7 +20,7 @@ from attack.pipeline.core.pipeline_utils import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SUPPORTED_VICTIM = "tron"
+SUPPORTED_VICTIMS = {"tron", "mdhg"}
 DERIVED_ARTIFACT_NAMES = (
     "summary_current.json",
     "artifact_manifest.json",
@@ -50,7 +50,7 @@ class InvalidationPlan:
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Safely invalidate run-local TRON victim cells while preserving attack, "
+            "Safely invalidate run-local external victim cells while preserving attack, "
             "CEM, fake-session, and shared victim prediction caches."
         )
     )
@@ -63,7 +63,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--victim",
         required=True,
-        help="Victim to invalidate. This tool currently supports only 'tron'.",
+        help="Victim to invalidate. Supported victims: tron, mdhg.",
     )
     parser.add_argument(
         "--dry-run",
@@ -103,9 +103,9 @@ def invalidate_victim_cells(
     dry_run: bool = False,
     allowed_roots: Sequence[str | Path] | None = None,
 ) -> list[dict[str, Any]]:
-    if victim != SUPPORTED_VICTIM:
+    if victim not in SUPPORTED_VICTIMS:
         raise InvalidationError(
-            f"Unsupported victim '{victim}'. This tool supports only '{SUPPORTED_VICTIM}'."
+            f"Unsupported victim '{victim}'. Supported victims: {sorted(SUPPORTED_VICTIMS)}."
         )
     if not run_dirs:
         raise InvalidationError("At least one explicit --run-dir must be provided.")
@@ -131,9 +131,9 @@ def inspect_invalidation_plan(
     victim: str,
     allowed_roots: Sequence[str | Path] | None = None,
 ) -> InvalidationPlan:
-    if victim != SUPPORTED_VICTIM:
+    if victim not in SUPPORTED_VICTIMS:
         raise InvalidationError(
-            f"Unsupported victim '{victim}'. This tool supports only '{SUPPORTED_VICTIM}'."
+            f"Unsupported victim '{victim}'. Supported victims: {sorted(SUPPORTED_VICTIMS)}."
         )
     raw_path = str(run_dir)
     if any(token in raw_path for token in ("*", "?", "[", "]")):
@@ -255,12 +255,13 @@ def format_invalidation_result(
             f"  target_ids={', '.join(result['target_ids'])}",
             f"  local_victim_artifact_dirs_to_delete={artifact_text}",
             (
-                "  run_coverage_updates=cells[*].tron -> requested; "
-                "victims.tron current key removed; materialized prefix recomputed"
+                f"  run_coverage_updates=cells[*].{result['victim']} -> requested; "
+                f"victims.{result['victim']} current key removed; materialized prefix recomputed"
             ),
             (
                 "  derived_artifacts_unchanged=summary_current.json, artifact_manifest.json, "
-                "execution_log.json, progress.json (may temporarily contain stale TRON entries)"
+                "execution_log.json, progress.json "
+                f"(may temporarily contain stale {result['victim']} entries)"
             ),
             (
                 "  untouched=CEM caches, fake-session caches, SR-GNN/MiaSRec outputs, "

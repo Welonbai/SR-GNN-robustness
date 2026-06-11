@@ -113,7 +113,7 @@ def test_dry_run_reports_changes_without_modifying_files(tmp_path: Path) -> None
     assert (run_dir / "targets/101/pts_construction_cem/marker.txt").exists()
     assert "completed_to_reset=1" in report
     assert "CEM caches, fake-session caches, SR-GNN/MiaSRec outputs" in report
-    assert "may temporarily contain stale TRON entries" in report
+    assert "may temporarily contain stale tron entries" in report
     for name, content in original_derived.items():
         assert (run_dir / name).read_bytes() == content
 
@@ -206,7 +206,7 @@ def test_invalid_victim_and_unsafe_or_ambiguous_paths_fail_safely(tmp_path: Path
     run_dir = tmp_path / "run_group_a"
     _create_run(run_dir)
 
-    with pytest.raises(InvalidationError, match="supports only 'tron'"):
+    with pytest.raises(InvalidationError, match="Unsupported victim"):
         invalidate_victim_cells([run_dir], victim="srgnn", allowed_roots=[tmp_path])
     with pytest.raises(InvalidationError, match="outside the allowed"):
         invalidate_victim_cells(
