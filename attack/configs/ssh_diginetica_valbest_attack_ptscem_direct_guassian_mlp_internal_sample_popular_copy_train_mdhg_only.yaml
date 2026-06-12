@@ -1,5 +1,5 @@
 experiment:
-  name: diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample
+  name: ssh_diginetica_valbest_attack_ptscem_direct_guassian_mlp_internal_sample_popular_copy_train
 
 data:
   dataset_name: diginetica
@@ -23,11 +23,22 @@ attack:
   fake_session_generation_topk: 100
   replacement_topk_ratio: 1.0
 
+  fake_session_source:
+    type: train_template_clean_exact_length_matched
+    train_template:
+      reference_split: train_sub
+      target_filtering: none
+      replacement: false
+      fallback:
+        nearest_length_redistribution: true
+        replacement_if_needed: true
+      record_distribution_diagnostics: true
+
   poison_model:
     name: srgnn
     params:
       train:
-        epochs: 30
+        epochs: 4
         batch_size: 100
         hidden_size: 100
         lr: 0.001
@@ -37,9 +48,9 @@ attack:
         step: 1
         patience: 10
         nonhybrid: false
-        checkpoint_protocol: validation_best
-        best_metric: valid_ground_truth_mrr@20
-        patience_metric: recall20_or_mrr20
+        checkpoint_protocol: fixed_last
+        validation_enabled: false
+        export_model: last
 
   pts_construction:
     enabled: true
@@ -70,6 +81,10 @@ attack:
       seed_source: position_opt_seed
       candidate_seed_stride: 1000
       save_top_k_candidates: 1
+      surrogate_retrain:
+        checkpoint_protocol: fixed_last
+        validation_enabled: false
+        reward_checkpoint: last
       epoch_reward_diagnostics:
         enabled: false
 
@@ -115,9 +130,9 @@ victims:
         step: 1
         patience: 10
         nonhybrid: false
-        checkpoint_protocol: validation_best
-        best_metric: valid_ground_truth_mrr@20
-        patience_metric: recall20_or_mrr20
+        checkpoint_protocol: fixed_last
+        validation_enabled: false
+        export_model: last
     mdhg:
       train:
         epochs: 2
@@ -144,4 +159,4 @@ artifacts:
   root: outputs
   shared_dir: shared
   runs_dir: runs
-  cleanup_victim_intermediates: true
+  cleanup_victim_intermediates: false
