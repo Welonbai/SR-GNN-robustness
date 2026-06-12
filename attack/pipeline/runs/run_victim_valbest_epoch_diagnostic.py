@@ -14,10 +14,16 @@ from attack.common.config import Config, load_config
 from attack.common.paths import run_group_key, target_dir
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.tron_exporter import TRONExporter
+from attack.data.exporters.freqrec_exporter import FreqRecExporter
 from attack.data.poisoned_dataset_builder import PoisonedDataset, build_poisoned_dataset
 from attack.data.unified_split import ensure_canonical_dataset
 from attack.models.victim.miasrec_runner import MiaSRecRunner
 from attack.models.victim.tron_runner import TRONRunner
+from attack.models.victim.freqrec_runner import FreqRecRunner
+from attack.models.victim.freqrec_diagnostics import (
+    summarize_freqrec_epoch_diagnostics,
+)
+from attack.data.poisoned_dataset_builder import expand_session_to_samples
 from attack.pipeline.core.pipeline_utils import build_clean_pairs
 from attack.pipeline.core.victim_execution import victim_effective_train_seed
 
@@ -129,6 +135,14 @@ def run_diagnostic(
                 out_dir=out_dir,
                 max_epochs=max_epochs,
                 diagnostic_config=diagnostic_config,
+            )
+        elif victim_name == "freqrec":
+            summary = _run_freqrec_diagnostic(
+                config,
+                source=source,
+                poisoned=poisoned,
+                out_dir=out_dir,
+                max_epochs=max_epochs,
             )
         else:
             raise ValueError(f"Unsupported diagnostic victim: {victim_name}")
@@ -610,6 +624,90 @@ def _run_tron_diagnostic(
     return summary
 
 
+def _run_freqrec_diagnostic(
+    config: Config,
+    *,
+    source: SourcePTSArtifact,
+    poisoned: PoisonedDataset,
+    out_dir: Path,
+    max_epochs: int | None,
+) -> dict[str, Any]:
+    requested_topk = max(max(config.evaluation.topk), 20)
+    train_config = dict(config.victims.params["freqrec"]["train"])
+    metric_cutoffs = sorted(set(int(k) for k in train_config["metric_cutoffs"]) | {20})
+    if requested_topk < max(metric_cutoffs):
+        raise ValueError(
+            "FreqRec diagnostic top-k must cover all parent diagnostic metric cutoffs."
+        )
+    runtime = (config.victims.runtime or {}).get("freqrec", {})
+    diagnostics = runtime.get("diagnostics", {}) if isinstance(runtime, Mapping) else {}
+    if not (
+        isinstance(diagnostics, Mapping)
+        and diagnostics.get("epoch_metrics") is True
+        and diagnostics.get("per_epoch_predictions") is True
+    ):
+        raise ValueError(
+            "FreqRec diagnostic execution requires victims.runtime.freqrec.diagnostics "
+            "epoch_metrics=true and per_epoch_predictions=true."
+        )
+    canonical = ensure_canonical_dataset(config)
+    victim_dir = out_dir / "freqrec"
+    export = FreqRecExporter().export_with_train_pairs(
+        canonical,
+        train_prefixes=poisoned.sessions,
+        train_labels=poisoned.labels,
+        output_dir=victim_dir / "export",
+        dataset_name=config.data.dataset_name,
+        max_seq_length=int(train_config["max_seq_length"]),
+        mode="poisoned",
+    )
+    epochs = int(max_epochs if max_epochs is not None else train_config["epochs"])
+    seed = victim_effective_train_seed(
+        config,
+        victim_name="freqrec",
+        run_type=VICTIM_VALBEST_EPOCH_DIAGNOSTIC_RUN_TYPE,
+        target_item=source.target_item,
+    )
+    runner = FreqRecRunner(config)
+    run_info = runner.run(
+        train_path=export.files["train"],
+        valid_path=export.files["valid"],
+        test_path=export.files["test"],
+        metadata_path=export.files["metadata"],
+        item_count=export.item_count,
+        expected_test_count=export.test_example_count,
+        run_dir=victim_dir,
+        prediction_output_path=victim_dir / "freqrec_topk_raw.json",
+        requested_topk=requested_topk,
+        epochs=epochs,
+        victim_train_seed=seed,
+        target_item=source.target_item,
+    )
+    validation_labels: list[int] = []
+    for session in canonical.valid:
+        validation_labels.extend(expand_session_to_samples(session)[1])
+    rows = summarize_freqrec_epoch_diagnostics(
+        runner=runner,
+        epoch_metrics_path=Path(run_info["epoch_metrics_output_path"]),
+        per_epoch_prediction_dir=Path(run_info["per_epoch_prediction_dir"]),
+        validation_labels=validation_labels,
+        item_count=export.item_count,
+        requested_topk=requested_topk,
+        configured_epochs=epochs,
+        seed=seed,
+        metric_cutoffs=metric_cutoffs,
+    )
+    summary = {
+        "victim": "freqrec",
+        "dataset": config.data.dataset_name,
+        "epochs": rows,
+        "run_info": run_info,
+        "selection_uses_test_metrics": False,
+    }
+    save_json(summary, out_dir / "freqrec_valbest_summary.json")
+    return summary
+
+
 def _build_poisoned_train(config: Config, candidate_sessions: Sequence[Sequence[int]]) -> PoisonedDataset:
     canonical = ensure_canonical_dataset(config)
     clean_sessions, clean_labels = build_clean_pairs(canonical)
@@ -993,13 +1091,17 @@ def _target_from_config(config: Config) -> int:
 def _selected_victims(config: Config, victim: str) -> list[str]:
     requested = str(victim).strip().lower()
     if requested == "all":
-        selected = [name for name in config.victims.enabled if name in {"miasrec", "tron"}]
-    elif requested in {"miasrec", "tron"}:
+        selected = [
+            name
+            for name in config.victims.enabled
+            if name in {"miasrec", "tron", "freqrec"}
+        ]
+    elif requested in {"miasrec", "tron", "freqrec"}:
         selected = [requested]
     else:
-        raise ValueError("victim must be one of: miasrec, tron, all")
+        raise ValueError("victim must be one of: miasrec, tron, freqrec, all")
     if not selected:
-        raise ValueError("No MiaSRec/TRON victims selected for diagnostic.")
+        raise ValueError("No supported victims selected for diagnostic.")
     return selected
 
 
@@ -1007,7 +1109,9 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--target-item", type=int, default=None)
-    parser.add_argument("--victim", choices=["miasrec", "tron", "all"], default="all")
+    parser.add_argument(
+        "--victim", choices=["miasrec", "tron", "freqrec", "all"], default="all"
+    )
     parser.add_argument("--source-pts-cem-run", default=None)
     parser.add_argument("--candidate-rank", type=int, default=None)
     parser.add_argument("--experiment-name", default=None)

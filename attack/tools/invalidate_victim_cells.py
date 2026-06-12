@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+import json
 from pathlib import Path
 import shutil
 from typing import Any, Mapping, Sequence
@@ -20,7 +21,7 @@ from attack.pipeline.core.pipeline_utils import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SUPPORTED_VICTIMS = {"tron", "mdhg"}
+SUPPORTED_VICTIMS = {"tron", "mdhg", "freqrec"}
 DERIVED_ARTIFACT_NAMES = (
     "summary_current.json",
     "artifact_manifest.json",
@@ -44,6 +45,8 @@ class InvalidationPlan:
     non_completed_target_ids: tuple[str, ...]
     artifact_dirs: tuple[Path, ...]
     existing_artifact_dirs: tuple[Path, ...]
+    shared_artifact_dirs: tuple[Path, ...]
+    existing_shared_artifact_dirs: tuple[Path, ...]
     old_victim_prediction_key: str | None
 
 
@@ -63,7 +66,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--victim",
         required=True,
-        help="Victim to invalidate. Supported victims: tron, mdhg.",
+        help="Victim to invalidate. Supported victims: tron, mdhg, freqrec.",
     )
     parser.add_argument(
         "--dry-run",
@@ -220,6 +223,67 @@ def inspect_invalidation_plan(
         )
 
     old_key = victim_entry.get("victim_prediction_key")
+    shared_artifact_dirs: list[Path] = []
+    if victim == "freqrec":
+        manifest_path = resolved_run_dir / "artifact_manifest.json"
+        if not manifest_path.is_file():
+            raise InvalidationError(
+                "FreqRec shared-cache invalidation requires an exact artifact_manifest.json; "
+                f"leaving cache untouched: {manifest_path}"
+            )
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise InvalidationError(
+                f"Cannot resolve exact FreqRec shared-cache paths from {manifest_path}: {exc}"
+            ) from exc
+        manifest_victims = manifest.get("victims") if isinstance(manifest, dict) else None
+        if not isinstance(manifest_victims, Mapping):
+            raise InvalidationError(
+                "FreqRec artifact manifest does not contain object-valued victims."
+            )
+        for target_id in target_ids:
+            target_manifest = manifest_victims.get(target_id)
+            victim_manifest = (
+                target_manifest.get(victim)
+                if isinstance(target_manifest, Mapping)
+                else None
+            )
+            shared_manifest = (
+                victim_manifest.get("shared")
+                if isinstance(victim_manifest, Mapping)
+                else None
+            )
+            shared_value = (
+                shared_manifest.get("shared_dir")
+                if isinstance(shared_manifest, Mapping)
+                else None
+            )
+            if not isinstance(shared_value, str) or not shared_value.strip():
+                raise InvalidationError(
+                    "Cannot derive exact FreqRec shared-cache path for "
+                    f"target {target_id}; leaving all artifacts untouched."
+                )
+            shared_path = Path(shared_value)
+            if not shared_path.is_absolute():
+                shared_path = REPO_ROOT / shared_path
+            shared_path = shared_path.resolve()
+            _validate_path_within_allowed_roots(shared_path, roots)
+            parts_lower = [part.lower() for part in shared_path.parts]
+            if (
+                "victim_predictions" not in parts_lower
+                or "freqrec" not in parts_lower
+                or shared_path.name not in {"shared", target_id}
+            ):
+                raise InvalidationError(
+                    f"Refusing unsafe FreqRec shared-cache path: {shared_path}"
+                )
+            if shared_path.exists() and not shared_path.is_dir():
+                raise InvalidationError(
+                    f"Expected FreqRec shared cache directory: {shared_path}"
+                )
+            shared_artifact_dirs.append(shared_path)
+        shared_artifact_dirs = list(dict.fromkeys(shared_artifact_dirs))
     return InvalidationPlan(
         run_dir=resolved_run_dir,
         coverage_path=coverage_path,
@@ -230,6 +294,10 @@ def inspect_invalidation_plan(
         non_completed_target_ids=tuple(non_completed_target_ids),
         artifact_dirs=tuple(artifact_dirs),
         existing_artifact_dirs=tuple(path for path in artifact_dirs if path.is_dir()),
+        shared_artifact_dirs=tuple(shared_artifact_dirs),
+        existing_shared_artifact_dirs=tuple(
+            path for path in shared_artifact_dirs if path.is_dir()
+        ),
         old_victim_prediction_key=str(old_key) if old_key is not None else None,
     )
 
@@ -254,6 +322,14 @@ def format_invalidation_result(
             ),
             f"  target_ids={', '.join(result['target_ids'])}",
             f"  local_victim_artifact_dirs_to_delete={artifact_text}",
+            (
+                "  shared_victim_artifact_dirs_to_delete="
+                + (
+                    ", ".join(result["shared_artifact_dirs_to_delete"])
+                    if result["shared_artifact_dirs_to_delete"]
+                    else "(none present)"
+                )
+            ),
             (
                 f"  run_coverage_updates=cells[*].{result['victim']} -> requested; "
                 f"victims.{result['victim']} current key removed; materialized prefix recomputed"
@@ -290,6 +366,9 @@ def _apply_invalidation_plan(plan: InvalidationPlan) -> None:
     for artifact_dir in plan.artifact_dirs:
         if artifact_dir.is_dir():
             shutil.rmtree(artifact_dir)
+    for artifact_dir in plan.shared_artifact_dirs:
+        if artifact_dir.is_dir():
+            shutil.rmtree(artifact_dir)
 
 
 def _result_from_plan(plan: InvalidationPlan, *, dry_run: bool) -> dict[str, Any]:
@@ -302,6 +381,9 @@ def _result_from_plan(plan: InvalidationPlan, *, dry_run: bool) -> dict[str, Any
         "non_completed_cell_count": len(plan.non_completed_target_ids),
         "target_ids": list(plan.target_ids),
         "artifact_dirs_to_delete": [str(path) for path in plan.existing_artifact_dirs],
+        "shared_artifact_dirs_to_delete": [
+            str(path) for path in plan.existing_shared_artifact_dirs
+        ],
         "coverage_path": str(plan.coverage_path),
         "old_victim_prediction_key": plan.old_victim_prediction_key,
         "derived_artifacts_unchanged": list(DERIVED_ARTIFACT_NAMES),

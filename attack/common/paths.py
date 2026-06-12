@@ -84,6 +84,7 @@ TRON_VICTIM_DATA_SEMANTICS = "tron_raw_session_export_v1"
 MDHG_VICTIM_DATA_SEMANTICS = (
     "mdhg_expanded_pairs_plus_raw_sessions_v3_zero_degree_safe_unique_last_eval"
 )
+FREQREC_VICTIM_DATA_SEMANTICS = "freqrec_canonical_explicit_prefix_label_v1"
 
 
 def shared_attack_identity_requires_poison_runner(run_type: str) -> bool:
@@ -698,6 +699,30 @@ def _victim_identity_params(
     return value
 
 
+def _freqrec_identity_params(value: Any) -> Any:
+    if not isinstance(value, Mapping):
+        return _normalize_identity_value(value)
+    normalized = _normalize_identity_value(value)
+    if not isinstance(normalized, dict):
+        return normalized
+    train = normalized.get("train")
+    if not isinstance(train, dict):
+        return normalized
+    protocol = str(train.get("checkpoint_protocol", ""))
+    projected_train = dict(train)
+    if protocol == "fixed_epoch":
+        projected_train.pop("validation_metric", None)
+        projected_train.pop("metric_cutoffs", None)
+        projected_train.pop("patience", None)
+    else:
+        metric = str(projected_train.get("validation_metric", ""))
+        cutoff = int(metric.rsplit("@", 1)[1]) if "@" in metric else None
+        projected_train["monitor_cutoff"] = cutoff
+        projected_train.pop("metric_cutoffs", None)
+    normalized["train"] = projected_train
+    return normalized
+
+
 def victim_prediction_key_payload(
     config: Config,
     victim_name: str,
@@ -731,10 +756,13 @@ def victim_prediction_key_payload(
     # Victim prediction identity excludes runtime-only fields and batch-size
     # tuning knobs so append/retry can keep reusing victim state across
     # resource-only batch-size adjustments.
-    victim_params = _victim_identity_params(
-        config.victims.params[victim_name],
-        exclude_external_protocol=victim_name in {"miasrec", "tron", "mdhg"},
-    )
+    if victim_name == "freqrec":
+        victim_params = _freqrec_identity_params(config.victims.params[victim_name])
+    else:
+        victim_params = _victim_identity_params(
+            config.victims.params[victim_name],
+            exclude_external_protocol=victim_name in {"miasrec", "tron", "mdhg"},
+        )
     payload = {
         **base_context,
         "victim_name": victim_name,
@@ -747,6 +775,8 @@ def victim_prediction_key_payload(
         payload["victim_data_semantics"] = TRON_VICTIM_DATA_SEMANTICS
     if victim_name == "mdhg":
         payload["victim_data_semantics"] = MDHG_VICTIM_DATA_SEMANTICS
+    if victim_name == "freqrec":
+        payload["victim_data_semantics"] = FREQREC_VICTIM_DATA_SEMANTICS
     if victim_name == "srgnn":
         train_config = config.victims.params[victim_name].get("train", {})
         if (
@@ -1192,6 +1222,7 @@ __all__ = [
     "TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE",
     "TRON_VICTIM_DATA_SEMANTICS",
     "MDHG_VICTIM_DATA_SEMANTICS",
+    "FREQREC_VICTIM_DATA_SEMANTICS",
     "attack_key",
     "attack_key_payload",
     "carrier_selection_identity_payload",
