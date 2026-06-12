@@ -81,7 +81,9 @@ _ANCHOR_CONSTRUCTION_RUNTIME_RUN_TYPES = {
 }
 TARGET_COHORT_SELECTION_POLICY_VERSION = "appendable_target_cohort_v1"
 TRON_VICTIM_DATA_SEMANTICS = "tron_raw_session_export_v1"
-MDHG_VICTIM_DATA_SEMANTICS = "mdhg_expanded_pairs_plus_raw_sessions_v2_zero_degree_safe"
+MDHG_VICTIM_DATA_SEMANTICS = (
+    "mdhg_expanded_pairs_plus_raw_sessions_v3_zero_degree_safe_unique_last_eval"
+)
 
 
 def shared_attack_identity_requires_poison_runner(run_type: str) -> bool:
