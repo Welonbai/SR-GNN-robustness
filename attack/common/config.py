@@ -4156,12 +4156,12 @@ def _normalize_freqrec_train(train: Mapping[str, Any], context: str) -> dict[str
             raise ValueError(f"{context}.{key} must be in [0, 1).")
     if normalized["initializer_range"] <= 0:
         raise ValueError(f"{context}.initializer_range must be positive.")
-    if not 0.0 <= normalized["alpha"] <= 1.0:
-        raise ValueError(f"{context}.alpha must be in [0, 1].")
-    if not 0.0 <= normalized["gama"] <= 1.0:
-        raise ValueError(f"{context}.gama must be in [0, 1].")
-    if normalized["alpha_loss"] < 0:
-        raise ValueError(f"{context}.alpha_loss must be non-negative.")
+    if not 0.0 < normalized["alpha"] < 1.0:
+        raise ValueError(f"{context}.alpha must be in (0, 1).")
+    if not 0.0 < normalized["gama"] < 1.0:
+        raise ValueError(f"{context}.gama must be in (0, 1).")
+    if not 0.0 < normalized["alpha_loss"] < 1.0:
+        raise ValueError(f"{context}.alpha_loss must be in (0, 1).")
     if normalized["fft_loss_type"] not in {
         "l1",
         "l2",
@@ -4171,8 +4171,18 @@ def _normalize_freqrec_train(train: Mapping[str, Any], context: str) -> dict[str
         raise ValueError(
             f"{context}.fft_loss_type must be l1, l2, SmoothL1Loss, or mix_loss."
         )
-    if not normalized["chux"].strip():
-        raise ValueError(f"{context}.chux must be a non-empty string.")
+    if normalized["chux"] not in {"p", "c"}:
+        raise ValueError(f"{context}.chux must be 'p' or 'c'.")
+    if normalized["hidden_act"] not in {
+        "gelu",
+        "relu",
+        "swish",
+        "tanh",
+        "sigmoid",
+    }:
+        raise ValueError(
+            f"{context}.hidden_act must be gelu, relu, swish, tanh, or sigmoid."
+        )
     if not 0.0 < normalized["adam_beta1"] < 1.0:
         raise ValueError(f"{context}.adam_beta1 must be in (0, 1).")
     if not 0.0 < normalized["adam_beta2"] < 1.0:

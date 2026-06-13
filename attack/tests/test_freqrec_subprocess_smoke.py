@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
+import os
 from pathlib import Path
 
 import pytest
@@ -15,12 +17,19 @@ from attack.tests.freqrec_test_utils import freqrec_config
 
 @pytest.mark.freqrec_subprocess
 def test_tiny_fixed_epoch_parent_to_freqrec_subprocess_smoke(tmp_path):
-    python_executable = Path(
-        r"C:\Users\User\anaconda3\envs\freqrec-win-smoke\python.exe"
-    )
+    configured_python = os.environ.get("FREQREC_TEST_PYTHON")
+    if not configured_python:
+        pytest.skip("FREQREC_TEST_PYTHON is not set")
+    python_executable = Path(configured_python)
     if not python_executable.exists():
-        pytest.skip("freqrec-win-smoke environment is not available")
+        pytest.skip(f"FREQREC_TEST_PYTHON does not exist: {python_executable}")
     repo = Path(__file__).resolve().parents[2] / "third_party" / "freqrec"
+    submodule_output = repo / "output"
+    before_output_files = (
+        {path.relative_to(submodule_output) for path in submodule_output.rglob("*") if path.is_file()}
+        if submodule_output.exists()
+        else set()
+    )
     config = freqrec_config(
         tmp_path,
         train_overrides={
@@ -94,8 +103,22 @@ def test_tiny_fixed_epoch_parent_to_freqrec_subprocess_smoke(tmp_path):
         topk=(5,),
     )
     assert available is True
-    assert all(value is not None for value in metrics.values())
+    assert all(
+        value is not None and math.isfinite(float(value))
+        for value in metrics.values()
+    )
+    assert output.is_file()
     assert len(rankings) == 2
     assert all(len(row) == 6 and 0 not in row and len(set(row)) == 6 for row in rankings)
     assert run_info["epochs_completed"] == 1
     assert run_info["batch_size"] == 4
+    assert run_info["batch_count"] == 1
+    assert run_info["final_batch_size"] == 2
+    assert Path(run_info["internal_log_path"]).is_file()
+    assert Path(run_info["internal_log_path"]).parent == tmp_path / "run" / "freqrec_internal_output"
+    after_output_files = (
+        {path.relative_to(submodule_output) for path in submodule_output.rglob("*") if path.is_file()}
+        if submodule_output.exists()
+        else set()
+    )
+    assert after_output_files == before_output_files

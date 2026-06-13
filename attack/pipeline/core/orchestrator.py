@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import math
 from pathlib import Path
 import shutil
 import time
@@ -1980,11 +1981,20 @@ def _load_shared_victim_result(
     if not shared_predictions.exists() or not shared_execution_result.exists():
         return None
 
-    execution_payload = load_json(shared_execution_result)
-    predictions_payload = load_json(shared_predictions)
+    if victim_name == "freqrec":
+        try:
+            execution_payload = load_json(shared_execution_result)
+            predictions_payload = load_json(shared_predictions)
+        except (OSError, ValueError):
+            return None
+    else:
+        execution_payload = load_json(shared_execution_result)
+        predictions_payload = load_json(shared_predictions)
     if not isinstance(execution_payload, dict) or not isinstance(
         predictions_payload, dict
     ):
+        if victim_name == "freqrec":
+            return None
         raise ValueError("Shared victim artifacts are malformed.")
     if victim_name == "freqrec" and not _valid_freqrec_shared_result(
         config,
@@ -2054,6 +2064,16 @@ def _valid_freqrec_shared_result(
         )
         requested_topk = max(int(value) for value in eval_topk)
         effective_topk = min(requested_topk, item_count)
+        train = config.victims.params["freqrec"]["train"]
+        monitor_cutoff = int(str(train["validation_metric"]).rsplit("@", 1)[1])
+        expected_evaluation_topk = min(
+            max(
+                requested_topk,
+                max(int(value) for value in train["metric_cutoffs"]),
+                monitor_cutoff,
+            ),
+            item_count,
+        )
         if predictions_payload.get("victim") != "freqrec":
             return False
         if type(predictions_payload.get("topk")) is not int:
@@ -2084,7 +2104,6 @@ def _valid_freqrec_shared_result(
         export = extra.get("freqrec_export")
         if not isinstance(freqrec, Mapping) or not isinstance(export, Mapping):
             return False
-        train = config.victims.params["freqrec"]["train"]
         expected_seed = victim_effective_train_seed(
             config,
             victim_name="freqrec",
@@ -2097,8 +2116,10 @@ def _valid_freqrec_shared_result(
             "epochs_completed": int(train["epochs"]),
             "requested_topk": requested_topk,
             "topk": effective_topk,
+            "evaluation_topk": expected_evaluation_topk,
             "batch_size": int(train["batch_size"]),
             "seed": expected_seed,
+            "prediction_count": test_count,
         }
         for key, expected in exact.items():
             value = freqrec.get(key)
@@ -2107,6 +2128,61 @@ def _valid_freqrec_shared_result(
             if value != expected:
                 return False
         if type(freqrec.get("num_workers")) is not int or int(freqrec["num_workers"]) < 0:
+            return False
+        cached_validation_metric = freqrec.get("validation_metric")
+        if (
+            not isinstance(cached_validation_metric, str)
+            or not cached_validation_metric.strip()
+        ):
+            return False
+        expected_batch_count = math.ceil(test_count / int(train["batch_size"]))
+        expected_final_batch_size = test_count - int(train["batch_size"]) * (
+            expected_batch_count - 1
+        )
+        for key, expected in (
+            ("batch_count", expected_batch_count),
+            ("final_batch_size", expected_final_batch_size),
+        ):
+            if type(freqrec.get(key)) is not int or int(freqrec[key]) != expected:
+                return False
+        if freqrec.get("drop_last") is not False:
+            return False
+        if freqrec.get("train_sampler") != "seeded_random":
+            return False
+        if freqrec.get("evaluation_sampler") != "sequential":
+            return False
+        current_epoch = freqrec.get("current_epoch")
+        selected_epoch = freqrec.get("selected_epoch")
+        if type(current_epoch) is not int or type(selected_epoch) is not int:
+            return False
+        protocol = str(train["checkpoint_protocol"])
+        if protocol == "fixed_epoch":
+            if current_epoch != int(train["epochs"]) or selected_epoch != int(
+                train["epochs"]
+            ):
+                return False
+            if freqrec.get("best_epoch") is not None or freqrec.get("best_metric") is not None:
+                return False
+        elif protocol == "validation_best":
+            if cached_validation_metric != str(train["validation_metric"]):
+                return False
+            best_epoch = freqrec.get("best_epoch")
+            best_metric = freqrec.get("best_metric")
+            if type(best_epoch) is not int:
+                return False
+            if isinstance(best_metric, bool) or not isinstance(best_metric, (int, float)):
+                return False
+            if not math.isfinite(float(best_metric)):
+                return False
+            if not (
+                1
+                <= current_epoch
+                == selected_epoch
+                == best_epoch
+                <= int(train["epochs"])
+            ):
+                return False
+        else:
             return False
         if type(export.get("item_count")) is not int or int(export["item_count"]) != item_count:
             return False

@@ -24,6 +24,8 @@ def test_gpu_command_uses_same_physical_id_in_arg_and_environment(tmp_path):
         checkpoint_output_path=None,
         epoch_metrics_output_path=None,
         per_epoch_prediction_dir=None,
+        internal_output_dir=tmp_path / "run" / "freqrec_internal_output",
+        train_name="freqrec_canonical",
         requested_topk=20,
         epochs=2,
         seed=7,
@@ -33,6 +35,10 @@ def test_gpu_command_uses_same_physical_id_in_arg_and_environment(tmp_path):
     assert "--no_cuda" not in cmd
     assert "--fourier_loss" not in cmd
     assert "--do_eval" not in cmd
+    assert cmd[cmd.index("--output_dir") + 1] == str(
+        (tmp_path / "run" / "freqrec_internal_output").resolve()
+    )
+    assert cmd[cmd.index("--train_name") + 1] == "freqrec_canonical"
 
 
 def test_cpu_command_uses_no_cuda_and_does_not_override_visibility(tmp_path, monkeypatch):
@@ -47,6 +53,8 @@ def test_cpu_command_uses_no_cuda_and_does_not_override_visibility(tmp_path, mon
         checkpoint_output_path=None,
         epoch_metrics_output_path=None,
         per_epoch_prediction_dir=None,
+        internal_output_dir=tmp_path / "run" / "freqrec_internal_output",
+        train_name="freqrec_canonical",
         requested_topk=20,
         epochs=2,
         seed=7,
@@ -71,6 +79,8 @@ def test_runner_rejects_non_single_gpu_ids(tmp_path, gpu_id):
             checkpoint_output_path=None,
             epoch_metrics_output_path=None,
             per_epoch_prediction_dir=None,
+            internal_output_dir=tmp_path / "run" / "freqrec_internal_output",
+            train_name="freqrec_canonical",
             requested_topk=20,
             epochs=1,
             seed=1,

@@ -67,6 +67,8 @@ class FreqRecRunner(VictimRunnerBase):
         checkpoint_output_path: Path | None,
         epoch_metrics_output_path: Path | None,
         per_epoch_prediction_dir: Path | None,
+        internal_output_dir: Path,
+        train_name: str,
         requested_topk: int,
         epochs: int,
         seed: int,
@@ -98,6 +100,10 @@ class FreqRecRunner(VictimRunnerBase):
             str(int(requested_topk)),
             "--prediction_output_path",
             str(Path(prediction_output_path).resolve()),
+            "--output_dir",
+            str(Path(internal_output_dir).resolve()),
+            "--train_name",
+            str(train_name),
             "--epochs",
             str(int(epochs)),
             "--batch_size",
@@ -206,6 +212,9 @@ class FreqRecRunner(VictimRunnerBase):
                 raise FileNotFoundError(f"FreqRec {label} not found: {path}")
         run_dir.mkdir(parents=True, exist_ok=True)
         log_path = run_dir / "freqrec_stdout.log"
+        internal_output_dir = run_dir / "freqrec_internal_output"
+        train_name = "freqrec_canonical"
+        internal_log_path = internal_output_dir / f"{train_name}.log"
         checkpoint_path = (
             run_dir / "freqrec_checkpoint.pt"
             if bool(self.diagnostics_config.get("save_checkpoint", False))
@@ -230,6 +239,8 @@ class FreqRecRunner(VictimRunnerBase):
             checkpoint_output_path=checkpoint_path,
             epoch_metrics_output_path=epoch_metrics_path,
             per_epoch_prediction_dir=per_epoch_prediction_dir,
+            internal_output_dir=internal_output_dir,
+            train_name=train_name,
             requested_topk=requested_topk,
             epochs=epochs,
             seed=victim_train_seed,
@@ -259,8 +270,11 @@ class FreqRecRunner(VictimRunnerBase):
         run_info: dict[str, Any] = {
             "returncode": result.returncode,
             "log_path": str(log_path),
+            "internal_output_dir": str(internal_output_dir),
+            "internal_log_path": str(internal_log_path),
             "prediction_output_path": str(prediction_output_path),
             "checkpoint_protocol": payload["checkpoint_protocol"],
+            "current_epoch": payload["current_epoch"],
             "selected_epoch": payload["selected_epoch"],
             "epochs_requested": payload["epochs_requested"],
             "epochs_completed": payload["epochs_completed"],
@@ -271,7 +285,12 @@ class FreqRecRunner(VictimRunnerBase):
             "topk": payload["topk"],
             "evaluation_topk": payload["evaluation_topk"],
             "batch_size": payload["batch_size"],
+            "batch_count": payload["batch_count"],
+            "final_batch_size": payload["final_batch_size"],
             "num_workers": payload["num_workers"],
+            "drop_last": payload["drop_last"],
+            "train_sampler": payload["train_sampler"],
+            "evaluation_sampler": payload["evaluation_sampler"],
             "seed": payload["seed"],
             "prediction_count": len(payload["rankings"]),
             "python_executable": self.python_executable,

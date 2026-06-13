@@ -86,6 +86,9 @@ def load_freqrec_epoch_metrics(path: Path) -> list[dict[str, Any]]:
     if not path.is_file():
         raise FileNotFoundError(f"FreqRec epoch metrics not found: {path}")
     rows: list[dict[str, Any]] = []
+    previous_best_epoch: int | None = None
+    previous_best_metric: float | None = None
+    previous_protocol: str | None = None
     with path.open("r", encoding="utf-8") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
             try:
@@ -106,6 +109,7 @@ def load_freqrec_epoch_metrics(path: Path) -> list[dict[str, Any]]:
                 "train_runtime_seconds",
                 "validation_runtime_seconds",
                 "epoch_runtime_seconds",
+                "batch_size",
                 "train_example_count",
                 "train_batch_count",
                 "train_final_batch_size",
@@ -144,12 +148,48 @@ def load_freqrec_epoch_metrics(path: Path) -> list[dict[str, Any]]:
             ):
                 if _exact_int(row[key], f"epoch {epoch}.{key}") < 0:
                     raise ValueError(f"FreqRec epoch {epoch}.{key} must be non-negative.")
+            batch_size = _exact_int(row["batch_size"], f"epoch {epoch}.batch_size")
+            if batch_size <= 0:
+                raise ValueError(f"FreqRec epoch {epoch}.batch_size must be positive.")
+            train_count = int(row["train_example_count"])
+            train_batches = int(row["train_batch_count"])
+            train_final = int(row["train_final_batch_size"])
+            expected_train_batches = math.ceil(train_count / batch_size)
+            expected_train_final = train_count - batch_size * (
+                expected_train_batches - 1
+            )
+            if (
+                train_count <= 0
+                or train_batches != expected_train_batches
+                or train_final != expected_train_final
+            ):
+                raise ValueError(
+                    f"FreqRec epoch {epoch} train batch metadata is inconsistent."
+                )
             validation_final = row["validation_final_batch_size"]
-            if validation_final is not None:
-                _exact_int(
+            validation_count = int(row["validation_example_count"])
+            validation_batches = int(row["validation_batch_count"])
+            if validation_count == 0:
+                if validation_batches != 0 or validation_final is not None:
+                    raise ValueError(
+                        f"FreqRec epoch {epoch} absent validation metadata is inconsistent."
+                    )
+            else:
+                validation_final_int = _exact_int(
                     validation_final,
                     f"epoch {epoch}.validation_final_batch_size",
                 )
+                expected_validation_batches = math.ceil(validation_count / batch_size)
+                expected_validation_final = validation_count - batch_size * (
+                    expected_validation_batches - 1
+                )
+                if (
+                    validation_batches != expected_validation_batches
+                    or validation_final_int != expected_validation_final
+                ):
+                    raise ValueError(
+                        f"FreqRec epoch {epoch} validation batch metadata is inconsistent."
+                    )
             if row["drop_last"] is not False:
                 raise ValueError(f"FreqRec epoch {epoch}.drop_last must be false.")
             if row["train_sampler"] != "seeded_random":
@@ -159,6 +199,81 @@ def load_freqrec_epoch_metrics(path: Path) -> list[dict[str, Any]]:
             if row["evaluation_sampler"] != "sequential":
                 raise ValueError(
                     f"FreqRec epoch {epoch}.evaluation_sampler must be sequential."
+                )
+            protocol = row["checkpoint_protocol"]
+            if previous_protocol is not None and protocol != previous_protocol:
+                raise ValueError(
+                    "FreqRec epoch metrics checkpoint_protocol must remain constant."
+                )
+            previous_protocol = protocol
+            if protocol == "fixed_epoch":
+                if (
+                    row["improved"] is not None
+                    or row["best_epoch"] is not None
+                    or row["best_metric"] is not None
+                ):
+                    raise ValueError(
+                        f"FreqRec fixed-epoch diagnostic row {epoch} must not "
+                        "contain checkpoint-selection state."
+                    )
+            elif protocol == "validation_best":
+                if type(row["improved"]) is not bool:
+                    raise ValueError(
+                        f"FreqRec validation-best epoch {epoch}.improved must be bool."
+                    )
+                best_epoch = _exact_int(
+                    row["best_epoch"], f"epoch {epoch}.best_epoch"
+                )
+                if not 1 <= best_epoch <= epoch:
+                    raise ValueError(
+                        f"FreqRec validation-best epoch {epoch}.best_epoch is invalid."
+                    )
+                best_metric = _finite(
+                    row["best_metric"], f"epoch {epoch}.best_metric"
+                )
+                if epoch == 1 and (
+                    row["improved"] is not True or best_epoch != 1
+                ):
+                    raise ValueError(
+                        "FreqRec validation-best epoch 1 must establish the initial best state."
+                    )
+                if row["improved"] is True and best_epoch != epoch:
+                    raise ValueError(
+                        f"FreqRec validation-best epoch {epoch} improved but "
+                        "best_epoch is not the current epoch."
+                    )
+                if previous_best_epoch is not None:
+                    if best_epoch < previous_best_epoch:
+                        raise ValueError(
+                            f"FreqRec validation-best epoch {epoch}.best_epoch decreased."
+                        )
+                    if row["improved"] is True:
+                        if previous_best_metric is None or best_metric <= previous_best_metric:
+                            raise ValueError(
+                                f"FreqRec validation-best epoch {epoch} improved but "
+                                "best_metric did not strictly increase."
+                            )
+                    else:
+                        if best_epoch != previous_best_epoch:
+                            raise ValueError(
+                                f"FreqRec validation-best epoch {epoch} did not preserve "
+                                "the previous best_epoch."
+                            )
+                        if previous_best_metric is None or not math.isclose(
+                            best_metric,
+                            previous_best_metric,
+                            rel_tol=1e-12,
+                            abs_tol=1e-12,
+                        ):
+                            raise ValueError(
+                                f"FreqRec validation-best epoch {epoch} did not preserve "
+                                "the previous best_metric."
+                            )
+                previous_best_epoch = best_epoch
+                previous_best_metric = best_metric
+            else:
+                raise ValueError(
+                    f"FreqRec epoch {epoch}.checkpoint_protocol is unsupported."
                 )
             validation = row.get("validation")
             if not isinstance(validation, Mapping):
