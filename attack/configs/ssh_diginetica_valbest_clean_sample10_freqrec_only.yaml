@@ -1,0 +1,101 @@
+experiment:
+  name: diginetica_valbest_clean_sample10
+
+data:
+  dataset_name: diginetica
+  split_protocol: unified
+  poison_train_only: true
+  canonical_split:
+    min_item_count: 5
+    min_session_len: 2
+    valid_ratio: 0.1
+    test_days: 7
+
+seeds:
+  fake_session_seed: 20260405
+  target_selection_seed: 20260405
+  position_opt_seed: 20260405
+  surrogate_train_seed: 20260405
+  victim_train_seed: 20260405
+
+attack:
+  size: 0.01
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 1.0
+  poison_model:
+    name: srgnn
+    params:
+      train:
+        epochs: 30
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-5
+        step: 1
+        patience: 10
+        nonhybrid: false
+        checkpoint_protocol: validation_best
+        best_metric: valid_ground_truth_mrr@20
+        patience_metric: recall20_or_mrr20
+
+targets:
+  mode: sampled
+  explicit_list: []
+  bucket: popular
+  count: 10
+  reuse_saved_targets: true
+
+victims:
+  enabled: [freqrec]
+  params:
+    freqrec:
+      train:
+        model_type: freqrec
+        epochs: 18
+        batch_size: 512
+        lr: 0.0005
+        max_seq_length: 50
+        hidden_size: 64
+        num_hidden_layers: 2
+        num_attention_heads: 1
+        hidden_act: gelu
+        attention_probs_dropout_prob: 0.5
+        hidden_dropout_prob: 0.5
+        initializer_range: 0.02
+        alpha: 0.7
+        gama: 0.7
+        alpha_loss: 0.6
+        fft_loss_type: l2
+        chux: p
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.0
+        patience: 4
+        fre: 1.0
+        fourier_loss: true
+        checkpoint_protocol: fixed_epoch
+        validation_metric: ndcg@20
+        metric_cutoffs: [5, 10, 20]
+  runtime:
+    freqrec:
+      python_executable: /data2/welon/miniconda3/envs/robustness/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/freqrec
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/freqrec
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      dataloader:
+        num_workers: 0
+
+evaluation:
+  topk: [5, 10, 15, 20, 25, 30, 40, 50]
+  targeted_metrics: [precision, recall, mrr, ndcg]
+  ground_truth_metrics: [precision, recall, mrr, ndcg]
+
+artifacts:
+  root: outputs
+  shared_dir: shared
+  runs_dir: runs
+  cleanup_victim_intermediates: true

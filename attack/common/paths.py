@@ -84,6 +84,7 @@ TRON_VICTIM_DATA_SEMANTICS = "tron_raw_session_export_v1"
 MDHG_VICTIM_DATA_SEMANTICS = (
     "mdhg_expanded_pairs_plus_raw_sessions_v3_zero_degree_safe_unique_last_eval"
 )
+FREQREC_VICTIM_DATA_SEMANTICS = "freqrec_canonical_explicit_prefix_label_v1"
 
 
 def shared_attack_identity_requires_poison_runner(run_type: str) -> bool:
@@ -698,6 +699,28 @@ def _victim_identity_params(
     return value
 
 
+def _freqrec_identity_params(value: Any) -> Any:
+    if not isinstance(value, Mapping):
+        return _normalize_identity_value(value)
+    normalized = _normalize_identity_value(value)
+    if not isinstance(normalized, dict):
+        return normalized
+    train = normalized.get("train")
+    if not isinstance(train, dict):
+        return normalized
+    protocol = str(train.get("checkpoint_protocol", ""))
+    projected_train = dict(train)
+    projected_train.pop("patience", None)
+    if protocol == "fixed_epoch":
+        projected_train.pop("validation_metric", None)
+    else:
+        metric = str(projected_train.get("validation_metric", ""))
+        cutoff = int(metric.rsplit("@", 1)[1]) if "@" in metric else None
+        projected_train["monitor_cutoff"] = cutoff
+    normalized["train"] = projected_train
+    return normalized
+
+
 def victim_prediction_key_payload(
     config: Config,
     victim_name: str,
@@ -731,10 +754,13 @@ def victim_prediction_key_payload(
     # Victim prediction identity excludes runtime-only fields and batch-size
     # tuning knobs so append/retry can keep reusing victim state across
     # resource-only batch-size adjustments.
-    victim_params = _victim_identity_params(
-        config.victims.params[victim_name],
-        exclude_external_protocol=victim_name in {"miasrec", "tron", "mdhg"},
-    )
+    if victim_name == "freqrec":
+        victim_params = _freqrec_identity_params(config.victims.params[victim_name])
+    else:
+        victim_params = _victim_identity_params(
+            config.victims.params[victim_name],
+            exclude_external_protocol=victim_name in {"miasrec", "tron", "mdhg"},
+        )
     payload = {
         **base_context,
         "victim_name": victim_name,
@@ -747,6 +773,8 @@ def victim_prediction_key_payload(
         payload["victim_data_semantics"] = TRON_VICTIM_DATA_SEMANTICS
     if victim_name == "mdhg":
         payload["victim_data_semantics"] = MDHG_VICTIM_DATA_SEMANTICS
+    if victim_name == "freqrec":
+        payload["victim_data_semantics"] = FREQREC_VICTIM_DATA_SEMANTICS
     if victim_name == "srgnn":
         train_config = config.victims.params[victim_name].get("train", {})
         if (
@@ -776,6 +804,34 @@ def victim_prediction_key(
         victim_effective_train_seed=victim_effective_train_seed,
     )
     return f"victim_{victim_name}_{_hash_token(_stable_json(payload))}"
+
+
+def freqrec_diagnostic_key_payload(
+    config: Config,
+    *,
+    effective_epochs: int,
+) -> dict[str, Any]:
+    train = config.victims.params["freqrec"]["train"]
+    return {
+        "victim_prediction": victim_prediction_key_payload(
+            config,
+            "freqrec",
+            run_type="clean",
+        ),
+        "diagnostic": {
+            "effective_epochs": int(effective_epochs),
+            "validation_metric": str(train["validation_metric"]),
+            "metric_cutoffs": [int(value) for value in train["metric_cutoffs"]],
+        },
+    }
+
+
+def freqrec_diagnostic_key(config: Config, *, effective_epochs: int) -> str:
+    payload = freqrec_diagnostic_key_payload(
+        config,
+        effective_epochs=effective_epochs,
+    )
+    return f"freqrec_diagnostic_{_hash_token(_stable_json(payload))}"
 
 
 def run_group_key_payload(
@@ -1192,6 +1248,7 @@ __all__ = [
     "TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE",
     "TRON_VICTIM_DATA_SEMANTICS",
     "MDHG_VICTIM_DATA_SEMANTICS",
+    "FREQREC_VICTIM_DATA_SEMANTICS",
     "attack_key",
     "attack_key_payload",
     "carrier_selection_identity_payload",
@@ -1205,6 +1262,8 @@ __all__ = [
     "dataset_root",
     "evaluation_key",
     "evaluation_key_payload",
+    "freqrec_diagnostic_key",
+    "freqrec_diagnostic_key_payload",
     "output_root",
     "poison_model_dir",
     "poison_model_key",

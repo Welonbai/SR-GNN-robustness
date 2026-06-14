@@ -11,13 +11,24 @@ from typing import Any, Mapping, Sequence
 
 from attack.common.artifact_io import save_json
 from attack.common.config import Config, load_config
-from attack.common.paths import run_group_key, target_dir
+from attack.common.paths import (
+    freqrec_diagnostic_key,
+    run_group_key,
+    runs_root,
+    target_dir,
+)
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.tron_exporter import TRONExporter
+from attack.data.exporters.freqrec_exporter import FreqRecExporter
 from attack.data.poisoned_dataset_builder import PoisonedDataset, build_poisoned_dataset
 from attack.data.unified_split import ensure_canonical_dataset
 from attack.models.victim.miasrec_runner import MiaSRecRunner
 from attack.models.victim.tron_runner import TRONRunner
+from attack.models.victim.freqrec_runner import FreqRecRunner
+from attack.models.victim.freqrec_diagnostics import (
+    summarize_freqrec_epoch_diagnostics,
+)
+from attack.data.poisoned_dataset_builder import expand_session_to_samples
 from attack.pipeline.core.pipeline_utils import build_clean_pairs
 from attack.pipeline.core.victim_execution import victim_effective_train_seed
 
@@ -71,47 +82,83 @@ def run_diagnostic(
 ) -> dict[str, Any]:
     config = load_config(config_path)
     raw_config = _load_yaml_mapping(config_path)
-    source_config = _diagnostic_source_config(raw_config)
     diagnostic_config = _diagnostic_options(raw_config)
-    target = int(
-        target_item
-        if target_item is not None
-        else source_config.get("target_item", _target_from_config(config))
-    )
-    rank = int(candidate_rank if candidate_rank is not None else source_config.get("candidate_rank", 1))
-    requested_source = (
-        source_pts_cem_run
-        if source_pts_cem_run is not None
-        else source_config.get("source_run")
-    )
-    expected_candidate_key = str(
-        source_config.get("expected_candidate_key", DEFAULT_EXPECTED_CANDIDATE_KEY)
-    )
-    manual_raw_lowk = _optional_float(source_config.get("final_target_raw_lowk"))
-
     selected_victims = _selected_victims(config, victim)
     if experiment_name:
         from dataclasses import replace
 
         config = replace(config, experiment=replace(config.experiment, name=str(experiment_name)))
 
-    source = resolve_source_pts_artifact(
-        config,
-        target_item=target,
-        candidate_rank=rank,
-        source_run=requested_source,
-        expected_candidate_key=expected_candidate_key,
-        manual_raw_lowk=manual_raw_lowk,
-    )
-    poisoned = _build_poisoned_train(config, source.sessions)
-    out_dir = _diagnostic_target_dir(config, source)
-    if out_dir.exists() and force:
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    save_json(source_identity_payload(source), out_dir / "source_pts_cem_identity.json")
-
     summaries: list[dict[str, Any]] = []
-    for victim_name in selected_victims:
+    out_dir: Path | None = None
+    if "freqrec" in selected_victims:
+        effective_freqrec_epochs = int(
+            max_epochs
+            if max_epochs is not None
+            else config.victims.params["freqrec"]["train"]["epochs"]
+        )
+        freqrec_out_dir = _freqrec_diagnostic_dir(
+            config,
+            effective_epochs=effective_freqrec_epochs,
+        )
+        out_dir = freqrec_out_dir
+        if freqrec_out_dir.exists() and force:
+            shutil.rmtree(freqrec_out_dir)
+        freqrec_out_dir.mkdir(parents=True, exist_ok=True)
+        summaries.append(
+            _run_freqrec_diagnostic(
+                config,
+                out_dir=freqrec_out_dir,
+                effective_epochs=effective_freqrec_epochs,
+            )
+        )
+
+    source_victims = [
+        victim_name
+        for victim_name in selected_victims
+        if victim_name in {"miasrec", "tron"}
+    ]
+    source = None
+    target = None
+    if source_victims:
+        source_config = _diagnostic_source_config(raw_config)
+        target = int(
+            target_item
+            if target_item is not None
+            else source_config.get("target_item", _target_from_config(config))
+        )
+        rank = int(
+            candidate_rank
+            if candidate_rank is not None
+            else source_config.get("candidate_rank", 1)
+        )
+        requested_source = (
+            source_pts_cem_run
+            if source_pts_cem_run is not None
+            else source_config.get("source_run")
+        )
+        source = resolve_source_pts_artifact(
+            config,
+            target_item=target,
+            candidate_rank=rank,
+            source_run=requested_source,
+            expected_candidate_key=str(
+                source_config.get(
+                    "expected_candidate_key", DEFAULT_EXPECTED_CANDIDATE_KEY
+                )
+            ),
+            manual_raw_lowk=_optional_float(
+                source_config.get("final_target_raw_lowk")
+            ),
+        )
+        poisoned = _build_poisoned_train(config, source.sessions)
+        out_dir = _diagnostic_target_dir(config, source)
+        if out_dir.exists() and force:
+            shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        save_json(source_identity_payload(source), out_dir / "source_pts_cem_identity.json")
+
+    for victim_name in source_victims:
         if victim_name == "miasrec":
             summary = _run_miasrec_diagnostic(
                 config,
@@ -134,10 +181,12 @@ def run_diagnostic(
             raise ValueError(f"Unsupported diagnostic victim: {victim_name}")
         summaries.append(summary)
 
+    if out_dir is None:
+        raise ValueError("No supported diagnostic victims were selected.")
     combined = {
         "dataset": config.data.dataset_name,
-        "target_item": int(target),
-        "source": source_identity_payload(source),
+        "target_item": None if target is None else int(target),
+        "source": None if source is None else source_identity_payload(source),
         "victims": summaries,
     }
     save_json(combined, out_dir / "victim_valbest_epoch_summary.json")
@@ -610,6 +659,102 @@ def _run_tron_diagnostic(
     return summary
 
 
+def _run_freqrec_diagnostic(
+    config: Config,
+    *,
+    out_dir: Path,
+    effective_epochs: int,
+) -> dict[str, Any]:
+    requested_topk = max(max(config.evaluation.topk), 20)
+    train_config = dict(config.victims.params["freqrec"]["train"])
+    metric_cutoffs = sorted(set(int(k) for k in train_config["metric_cutoffs"]) | {20})
+    if requested_topk < max(metric_cutoffs):
+        raise ValueError(
+            "FreqRec diagnostic top-k must cover all parent diagnostic metric cutoffs."
+        )
+    runtime = (config.victims.runtime or {}).get("freqrec", {})
+    diagnostics = runtime.get("diagnostics", {}) if isinstance(runtime, Mapping) else {}
+    if not (
+        isinstance(diagnostics, Mapping)
+        and diagnostics.get("epoch_metrics") is True
+        and diagnostics.get("per_epoch_predictions") is True
+    ):
+        raise ValueError(
+            "FreqRec diagnostic execution requires victims.runtime.freqrec.diagnostics "
+            "epoch_metrics=true and per_epoch_predictions=true."
+        )
+    canonical = ensure_canonical_dataset(config)
+    clean_prefixes, clean_labels = build_clean_pairs(canonical)
+    victim_dir = out_dir
+    export = FreqRecExporter().export_with_train_pairs(
+        canonical,
+        train_prefixes=clean_prefixes,
+        train_labels=clean_labels,
+        output_dir=victim_dir / "export",
+        dataset_name=config.data.dataset_name,
+        max_seq_length=int(train_config["max_seq_length"]),
+        mode="clean",
+    )
+    epochs = int(effective_epochs)
+    seed = victim_effective_train_seed(
+        config,
+        victim_name="freqrec",
+        run_type="clean",
+        target_item=0,
+    )
+    runner = FreqRecRunner(config)
+    run_info = runner.run(
+        train_path=export.files["train"],
+        valid_path=export.files["valid"],
+        test_path=export.files["test"],
+        metadata_path=export.files["metadata"],
+        item_count=export.item_count,
+        expected_test_count=export.test_example_count,
+        run_dir=victim_dir,
+        prediction_output_path=victim_dir / "freqrec_topk_raw.json",
+        requested_topk=requested_topk,
+        epochs=epochs,
+        victim_train_seed=seed,
+        target_item=None,
+    )
+    validation_labels: list[int] = []
+    for session in canonical.valid:
+        validation_labels.extend(expand_session_to_samples(session)[1])
+    rows = summarize_freqrec_epoch_diagnostics(
+        runner=runner,
+        epoch_metrics_path=Path(run_info["epoch_metrics_output_path"]),
+        per_epoch_prediction_dir=Path(run_info["per_epoch_prediction_dir"]),
+        validation_labels=validation_labels,
+        item_count=export.item_count,
+        requested_topk=requested_topk,
+        configured_epochs=epochs,
+        seed=seed,
+        metric_cutoffs=metric_cutoffs,
+    )
+    summary = {
+        "victim_name": "freqrec",
+        "victim": "freqrec",
+        "dataset": config.data.dataset_name,
+        "target_item": None,
+        "diagnostic_scope": "dataset_victim_clean",
+        "epochs": rows,
+        "run_info": run_info,
+        "selection_uses_test_metrics": False,
+    }
+    save_json(summary, out_dir / "freqrec_valbest_summary.json")
+    return summary
+
+
+def _freqrec_diagnostic_dir(config: Config, *, effective_epochs: int) -> Path:
+    return (
+        runs_root(config)
+        / VICTIM_VALBEST_EPOCH_DIAGNOSTIC_RUN_TYPE
+        / freqrec_diagnostic_key(config, effective_epochs=effective_epochs)
+        / "dataset_victim"
+        / "freqrec"
+    )
+
+
 def _build_poisoned_train(config: Config, candidate_sessions: Sequence[Sequence[int]]) -> PoisonedDataset:
     canonical = ensure_canonical_dataset(config)
     clean_sessions, clean_labels = build_clean_pairs(canonical)
@@ -993,13 +1138,17 @@ def _target_from_config(config: Config) -> int:
 def _selected_victims(config: Config, victim: str) -> list[str]:
     requested = str(victim).strip().lower()
     if requested == "all":
-        selected = [name for name in config.victims.enabled if name in {"miasrec", "tron"}]
-    elif requested in {"miasrec", "tron"}:
+        selected = [
+            name
+            for name in config.victims.enabled
+            if name in {"miasrec", "tron", "freqrec"}
+        ]
+    elif requested in {"miasrec", "tron", "freqrec"}:
         selected = [requested]
     else:
-        raise ValueError("victim must be one of: miasrec, tron, all")
+        raise ValueError("victim must be one of: miasrec, tron, freqrec, all")
     if not selected:
-        raise ValueError("No MiaSRec/TRON victims selected for diagnostic.")
+        raise ValueError("No supported victims selected for diagnostic.")
     return selected
 
 
@@ -1007,7 +1156,9 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--target-item", type=int, default=None)
-    parser.add_argument("--victim", choices=["miasrec", "tron", "all"], default="all")
+    parser.add_argument(
+        "--victim", choices=["miasrec", "tron", "freqrec", "all"], default="all"
+    )
     parser.add_argument("--source-pts-cem-run", default=None)
     parser.add_argument("--candidate-rank", type=int, default=None)
     parser.add_argument("--experiment-name", default=None)

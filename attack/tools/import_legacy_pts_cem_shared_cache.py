@@ -10,16 +10,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from attack.common.config import load_config
-from attack.common.paths import (
-    PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
-    shared_artifact_paths,
-)
+from attack.common.paths import shared_artifact_paths
 from attack.pipeline.runs.run_pts_construction_cem import (
     build_pts_cem_shared_cache_identity,
     build_pts_construction_attack_identity_context,
     pts_cem_shared_cache_dir,
     pts_cem_shared_cache_key,
     _existing_pts_artifact_paths,
+    _pts_construction_run_type,
     _try_load_cached_pts_best_candidate,
     _try_load_shared_pts_cem_cache,
     _write_shared_pts_cem_cache,
@@ -93,11 +91,13 @@ def main() -> int:
     config = load_config(args.config)
     target_item = int(args.target_item)
     source_artifact_dir = _resolve_source_artifact_dir(Path(args.source), target_item)
+    run_type = _pts_construction_run_type(config)
+    attack_identity_context = build_pts_construction_attack_identity_context(config)
 
     cached = _try_load_cached_pts_best_candidate(
         artifact_dir=source_artifact_dir,
         target_item=target_item,
-        current_identity=None,
+        current_identity={"run_type": run_type},
         current_shared_cache_key=None,
     )
     if cached is None:
@@ -105,7 +105,7 @@ def main() -> int:
 
     shared_paths = shared_artifact_paths(
         config,
-        run_type=PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        run_type=run_type,
     )
     fake_sessions_path = shared_paths["fake_sessions"]
     poison_model_path = shared_paths["poison_model"]
@@ -145,8 +145,6 @@ def main() -> int:
         )
 
     artifact_paths = _existing_pts_artifact_paths(source_artifact_dir)
-    attack_identity_context = build_pts_construction_attack_identity_context(config)
-
     if args.dry_run:
         print("status=dry_run_valid")
         return 0

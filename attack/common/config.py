@@ -18,7 +18,7 @@ from attack.common.srgnn_training_protocol import (
 )
 
 
-_ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron", "mdhg"}
+_ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron", "mdhg", "freqrec"}
 _ALLOWED_TARGET_BUCKETS = {"popular", "unpopular", "all"}
 _ALLOWED_EVAL_METRICS = {"precision", "recall", "mrr", "ndcg"}
 VICTIM_VALIDATION_BEST_PROTOCOL = "validation_best"
@@ -3731,6 +3731,10 @@ def _normalize_victims_config(victims: Mapping[str, Any]) -> dict[str, Any]:
         if runtime is None or "mdhg" not in runtime:
             raise ValueError("Missing required runtime configuration: victims.runtime.mdhg")
         _validate_mdhg_runtime(runtime["mdhg"], "victims.runtime.mdhg")
+    if "freqrec" in enabled:
+        if runtime is None or "freqrec" not in runtime:
+            raise ValueError("Missing required runtime configuration: victims.runtime.freqrec")
+        _validate_freqrec_runtime(runtime["freqrec"], "victims.runtime.freqrec")
 
     return {
         "enabled": enabled,
@@ -3765,6 +3769,10 @@ def _normalize_victim_params(value: Any, context: str) -> dict[str, dict[str, An
             primitive["train"] = _normalize_tron_train(train, f"{context}.{victim_name}.train")
         elif victim_name == "mdhg":
             primitive["train"] = _normalize_mdhg_train(train, f"{context}.{victim_name}.train")
+        elif victim_name == "freqrec":
+            primitive["train"] = _normalize_freqrec_train(
+                train, f"{context}.{victim_name}.train"
+            )
         normalized[victim_name] = primitive
     return normalized
 
@@ -3840,6 +3848,50 @@ def _validate_mdhg_runtime(runtime: dict[str, Any], context: str) -> None:
         for key in ("epoch_metrics", "per_epoch_predictions"):
             if key in diagnostics:
                 _as_bool(diagnostics[key], f"{context}.diagnostics.{key}")
+
+
+def _validate_freqrec_runtime(runtime: dict[str, Any], context: str) -> None:
+    _as_str(_require(runtime, "python_executable", context), f"{context}.python_executable")
+    _as_str(_require(runtime, "repo_root", context), f"{context}.repo_root")
+    _as_str(_require(runtime, "working_dir", context), f"{context}.working_dir")
+    device = _as_mapping(_require(runtime, "device", context), f"{context}.device")
+    use_gpu = _as_bool(
+        _require(device, "use_gpu", f"{context}.device"),
+        f"{context}.device.use_gpu",
+    )
+    gpu_id = _as_gpu_id(
+        _require(device, "gpu_id", f"{context}.device"),
+        f"{context}.device.gpu_id",
+    )
+    if use_gpu and ("," in gpu_id or not gpu_id.isdigit()):
+        raise ValueError(
+            f"{context}.device.gpu_id must identify exactly one non-negative physical GPU."
+        )
+    dataloader = _as_mapping(
+        _require(runtime, "dataloader", context),
+        f"{context}.dataloader",
+    )
+    num_workers = _as_int(
+        _require(dataloader, "num_workers", f"{context}.dataloader"),
+        f"{context}.dataloader.num_workers",
+    )
+    if num_workers < 0:
+        raise ValueError(f"{context}.dataloader.num_workers must be non-negative.")
+    diagnostics_value = runtime.get("diagnostics")
+    if diagnostics_value is not None:
+        diagnostics = _as_mapping(diagnostics_value, f"{context}.diagnostics")
+        unknown = set(diagnostics) - {
+            "epoch_metrics",
+            "per_epoch_predictions",
+            "save_checkpoint",
+        }
+        if unknown:
+            raise ValueError(
+                f"Unknown {context}.diagnostics keys: "
+                + ", ".join(sorted(map(str, unknown)))
+            )
+        for key in diagnostics:
+            _as_bool(diagnostics[key], f"{context}.diagnostics.{key}")
 
 
 def _normalize_srgnn_train(train: Mapping[str, Any], context: str) -> dict[str, Any]:
@@ -3999,6 +4051,152 @@ def _normalize_mdhg_train(train: Mapping[str, Any], context: str) -> dict[str, A
         raise ValueError(f"{context}.validation_enabled must be false for MDHG.")
     if normalized["export_model"] != VICTIM_EXPORT_LAST:
         raise ValueError(f"{context}.export_model must be last for MDHG.")
+    return normalized
+
+
+def _normalize_freqrec_train(train: Mapping[str, Any], context: str) -> dict[str, Any]:
+    normalized = _normalize_primitive(train, context)
+    if not isinstance(normalized, dict):
+        raise TypeError(f"Expected {context} to be a mapping.")
+    required = (
+        "model_type",
+        "epochs",
+        "batch_size",
+        "lr",
+        "max_seq_length",
+        "hidden_size",
+        "num_hidden_layers",
+        "num_attention_heads",
+        "hidden_act",
+        "attention_probs_dropout_prob",
+        "hidden_dropout_prob",
+        "initializer_range",
+        "alpha",
+        "gama",
+        "alpha_loss",
+        "fft_loss_type",
+        "chux",
+        "adam_beta1",
+        "adam_beta2",
+        "weight_decay",
+        "patience",
+        "fre",
+        "fourier_loss",
+        "checkpoint_protocol",
+        "validation_metric",
+        "metric_cutoffs",
+    )
+    for key in required:
+        _require(normalized, key, context)
+    int_fields = (
+        "epochs",
+        "batch_size",
+        "max_seq_length",
+        "hidden_size",
+        "num_hidden_layers",
+        "num_attention_heads",
+        "patience",
+    )
+    float_fields = (
+        "lr",
+        "attention_probs_dropout_prob",
+        "hidden_dropout_prob",
+        "initializer_range",
+        "alpha",
+        "gama",
+        "alpha_loss",
+        "adam_beta1",
+        "adam_beta2",
+        "weight_decay",
+        "fre",
+    )
+    for key in int_fields:
+        normalized[key] = _as_int(normalized[key], f"{context}.{key}")
+    for key in float_fields:
+        normalized[key] = _as_float(normalized[key], f"{context}.{key}")
+    for key in ("model_type", "hidden_act", "fft_loss_type", "chux"):
+        normalized[key] = _as_str(normalized[key], f"{context}.{key}")
+    normalized["fourier_loss"] = _as_bool(
+        normalized["fourier_loss"], f"{context}.fourier_loss"
+    )
+    normalized["checkpoint_protocol"] = _as_str(
+        normalized["checkpoint_protocol"], f"{context}.checkpoint_protocol"
+    ).strip().lower()
+    normalized["validation_metric"] = _as_str(
+        normalized["validation_metric"], f"{context}.validation_metric"
+    ).strip().lower()
+    normalized["metric_cutoffs"] = list(
+        _unique_preserve_order(
+            _as_int_list(normalized["metric_cutoffs"], f"{context}.metric_cutoffs")
+        )
+    )
+    if normalized["model_type"].strip().lower() != "freqrec":
+        raise ValueError(f"{context}.model_type must be 'freqrec'.")
+    normalized["model_type"] = "freqrec"
+    if normalized["checkpoint_protocol"] not in {
+        VICTIM_FIXED_EPOCH_PROTOCOL,
+        VICTIM_VALIDATION_BEST_PROTOCOL,
+    }:
+        raise ValueError(
+            f"{context}.checkpoint_protocol must be fixed_epoch or validation_best."
+        )
+    if normalized["validation_metric"] not in {"hr@20", "mrr@20", "ndcg@20"}:
+        raise ValueError(f"{context}.validation_metric must be hr@20, mrr@20, or ndcg@20.")
+    if not normalized["metric_cutoffs"] or any(
+        cutoff <= 0 for cutoff in normalized["metric_cutoffs"]
+    ):
+        raise ValueError(f"{context}.metric_cutoffs must contain positive integers.")
+    normalized["metric_cutoffs"] = sorted(set(normalized["metric_cutoffs"]) | {20})
+    if any(normalized[key] <= 0 for key in int_fields):
+        raise ValueError(f"{context} integer training fields must be positive.")
+    if normalized["lr"] <= 0:
+        raise ValueError(f"{context}.lr must be positive.")
+    for key in ("attention_probs_dropout_prob", "hidden_dropout_prob"):
+        if not 0.0 <= normalized[key] < 1.0:
+            raise ValueError(f"{context}.{key} must be in [0, 1).")
+    if normalized["initializer_range"] <= 0:
+        raise ValueError(f"{context}.initializer_range must be positive.")
+    if not 0.0 < normalized["alpha"] < 1.0:
+        raise ValueError(f"{context}.alpha must be in (0, 1).")
+    if not 0.0 < normalized["gama"] < 1.0:
+        raise ValueError(f"{context}.gama must be in (0, 1).")
+    if not 0.0 < normalized["alpha_loss"] < 1.0:
+        raise ValueError(f"{context}.alpha_loss must be in (0, 1).")
+    if normalized["fft_loss_type"] not in {
+        "l1",
+        "l2",
+        "SmoothL1Loss",
+        "mix_loss",
+    }:
+        raise ValueError(
+            f"{context}.fft_loss_type must be l1, l2, SmoothL1Loss, or mix_loss."
+        )
+    if normalized["chux"] not in {"p", "c"}:
+        raise ValueError(f"{context}.chux must be 'p' or 'c'.")
+    if normalized["hidden_act"] not in {
+        "gelu",
+        "relu",
+        "swish",
+        "tanh",
+        "sigmoid",
+    }:
+        raise ValueError(
+            f"{context}.hidden_act must be gelu, relu, swish, tanh, or sigmoid."
+        )
+    if not 0.0 < normalized["adam_beta1"] < 1.0:
+        raise ValueError(f"{context}.adam_beta1 must be in (0, 1).")
+    if not 0.0 < normalized["adam_beta2"] < 1.0:
+        raise ValueError(f"{context}.adam_beta2 must be in (0, 1).")
+    if normalized["weight_decay"] < 0:
+        raise ValueError(f"{context}.weight_decay must be non-negative.")
+    if normalized["fre"] != 1.0:
+        raise ValueError(f"{context}.fre must be exactly 1.0.")
+    if normalized["fourier_loss"] is not True:
+        raise ValueError(f"{context}.fourier_loss must be true.")
+    if normalized["hidden_size"] % normalized["num_attention_heads"] != 0:
+        raise ValueError(
+            f"{context}.hidden_size must be divisible by num_attention_heads."
+        )
     return normalized
 
 

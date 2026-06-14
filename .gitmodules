@@ -7,3 +7,6 @@
 [submodule "third_party/mdhg"]
 	path = third_party/mdhg
 	url = https://github.com/Welonbai/MDHG.git
+[submodule "third_party/freqrec"]
+	path = third_party/freqrec
+	url = https://github.com/Welonbai/FreqRec.git

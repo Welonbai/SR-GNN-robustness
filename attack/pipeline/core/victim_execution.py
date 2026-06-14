@@ -10,6 +10,7 @@ from attack.common.seed import derive_seed, set_seed
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.mdhg_exporter import MDHGExporter
+from attack.data.exporters.freqrec_exporter import FreqRecExporter
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.exporters.tron_exporter import TRONExporter
 from attack.common.srgnn_training_protocol import srgnn_validation_best_enabled
@@ -384,6 +385,89 @@ def execute_single_victim(
             predictions=rankings,
             predictions_path=predictions_path,
             extra={"mdhg": run_info, "mdhg_export": export_metadata},
+            poisoned_train_path=None,
+        )
+
+    if victim_name == "freqrec":
+        victim_train_config = _require_victim_train_config(config, victim_name)
+        export_root = run_dir / "export" / "freqrec"
+        export_result = FreqRecExporter().export_with_train_pairs(
+            canonical_dataset,
+            train_prefixes=poisoned_sessions,
+            train_labels=poisoned_labels,
+            output_dir=export_root,
+            dataset_name=config.data.dataset_name,
+            max_seq_length=int(victim_train_config["max_seq_length"]),
+            mode=("clean" if run_type == "clean" else "poisoned"),
+        )
+        runner = get_victim_runner(victim_name)(config)
+        raw_predictions_path = run_dir / "freqrec_topk_raw.json"
+        pipeline_injected = {
+            "data_dir": export_result.data_dir,
+            "item_count": export_result.item_count,
+            "expected_test_count": export_result.test_example_count,
+            "export_topk_k": int(max_topk),
+            "export_topk_path": raw_predictions_path,
+            "run_dir": run_dir,
+            "log_path": run_dir / "freqrec_stdout.log",
+            "victim_train_seed": int(victim_stage_seed),
+        }
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected=pipeline_injected,
+        )
+        run_info = runner.run(
+            train_path=export_result.files["train"],
+            valid_path=export_result.files["valid"],
+            test_path=export_result.files["test"],
+            metadata_path=export_result.files["metadata"],
+            item_count=export_result.item_count,
+            expected_test_count=export_result.test_example_count,
+            run_dir=run_dir,
+            prediction_output_path=raw_predictions_path,
+            requested_topk=max_topk,
+            epochs=int(victim_train_config["epochs"]),
+            victim_train_seed=int(victim_stage_seed),
+            target_item=(None if run_type == "clean" else int(target_item)),
+        )
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected={**pipeline_injected, **run_info},
+        )
+        rankings = runner.predict_topk(
+            predictions_path=raw_predictions_path,
+            item_count=export_result.item_count,
+            expected_example_count=export_result.test_example_count,
+            requested_topk=max_topk,
+            configured_epochs=int(victim_train_config["epochs"]),
+            seed=int(victim_stage_seed),
+        )
+        if predictions_path is not None:
+            save_predictions(
+                predictions_path,
+                topk=min(max_topk, export_result.item_count),
+                rankings=rankings,
+                victim=victim_name,
+                target_item=target_item,
+            )
+        export_metadata = {
+            "data_dir": str(export_result.data_dir),
+            "item_count": export_result.item_count,
+            "max_seq_length": export_result.max_seq_length,
+            "train_example_count": export_result.train_example_count,
+            "valid_example_count": export_result.valid_example_count,
+            "test_example_count": export_result.test_example_count,
+            "observed_max_item_id": export_result.observed_max_item_id,
+            "files": {key: str(path) for key, path in export_result.files.items()},
+        }
+        return VictimExecutionResult(
+            predictions=rankings,
+            predictions_path=predictions_path,
+            extra={"freqrec": run_info, "freqrec_export": export_metadata},
             poisoned_train_path=None,
         )
 
