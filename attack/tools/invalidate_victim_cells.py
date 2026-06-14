@@ -21,7 +21,7 @@ from attack.pipeline.core.pipeline_utils import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SUPPORTED_VICTIMS = {"tron", "mdhg", "freqrec"}
+SUPPORTED_VICTIMS = {"tron", "mdhg", "freqrec", "wearec"}
 DERIVED_ARTIFACT_NAMES = (
     "summary_current.json",
     "artifact_manifest.json",
@@ -54,7 +54,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Safely invalidate run-local external victim cells while preserving attack, "
-            "CEM, fake-session, and shared victim prediction caches."
+            "CEM, fake-session, and unrelated shared victim prediction caches."
         )
     )
     parser.add_argument(
@@ -66,7 +66,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--victim",
         required=True,
-        help="Victim to invalidate. Supported victims: tron, mdhg, freqrec.",
+        help="Victim to invalidate. Supported victims: tron, mdhg, freqrec, wearec.",
     )
     parser.add_argument(
         "--dry-run",
@@ -224,23 +224,25 @@ def inspect_invalidation_plan(
 
     old_key = victim_entry.get("victim_prediction_key")
     shared_artifact_dirs: list[Path] = []
-    if victim == "freqrec":
+    if victim in {"freqrec", "wearec"}:
         manifest_path = resolved_run_dir / "artifact_manifest.json"
         if not manifest_path.is_file():
             raise InvalidationError(
-                "FreqRec shared-cache invalidation requires an exact artifact_manifest.json; "
+                f"{victim} shared-cache invalidation requires an exact "
+                "artifact_manifest.json; "
                 f"leaving cache untouched: {manifest_path}"
             )
         try:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise InvalidationError(
-                f"Cannot resolve exact FreqRec shared-cache paths from {manifest_path}: {exc}"
+                f"Cannot resolve exact {victim} shared-cache paths from "
+                f"{manifest_path}: {exc}"
             ) from exc
         manifest_victims = manifest.get("victims") if isinstance(manifest, dict) else None
         if not isinstance(manifest_victims, Mapping):
             raise InvalidationError(
-                "FreqRec artifact manifest does not contain object-valued victims."
+                f"{victim} artifact manifest does not contain object-valued victims."
             )
         for target_id in target_ids:
             target_manifest = manifest_victims.get(target_id)
@@ -261,7 +263,7 @@ def inspect_invalidation_plan(
             )
             if not isinstance(shared_value, str) or not shared_value.strip():
                 raise InvalidationError(
-                    "Cannot derive exact FreqRec shared-cache path for "
+                    f"Cannot derive exact {victim} shared-cache path for "
                     f"target {target_id}; leaving all artifacts untouched."
                 )
             shared_path = Path(shared_value)
@@ -269,18 +271,14 @@ def inspect_invalidation_plan(
                 shared_path = REPO_ROOT / shared_path
             shared_path = shared_path.resolve()
             _validate_path_within_allowed_roots(shared_path, roots)
-            parts_lower = [part.lower() for part in shared_path.parts]
-            if (
-                "victim_predictions" not in parts_lower
-                or "freqrec" not in parts_lower
-                or shared_path.name not in {"shared", target_id}
-            ):
-                raise InvalidationError(
-                    f"Refusing unsafe FreqRec shared-cache path: {shared_path}"
-                )
+            _validate_canonical_victim_shared_path(
+                shared_path,
+                victim=victim,
+                target_id=target_id,
+            )
             if shared_path.exists() and not shared_path.is_dir():
                 raise InvalidationError(
-                    f"Expected FreqRec shared cache directory: {shared_path}"
+                    f"Expected {victim} shared cache directory: {shared_path}"
                 )
             shared_artifact_dirs.append(shared_path)
         shared_artifact_dirs = list(dict.fromkeys(shared_artifact_dirs))
@@ -341,7 +339,7 @@ def format_invalidation_result(
             ),
             (
                 "  untouched=CEM caches, fake-session caches, SR-GNN/MiaSRec outputs, "
-                "all shared victim prediction caches"
+                "and unrelated shared victim prediction caches"
             ),
         )
     )
@@ -408,6 +406,45 @@ def _validate_path_within_allowed_roots(path: Path, allowed_roots: Sequence[Path
         f"Refusing to operate outside the allowed repository/output area: {path}. "
         f"Allowed roots: {roots}"
     )
+
+
+def _validate_canonical_victim_shared_path(
+    path: Path,
+    *,
+    victim: str,
+    target_id: str,
+) -> None:
+    parts = list(path.parts)
+    parts_lower = [part.lower() for part in parts]
+    victim_lower = victim.lower()
+    anchors = [
+        index
+        for index, part in enumerate(parts_lower)
+        if part == "victim_predictions"
+        and index + 1 < len(parts_lower)
+        and parts_lower[index + 1] == victim_lower
+    ]
+    if len(anchors) != 1:
+        raise InvalidationError(
+            f"Refusing unsafe {victim} shared-cache path: {path}"
+        )
+    suffix = parts[anchors[0] + 1 :]
+    if len(suffix) == 3 and suffix[0].lower() == victim_lower:
+        identity, leaf = suffix[1:]
+        valid = bool(identity) and leaf == "shared"
+    elif len(suffix) == 4 and suffix[0].lower() == victim_lower:
+        identity, targets_component, resolved_target = suffix[1:]
+        valid = (
+            bool(identity)
+            and targets_component == "targets"
+            and resolved_target == target_id
+        )
+    else:
+        valid = False
+    if not valid:
+        raise InvalidationError(
+            f"Refusing unsafe {victim} shared-cache path: {path}"
+        )
 
 
 if __name__ == "__main__":

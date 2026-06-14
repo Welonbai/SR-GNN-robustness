@@ -13,6 +13,7 @@ _DEFAULT_VICTIM_MODULES = (
     "attack.models.victim.tron_runner",
     "attack.models.victim.mdhg_runner",
     "attack.models.victim.freqrec_runner",
+    "attack.models.victim.wearec_runner",
 )
 _DEFAULTS_LOADED = False
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from attack.common.artifact_io import save_json
 from attack.common.config import Config
@@ -11,6 +11,16 @@ from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.mdhg_exporter import MDHGExporter
 from attack.data.exporters.freqrec_exporter import FreqRecExporter
+from attack.data.exporters.wearec_exporter import WEARecExporter, WEARecExportResult
+from attack.data.canonical_fingerprints import (
+    CANONICAL_FINGERPRINT_SEMANTICS,
+    ITEM_VOCABULARY_FINGERPRINT_SEMANTICS,
+    fingerprint_exported_jsonl,
+    fingerprint_item_vocabulary,
+    load_exported_canonical_labels,
+    resolve_wearec_repository_provenance,
+)
+from attack.common.paths import attack_key_payload, classify_victim_training_run_type
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.exporters.tron_exporter import TRONExporter
 from attack.common.srgnn_training_protocol import srgnn_validation_best_enabled
@@ -20,6 +30,11 @@ from attack.models.srgnn_validation_training import (
 )
 from attack.models.victim.registry import get_victim_runner
 from attack.models.victim.mdhg_diagnostics import summarize_mdhg_epoch_diagnostics
+from attack.models.victim.wearec_runner import (
+    WEAREC_ARTIFACT_CONTRACT_VERSION,
+    WEAREC_RUNNER_SEMANTICS_VERSION,
+    effective_wearec_config,
+)
 from attack.pipeline.core.evaluator import save_predictions
 from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
 from attack.pipeline.core.train_history import save_train_history
@@ -48,6 +63,7 @@ def execute_single_victim(
     eval_topk: Sequence[int],
     srg_nn_export_paths: dict[str, Path] | None = None,
     predictions_path: Path | None = None,
+    prepared_wearec: Mapping[str, Any] | None = None,
 ) -> VictimExecutionResult:
     victim_stage_seed = _victim_stage_seed(
         config,
@@ -471,6 +487,83 @@ def execute_single_victim(
             poisoned_train_path=None,
         )
 
+    if victim_name == "wearec":
+        prepared = dict(prepared_wearec or {})
+        export_result = prepared.get("export_result")
+        identity = prepared.get("identity")
+        if not isinstance(export_result, WEARecExportResult) or not isinstance(
+            identity, Mapping
+        ):
+            raise ValueError("WEARec execution requires a prepared export and identity.")
+        effective = identity["effective_config"]
+        runner = get_victim_runner(victim_name)(config)
+        raw_predictions_path = run_dir / "wearec_topk_raw.json"
+        run_info = runner.run(
+            train_path=export_result.files["train"],
+            valid_path=export_result.files["valid"],
+            test_path=export_result.files["test"],
+            metadata_path=export_result.files["metadata"],
+            item_count=export_result.item_count,
+            expected_test_count=export_result.test_example_count,
+            run_dir=run_dir,
+            prediction_output_path=raw_predictions_path,
+            requested_topk=int(max_topk),
+            epochs=int(effective["epochs"]),
+            victim_train_seed=int(effective["seed"]),
+            target_item=(
+                None if identity["training_mode"] == "clean" else int(target_item)
+            ),
+            training_mode=str(identity["training_mode"]),
+            dataset_name=str(identity["dataset_name"]),
+        )
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected={
+                **run_info,
+                "scientific_identity": dict(identity),
+                "data_dir": export_result.data_dir,
+            },
+        )
+        rankings = runner.predict_topk(
+            predictions_path=raw_predictions_path,
+            item_count=export_result.item_count,
+            expected_labels=prepared["test_labels"],
+            requested_topk=int(max_topk),
+            configured_epochs=int(effective["epochs"]),
+            seed=int(effective["seed"]),
+            expected_training_mode=str(identity["training_mode"]),
+            expected_dataset_name=str(identity["dataset_name"]),
+        )
+        if predictions_path is not None:
+            save_predictions(
+                predictions_path,
+                topk=int(max_topk),
+                rankings=rankings,
+                victim=victim_name,
+                target_item=target_item,
+            )
+        return VictimExecutionResult(
+            predictions=rankings,
+            predictions_path=predictions_path,
+            extra={
+                "wearec": {**run_info, "scientific_identity": dict(identity)},
+                "wearec_export": {
+                    "data_dir": str(export_result.data_dir),
+                    "item_count": export_result.item_count,
+                    "max_seq_length": export_result.max_seq_length,
+                    "train_example_count": export_result.train_example_count,
+                    "valid_example_count": export_result.valid_example_count,
+                    "test_example_count": export_result.test_example_count,
+                    "files": {
+                        key: str(path) for key, path in export_result.files.items()
+                    },
+                },
+            },
+            poisoned_train_path=None,
+        )
+
     raise ValueError(f"Unsupported victim model: {victim_name}")
 
 
@@ -493,6 +586,104 @@ def victim_effective_train_seed(
         victim_name,
         int(target_item),
     )
+
+
+def prepare_wearec_execution(
+    config: Config,
+    *,
+    run_type: str,
+    canonical_dataset: CanonicalDataset,
+    train_prefixes: Sequence[Sequence[int]],
+    train_labels: Sequence[int],
+    run_dir: Path,
+    requested_topk: int,
+    target_item: int,
+    attack_identity_context: Mapping[str, Any] | None,
+    provenance_resolver=resolve_wearec_repository_provenance,
+) -> dict[str, Any]:
+    training_mode = classify_victim_training_run_type(run_type)
+    if training_mode == "unsupported":
+        raise ValueError(f"Unsupported WEARec victim-training run type: {run_type}")
+    seed = victim_effective_train_seed(
+        config,
+        victim_name="wearec",
+        run_type=run_type,
+        target_item=target_item,
+    )
+    effective = effective_wearec_config(
+        config,
+        seed=seed,
+        requested_topk=requested_topk,
+    )
+    export_result = WEARecExporter().export_with_train_pairs(
+        canonical_dataset,
+        train_prefixes=train_prefixes,
+        train_labels=train_labels,
+        output_dir=run_dir / "export" / "wearec",
+        dataset_name=config.data.dataset_name,
+        max_seq_length=int(effective["max_seq_length"]),
+        mode=training_mode,
+    )
+    if requested_topk > export_result.item_count:
+        raise ValueError("WEARec requested_topk must not exceed exported item_count.")
+    if any(value > export_result.item_count for value in effective["metric_cutoffs"]):
+        raise ValueError("WEARec metric cutoffs must not exceed exported item_count.")
+    valid_labels = load_exported_canonical_labels(export_result.files["valid"])
+    test_labels = load_exported_canonical_labels(export_result.files["test"])
+    if len(valid_labels) != export_result.valid_example_count:
+        raise ValueError("WEARec validation count does not match exported JSONL.")
+    if len(test_labels) != export_result.test_example_count:
+        raise ValueError("WEARec test count does not match exported JSONL.")
+    provenance = provenance_resolver(
+        Path(__file__).resolve().parents[3],
+        Path((config.victims.runtime or {})["wearec"]["repo_root"]),
+    )
+    identity: dict[str, Any] = {
+        "dataset_name": config.data.dataset_name,
+        "dataset_variant": canonical_dataset.metadata.get("variant", "full"),
+        "ordered_exported_train_jsonl_sha256": fingerprint_exported_jsonl(
+            export_result.files["train"]
+        ),
+        "ordered_exported_valid_jsonl_sha256": fingerprint_exported_jsonl(
+            export_result.files["valid"]
+        ),
+        "ordered_exported_test_jsonl_sha256": fingerprint_exported_jsonl(
+            export_result.files["test"]
+        ),
+        "item_vocabulary_fingerprint": fingerprint_item_vocabulary(
+            canonical_dataset.item_map
+        ),
+        "fingerprint_semantics": CANONICAL_FINGERPRINT_SEMANTICS,
+        "item_vocabulary_fingerprint_semantics": ITEM_VOCABULARY_FINGERPRINT_SEMANTICS,
+        "item_count": export_result.item_count,
+        "victim": "wearec",
+        "training_mode": training_mode,
+        "checkpoint_protocol": "fixed_epoch",
+        "effective_config": effective,
+        "canonical_exporter_semantics": export_result.exporter_semantics,
+        **provenance,
+        "wearec_runner_semantics_version": WEAREC_RUNNER_SEMANTICS_VERSION,
+        "wearec_artifact_contract_version": WEAREC_ARTIFACT_CONTRACT_VERSION,
+    }
+    if training_mode == "poisoned":
+        identity.update(
+            {
+                "attack_identity": attack_key_payload(
+                    config,
+                    run_type=run_type,
+                    attack_identity_context=attack_identity_context,
+                ),
+                "target_item": int(target_item),
+                "poison_budget": float(config.attack.size),
+                "effective_poisoned_seed": int(seed),
+            }
+        )
+    return {
+        "export_result": export_result,
+        "identity": identity,
+        "valid_labels": valid_labels,
+        "test_labels": test_labels,
+    }
 
 
 def _victim_stage_seed(
@@ -735,4 +926,9 @@ def _find_latest_metrics_csv(log_dir: Path) -> Path | None:
     return max(candidates, key=lambda path: path.stat().st_mtime)
 
 
-__all__ = ["VictimExecutionResult", "execute_single_victim", "victim_effective_train_seed"]
+__all__ = [
+    "VictimExecutionResult",
+    "execute_single_victim",
+    "prepare_wearec_execution",
+    "victim_effective_train_seed",
+]

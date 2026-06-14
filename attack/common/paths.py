@@ -85,6 +85,48 @@ MDHG_VICTIM_DATA_SEMANTICS = (
     "mdhg_expanded_pairs_plus_raw_sessions_v3_zero_degree_safe_unique_last_eval"
 )
 FREQREC_VICTIM_DATA_SEMANTICS = "freqrec_canonical_explicit_prefix_label_v1"
+WEAREC_VICTIM_DATA_SEMANTICS = "wearec_canonical_explicit_prefix_label_v1"
+
+_LEGACY_POISONED_VICTIM_RUN_TYPES = frozenset(
+    {"always_pos0", "dpsbr_baseline", "random_nonzero_when_possible"}
+)
+_WEAREC_POISONED_VICTIM_RUN_TYPES = frozenset(
+    {
+        CREAT_ADDITIVE_SBR_RUN_TYPE,
+        INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        INTERNAL_RANDOM_INSERTION_TRUNCATE_SUFFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        INTERNAL_RANDOM_REPLACEMENT_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        INTERNAL_RANDOM_REPLACEMENT_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        POPULAR_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE,
+        POSITION_OPT_SHARED_POLICY_RUN_TYPE,
+        POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE,
+        POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE,
+        PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE,
+        PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+        PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+        RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        RANDOM_INSERTION_THEN_CROP_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        TAIL_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        TAIL_REPLACEMENT_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
+        TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
+        TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
+        TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE,
+        VULNERABLE_ANCHOR_INTERNAL_CONSTRUCTION_RUN_TYPE,
+        *_LEGACY_POISONED_VICTIM_RUN_TYPES,
+    }
+)
+
+
+def classify_victim_training_run_type(run_type: str) -> str:
+    if run_type == "clean":
+        return "clean"
+    from attack.position_opt.bucket_selector import BUCKET_METHODS
+
+    if run_type in _WEAREC_POISONED_VICTIM_RUN_TYPES or run_type in BUCKET_METHODS:
+        return "poisoned"
+    return "unsupported"
 
 
 def shared_attack_identity_requires_poison_runner(run_type: str) -> bool:
@@ -730,7 +772,16 @@ def victim_prediction_key_payload(
     victim_attack_identity_context: Mapping[str, Any] | None = None,
     victim_effective_train_seed: int | None = None,
 ) -> dict[str, Any]:
-    if run_type == "clean":
+    if victim_name == "wearec":
+        base_context = {
+            "run_type": run_type,
+            "wearec_scientific_identity": (
+                {"state": "pre_export"}
+                if victim_attack_identity_context is None
+                else _normalize_identity_value(victim_attack_identity_context)
+            ),
+        }
+    elif run_type == "clean":
         base_context: dict[str, Any] = {
             "run_type": "clean",
             "split_key": split_key(config),
@@ -775,6 +826,8 @@ def victim_prediction_key_payload(
         payload["victim_data_semantics"] = MDHG_VICTIM_DATA_SEMANTICS
     if victim_name == "freqrec":
         payload["victim_data_semantics"] = FREQREC_VICTIM_DATA_SEMANTICS
+    if victim_name == "wearec":
+        payload["victim_data_semantics"] = WEAREC_VICTIM_DATA_SEMANTICS
     if victim_name == "srgnn":
         train_config = config.victims.params[victim_name].get("train", {})
         if (
@@ -1218,6 +1271,13 @@ def run_artifact_paths(
         "shared_train_history": shared_base / "train_history.json",
         "shared_execution_result": shared_base / "execution_result.json",
         "shared_poisoned_train": shared_base / "poisoned_train.txt",
+        "wearec_raw_predictions": local_base / "wearec_topk_raw.json",
+        "wearec_checkpoint": local_base / "wearec_checkpoint.pt",
+        "wearec_log": local_base / "wearec_stdout.log",
+        "shared_wearec_raw_predictions": shared_base / "wearec_topk_raw.json",
+        "shared_wearec_checkpoint": shared_base / "wearec_checkpoint.pt",
+        "shared_wearec_log": shared_base / "wearec_stdout.log",
+        "shared_artifact_manifest": shared_base / "artifact_manifest.json",
     }
 
 
@@ -1249,6 +1309,8 @@ __all__ = [
     "TRON_VICTIM_DATA_SEMANTICS",
     "MDHG_VICTIM_DATA_SEMANTICS",
     "FREQREC_VICTIM_DATA_SEMANTICS",
+    "WEAREC_VICTIM_DATA_SEMANTICS",
+    "classify_victim_training_run_type",
     "attack_key",
     "attack_key_payload",
     "carrier_selection_identity_payload",

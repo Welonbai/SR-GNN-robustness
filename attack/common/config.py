@@ -18,7 +18,7 @@ from attack.common.srgnn_training_protocol import (
 )
 
 
-_ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron", "mdhg", "freqrec"}
+_ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron", "mdhg", "freqrec", "wearec"}
 _ALLOWED_TARGET_BUCKETS = {"popular", "unpopular", "all"}
 _ALLOWED_EVAL_METRICS = {"precision", "recall", "mrr", "ndcg"}
 VICTIM_VALIDATION_BEST_PROTOCOL = "validation_best"
@@ -3735,6 +3735,10 @@ def _normalize_victims_config(victims: Mapping[str, Any]) -> dict[str, Any]:
         if runtime is None or "freqrec" not in runtime:
             raise ValueError("Missing required runtime configuration: victims.runtime.freqrec")
         _validate_freqrec_runtime(runtime["freqrec"], "victims.runtime.freqrec")
+    if "wearec" in enabled:
+        if runtime is None or "wearec" not in runtime:
+            raise ValueError("Missing required runtime configuration: victims.runtime.wearec")
+        _validate_wearec_runtime(runtime["wearec"], "victims.runtime.wearec")
 
     return {
         "enabled": enabled,
@@ -3771,6 +3775,10 @@ def _normalize_victim_params(value: Any, context: str) -> dict[str, dict[str, An
             primitive["train"] = _normalize_mdhg_train(train, f"{context}.{victim_name}.train")
         elif victim_name == "freqrec":
             primitive["train"] = _normalize_freqrec_train(
+                train, f"{context}.{victim_name}.train"
+            )
+        elif victim_name == "wearec":
+            primitive["train"] = _normalize_wearec_train(
                 train, f"{context}.{victim_name}.train"
             )
         normalized[victim_name] = primitive
@@ -3892,6 +3900,40 @@ def _validate_freqrec_runtime(runtime: dict[str, Any], context: str) -> None:
             )
         for key in diagnostics:
             _as_bool(diagnostics[key], f"{context}.diagnostics.{key}")
+
+
+def _validate_wearec_runtime(runtime: dict[str, Any], context: str) -> None:
+    for field in ("python_executable", "repo_root", "working_dir"):
+        value = _as_str(_require(runtime, field, context), f"{context}.{field}")
+        if not value.strip():
+            raise ValueError(f"{context}.{field} must be a non-empty string.")
+    device = _as_mapping(_require(runtime, "device", context), f"{context}.device")
+    _as_bool(_require(device, "use_gpu", f"{context}.device"), f"{context}.device.use_gpu")
+    gpu_id = _as_gpu_id(
+        _require(device, "gpu_id", f"{context}.device"),
+        f"{context}.device.gpu_id",
+    )
+    if not gpu_id.isdigit():
+        raise ValueError(
+            f"{context}.device.gpu_id must be one non-negative integer."
+        )
+    dataloader = _as_mapping(_require(runtime, "dataloader", context), f"{context}.dataloader")
+    workers = _as_int(
+        _require(dataloader, "num_workers", f"{context}.dataloader"),
+        f"{context}.dataloader.num_workers",
+    )
+    if workers != 0:
+        raise ValueError(f"{context}.dataloader.num_workers must be 0 in Phase 2.")
+    diagnostics = runtime.get("diagnostics")
+    if diagnostics is not None:
+        mapping = _as_mapping(diagnostics, f"{context}.diagnostics")
+        unknown = set(mapping) - {"per_epoch_predictions"}
+        if unknown:
+            raise ValueError(
+                f"Unknown {context}.diagnostics keys: " + ", ".join(sorted(unknown))
+            )
+        if "per_epoch_predictions" in mapping:
+            _as_bool(mapping["per_epoch_predictions"], f"{context}.diagnostics.per_epoch_predictions")
 
 
 def _normalize_srgnn_train(train: Mapping[str, Any], context: str) -> dict[str, Any]:
@@ -4197,6 +4239,62 @@ def _normalize_freqrec_train(train: Mapping[str, Any], context: str) -> dict[str
         raise ValueError(
             f"{context}.hidden_size must be divisible by num_attention_heads."
         )
+    return normalized
+
+
+def _normalize_wearec_train(train: Mapping[str, Any], context: str) -> dict[str, Any]:
+    normalized = _normalize_primitive(train, context)
+    if not isinstance(normalized, dict):
+        raise TypeError(f"Expected {context} to be a mapping.")
+    required = (
+        "epochs", "batch_size", "lr", "max_seq_length", "hidden_size",
+        "num_hidden_layers", "hidden_act", "hidden_dropout_prob",
+        "initializer_range", "num_heads", "alpha", "adam_beta1",
+        "adam_beta2", "weight_decay", "checkpoint_protocol", "metric_cutoffs",
+    )
+    for key in required:
+        _require(normalized, key, context)
+    for key in (
+        "epochs", "batch_size", "max_seq_length", "hidden_size",
+        "num_hidden_layers", "num_heads",
+    ):
+        normalized[key] = _as_int(normalized[key], f"{context}.{key}")
+        if normalized[key] <= 0:
+            raise ValueError(f"{context}.{key} must be positive.")
+    if normalized["max_seq_length"] % 2:
+        raise ValueError(f"{context}.max_seq_length must be even.")
+    if normalized["hidden_size"] % normalized["num_heads"]:
+        raise ValueError(
+            f"{context}.hidden_size must be divisible by num_heads."
+        )
+    for key in (
+        "lr", "hidden_dropout_prob", "initializer_range", "alpha",
+        "adam_beta1", "adam_beta2", "weight_decay",
+    ):
+        normalized[key] = _as_float(normalized[key], f"{context}.{key}")
+    if normalized["lr"] <= 0 or normalized["initializer_range"] <= 0:
+        raise ValueError(f"{context} lr and initializer_range must be positive.")
+    if not 0 <= normalized["hidden_dropout_prob"] < 1:
+        raise ValueError(f"{context}.hidden_dropout_prob must be in [0, 1).")
+    if not 0 < normalized["alpha"] < 1:
+        raise ValueError(f"{context}.alpha must be in (0, 1).")
+    for key in ("adam_beta1", "adam_beta2"):
+        if not 0 < normalized[key] < 1:
+            raise ValueError(f"{context}.{key} must be in (0, 1).")
+    if normalized["weight_decay"] < 0:
+        raise ValueError(f"{context}.weight_decay must be non-negative.")
+    normalized["hidden_act"] = _as_str(normalized["hidden_act"], f"{context}.hidden_act").strip().lower()
+    normalized["checkpoint_protocol"] = _as_str(
+        normalized["checkpoint_protocol"], f"{context}.checkpoint_protocol"
+    ).strip().lower()
+    if normalized["checkpoint_protocol"] != VICTIM_FIXED_EPOCH_PROTOCOL:
+        raise ValueError(f"{context}.checkpoint_protocol must be fixed_epoch.")
+    cutoffs = list(_as_int_list(normalized["metric_cutoffs"], f"{context}.metric_cutoffs"))
+    if not cutoffs or any(value <= 0 for value in cutoffs):
+        raise ValueError(f"{context}.metric_cutoffs must contain positive integers.")
+    if len(cutoffs) != len(set(cutoffs)):
+        raise ValueError(f"{context}.metric_cutoffs must not contain duplicates.")
+    normalized["metric_cutoffs"] = sorted(cutoffs)
     return normalized
 
 

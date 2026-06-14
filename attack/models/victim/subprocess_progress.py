@@ -19,6 +19,7 @@ def run_subprocess_with_epoch_progress(
     model_name: str,
     target_item: int | None,
     total_epochs: int,
+    epoch_numbers_are_one_based: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run a victim subprocess while keeping console output compact.
 
@@ -56,6 +57,7 @@ def run_subprocess_with_epoch_progress(
                 scan_text,
                 seen_epochs=seen_epochs,
                 total_epochs=int(total_epochs),
+                epoch_numbers_are_one_based=epoch_numbers_are_one_based,
             )
             scan_tail = scan_text[-128:]
         final_text = decoder.decode(b"", final=True)
@@ -65,6 +67,7 @@ def run_subprocess_with_epoch_progress(
                 scan_text,
                 seen_epochs=seen_epochs,
                 total_epochs=int(total_epochs),
+                epoch_numbers_are_one_based=epoch_numbers_are_one_based,
             )
         returncode = process.wait()
     return subprocess.CompletedProcess(list(cmd), returncode)
@@ -75,11 +78,13 @@ def _print_epoch_progress(
     *,
     seen_epochs: set[int],
     total_epochs: int,
+    epoch_numbers_are_one_based: bool = False,
 ) -> None:
     if total_epochs <= 0:
         return
     for match in _EPOCH_PATTERN.finditer(text):
-        epoch_index = int(match.group(1))
+        public_epoch = int(match.group(1))
+        epoch_index = public_epoch - 1 if epoch_numbers_are_one_based else public_epoch
         if epoch_index < 0 or epoch_index >= total_epochs:
             continue
         if epoch_index in seen_epochs:

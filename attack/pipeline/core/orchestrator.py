@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import json
 import math
+import os
 from pathlib import Path
 import shutil
 import time
@@ -34,6 +36,7 @@ from attack.common.paths import (
     shared_attack_artifact_key,
     shared_attack_artifact_key_payload,
     shared_attack_identity_requires_poison_runner,
+    shared_victim_dir,
     split_key,
     split_key_payload,
     target_cohort_key,
@@ -44,6 +47,7 @@ from attack.common.paths import (
     victim_prediction_key_payload,
 )
 from attack.data.canonical_dataset import CanonicalDataset
+from attack.data.canonical_fingerprints import file_provenance
 from attack.data.poisoned_dataset_builder import PoisonedDataset
 from attack.data.session_stats import SessionStats
 from attack.pipeline.core.evaluator import evaluate_prediction_metrics, save_metrics
@@ -61,8 +65,10 @@ from attack.pipeline.core.pipeline_utils import (
 from attack.pipeline.core.victim_execution import (
     VictimExecutionResult,
     execute_single_victim,
+    prepare_wearec_execution,
     victim_effective_train_seed,
 )
+from attack.models.victim.wearec_runner import load_wearec_prediction_payload
 
 
 PROGRESS_TIMEZONE = "Asia/Taipei"
@@ -358,7 +364,11 @@ def run_targets_and_victims(
                         victim_name,
                         run_type=run_type,
                         attack_identity_context=attack_identity_context,
-                        victim_attack_identity_context=victim_attack_identity_context,
+                        victim_attack_identity_context=(
+                            victim_result.extra["wearec"]["scientific_identity"]
+                            if victim_name == "wearec"
+                            else victim_attack_identity_context
+                        ),
                         victim_effective_train_seed=victim_cache_effective_seed,
                     ),
                 }
@@ -380,6 +390,17 @@ def run_targets_and_victims(
                 if victim_result.extra:
                     payload.update(victim_result.extra)
                 save_metrics(payload, artifacts["metrics"])
+                wearec_manifest_persisted = victim_name == "wearec"
+                if wearec_manifest_persisted:
+                    _update_artifact_manifest(
+                        artifact_manifest,
+                        target_item=int(target_item),
+                        victim_name=victim_name,
+                        artifacts=artifacts,
+                        victim_result=victim_result,
+                        reused=reused,
+                    )
+                    save_json(artifact_manifest, metadata_paths["artifact_manifest"])
                 _cleanup_victim_intermediates_if_enabled(
                     config,
                     victim_name=victim_name,
@@ -403,15 +424,16 @@ def run_targets_and_victims(
                 )
                 current_cell_committed = True
 
-                _update_artifact_manifest(
-                    artifact_manifest,
-                    target_item=int(target_item),
-                    victim_name=victim_name,
-                    artifacts=artifacts,
-                    victim_result=victim_result,
-                    reused=reused,
-                )
-                save_json(artifact_manifest, metadata_paths["artifact_manifest"])
+                if not wearec_manifest_persisted:
+                    _update_artifact_manifest(
+                        artifact_manifest,
+                        target_item=int(target_item),
+                        victim_name=victim_name,
+                        artifacts=artifacts,
+                        victim_result=victim_result,
+                        reused=reused,
+                    )
+                    save_json(artifact_manifest, metadata_paths["artifact_manifest"])
                 summary = _refresh_summary_snapshots(
                     config,
                     context=context,
@@ -1908,7 +1930,47 @@ def _maybe_reuse_or_execute_victim(
     predictions_path: Path,
     artifacts: dict[str, Path],
     victim_attack_identity_context: Mapping[str, object] | None = None,
+    wearec_provenance_resolver: Callable[..., Mapping[str, Any]] | None = None,
 ) -> tuple[VictimExecutionResult, bool]:
+    prepared_wearec = None
+    if victim_name == "wearec":
+        prepare_kwargs: dict[str, Any] = {}
+        if wearec_provenance_resolver is not None:
+            prepare_kwargs["provenance_resolver"] = wearec_provenance_resolver
+        prepared_wearec = prepare_wearec_execution(
+            config,
+            run_type=run_type,
+            canonical_dataset=canonical_dataset,
+            train_prefixes=poisoned_sessions,
+            train_labels=poisoned_labels,
+            run_dir=run_dir,
+            requested_topk=max(int(value) for value in eval_topk),
+            target_item=target_item,
+            attack_identity_context=victim_attack_identity_context,
+            **prepare_kwargs,
+        )
+        identity = prepared_wearec["identity"]
+        shared_base = shared_victim_dir(
+            config,
+            run_type=run_type,
+            target_id=target_item,
+            victim_name=victim_name,
+            victim_attack_identity_context=identity,
+            victim_effective_train_seed=int(identity["effective_config"]["seed"]),
+        )
+        artifacts.update(
+            {
+                "shared_dir": shared_base,
+                "shared_predictions": shared_base / "predictions.json",
+                "shared_train_history": shared_base / "train_history.json",
+                "shared_execution_result": shared_base / "execution_result.json",
+                "shared_poisoned_train": shared_base / "poisoned_train.txt",
+                "shared_wearec_raw_predictions": shared_base / "wearec_topk_raw.json",
+                "shared_wearec_checkpoint": shared_base / "wearec_checkpoint.pt",
+                "shared_wearec_log": shared_base / "wearec_stdout.log",
+                "shared_artifact_manifest": shared_base / "artifact_manifest.json",
+            }
+        )
     _guard_clean_shared_cache_bootstrap(
         run_type=run_type,
         run_coverage=run_coverage,
@@ -1925,6 +1987,12 @@ def _maybe_reuse_or_execute_victim(
         predictions_path=predictions_path,
         canonical_dataset=canonical_dataset,
         eval_topk=eval_topk,
+        wearec_identity=(
+            prepared_wearec["identity"] if prepared_wearec is not None else None
+        ),
+        wearec_expected_labels=(
+            prepared_wearec["test_labels"] if prepared_wearec is not None else None
+        ),
     )
     if reused is None and victim_attack_identity_context is not None:
         reused = _load_legacy_pts_cem_victim_result(
@@ -1955,12 +2023,23 @@ def _maybe_reuse_or_execute_victim(
         eval_topk=eval_topk,
         srg_nn_export_paths=srg_nn_export_paths,
         predictions_path=predictions_path,
+        prepared_wearec=prepared_wearec,
     )
     _persist_shared_victim_result(
         run_type=run_type,
         victim_result=victim_result,
         artifacts=artifacts,
     )
+    if victim_name == "wearec":
+        persisted = _validate_wearec_shared_entry(
+            artifacts=artifacts,
+            identity=prepared_wearec["identity"],
+            expected_labels=prepared_wearec["test_labels"],
+        )
+        if persisted is None:
+            raise RuntimeError(
+                "Persisted WEARec shared result failed complete-entry validation."
+            )
     return victim_result, False
 
 
@@ -1975,13 +2054,27 @@ def _load_shared_victim_result(
     predictions_path: Path,
     canonical_dataset: CanonicalDataset,
     eval_topk: Sequence[int],
+    wearec_identity: Mapping[str, Any] | None = None,
+    wearec_expected_labels: Sequence[int] | None = None,
 ) -> VictimExecutionResult | None:
     shared_predictions = artifacts["shared_predictions"]
     shared_execution_result = artifacts["shared_execution_result"]
     if not shared_predictions.exists() or not shared_execution_result.exists():
         return None
-
-    if victim_name == "freqrec":
+    validated_wearec: Mapping[str, Any] | None = None
+    if victim_name == "wearec":
+        if wearec_identity is None or wearec_expected_labels is None:
+            return None
+        validated_wearec = _validate_wearec_shared_entry(
+            artifacts=artifacts,
+            identity=wearec_identity,
+            expected_labels=wearec_expected_labels,
+        )
+        if validated_wearec is None:
+            return None
+        execution_payload = validated_wearec["execution_payload"]
+        predictions_payload = validated_wearec["predictions_payload"]
+    elif victim_name == "freqrec":
         try:
             execution_payload = load_json(shared_execution_result)
             predictions_payload = load_json(shared_predictions)
@@ -1993,7 +2086,7 @@ def _load_shared_victim_result(
     if not isinstance(execution_payload, dict) or not isinstance(
         predictions_payload, dict
     ):
-        if victim_name == "freqrec":
+        if victim_name in {"freqrec", "wearec"}:
             return None
         raise ValueError("Shared victim artifacts are malformed.")
     if victim_name == "freqrec" and not _valid_freqrec_shared_result(
@@ -2005,13 +2098,21 @@ def _load_shared_victim_result(
         eval_topk=eval_topk,
     ):
         return None
-
     _save_reused_predictions_payload(
         predictions_payload,
         predictions_path=predictions_path,
         target_item=target_item,
     )
     _copy_if_exists(artifacts["shared_train_history"], artifacts["train_history"])
+    if victim_name == "wearec":
+        _copy_if_exists(
+            artifacts["shared_wearec_raw_predictions"],
+            artifacts["wearec_raw_predictions"],
+        )
+        _copy_if_exists(
+            artifacts["shared_wearec_checkpoint"], artifacts["wearec_checkpoint"]
+        )
+        _copy_if_exists(artifacts["shared_wearec_log"], artifacts["wearec_log"])
     poisoned_train_local: Path | None = None
     if artifacts["shared_poisoned_train"].exists():
         _copy_if_exists(artifacts["shared_poisoned_train"], artifacts["poisoned_train"])
@@ -2039,6 +2140,90 @@ def _load_shared_victim_result(
         extra=extra,
         poisoned_train_path=poisoned_train_local,
     )
+
+
+def _validate_wearec_shared_entry(
+    *,
+    artifacts: Mapping[str, Path],
+    identity: Mapping[str, Any],
+    expected_labels: Sequence[int],
+) -> dict[str, Any] | None:
+    """Validate a complete WEARec shared entry without mutating local state."""
+    required_paths = {
+        "predictions": artifacts["shared_predictions"],
+        "raw_predictions": artifacts["shared_wearec_raw_predictions"],
+        "checkpoint": artifacts["shared_wearec_checkpoint"],
+        "log": artifacts["shared_wearec_log"],
+        "execution_result": artifacts["shared_execution_result"],
+    }
+    if any(not path.is_file() or path.stat().st_size <= 0 for path in required_paths.values()):
+        return None
+    manifest_path = artifacts["shared_artifact_manifest"]
+    if not manifest_path.is_file() or manifest_path.stat().st_size <= 0:
+        return None
+    try:
+        manifest = load_json(manifest_path)
+        execution_payload = load_json(required_paths["execution_result"])
+        predictions_payload = load_json(required_paths["predictions"])
+    except (OSError, ValueError):
+        return None
+    effective = identity.get("effective_config")
+    if (
+        not isinstance(manifest, Mapping)
+        or not isinstance(execution_payload, Mapping)
+        or not isinstance(predictions_payload, Mapping)
+        or manifest.get("victim") != "wearec"
+        or manifest.get("scientific_identity") != identity
+        or manifest.get("effective_config") != effective
+        or execution_payload.get("scientific_identity") != identity
+        or not isinstance(effective, Mapping)
+    ):
+        return None
+    retained = manifest.get("retained_artifacts")
+    if not isinstance(retained, Mapping):
+        return None
+    for name, path in required_paths.items():
+        expected = retained.get(name)
+        if not isinstance(expected, Mapping):
+            return None
+        try:
+            actual = file_provenance(path)
+        except (OSError, ValueError):
+            return None
+        if (
+            type(expected.get("size")) is not int
+            or expected["size"] != actual["size"]
+            or expected.get("sha256") != actual["sha256"]
+        ):
+            return None
+    try:
+        raw_payload = load_wearec_prediction_payload(
+            required_paths["raw_predictions"],
+            item_count=int(identity["item_count"]),
+            expected_labels=expected_labels,
+            effective_config=effective,
+            expected_training_mode=str(identity["training_mode"]),
+            expected_dataset_name=str(identity["dataset_name"]),
+        )
+    except (KeyError, OSError, TypeError, ValueError, RuntimeError):
+        return None
+    raw_rankings = [row["items"] for row in raw_payload["rankings"]]
+    if (
+        predictions_payload.get("victim") != "wearec"
+        or type(predictions_payload.get("topk")) is not int
+        or predictions_payload["topk"] != effective["requested_topk"]
+        or predictions_payload.get("available") is not True
+        or type(predictions_payload.get("count")) is not int
+        or predictions_payload["count"] != len(expected_labels)
+        or predictions_payload.get("rankings") != raw_rankings
+    ):
+        return None
+    return {
+        "manifest": manifest,
+        "execution_payload": execution_payload,
+        "predictions_payload": predictions_payload,
+        "raw_payload": raw_payload,
+    }
 
 
 def _valid_freqrec_shared_result(
@@ -2375,8 +2560,20 @@ def _persist_shared_victim_result(
     artifacts: dict[str, Path],
 ) -> None:
     artifacts["shared_dir"].mkdir(parents=True, exist_ok=True)
-    _copy_if_exists(artifacts["predictions"], artifacts["shared_predictions"])
+    if "wearec" in victim_result.extra:
+        _atomic_copy(artifacts["predictions"], artifacts["shared_predictions"])
+    else:
+        _copy_if_exists(artifacts["predictions"], artifacts["shared_predictions"])
     _copy_if_exists(artifacts["train_history"], artifacts["shared_train_history"])
+    if "wearec" in victim_result.extra:
+        _atomic_copy(
+            artifacts["wearec_raw_predictions"],
+            artifacts["shared_wearec_raw_predictions"],
+        )
+        _atomic_copy(
+            artifacts["wearec_checkpoint"], artifacts["shared_wearec_checkpoint"]
+        )
+        _atomic_copy(artifacts["wearec_log"], artifacts["shared_wearec_log"])
     shared_poisoned_train = None
     if (
         victim_result.poisoned_train_path is not None
@@ -2386,8 +2583,7 @@ def _persist_shared_victim_result(
             Path(victim_result.poisoned_train_path), artifacts["shared_poisoned_train"]
         )
         shared_poisoned_train = str(artifacts["shared_poisoned_train"])
-    save_json(
-        {
+    execution_payload = {
             "extra": _shared_execution_extra(
                 run_type=run_type,
                 extra=victim_result.extra,
@@ -2399,9 +2595,36 @@ def _persist_shared_victim_result(
                 else None
             ),
             "poisoned_train_path": shared_poisoned_train,
-        },
-        artifacts["shared_execution_result"],
-    )
+        }
+    if "wearec" in victim_result.extra:
+        identity = victim_result.extra["wearec"]["scientific_identity"]
+        execution_payload["scientific_identity"] = identity
+    if "wearec" in victim_result.extra:
+        _save_json_atomic(execution_payload, artifacts["shared_execution_result"])
+    else:
+        save_json(execution_payload, artifacts["shared_execution_result"])
+    if "wearec" in victim_result.extra:
+        retained = {
+            "predictions": file_provenance(artifacts["shared_predictions"]),
+            "raw_predictions": file_provenance(
+                artifacts["shared_wearec_raw_predictions"]
+            ),
+            "checkpoint": file_provenance(artifacts["shared_wearec_checkpoint"]),
+            "log": file_provenance(artifacts["shared_wearec_log"]),
+            "execution_result": file_provenance(
+                artifacts["shared_execution_result"]
+            ),
+        }
+        _save_json_atomic(
+            {
+                "schema_version": 1,
+                "victim": "wearec",
+                "scientific_identity": identity,
+                "effective_config": identity["effective_config"],
+                "retained_artifacts": retained,
+            },
+            artifacts["shared_artifact_manifest"],
+        )
 
 
 def _cleanup_victim_intermediates_if_enabled(
@@ -2460,6 +2683,11 @@ def _victim_intermediate_cleanup_paths(
             run_dir / "freqrec_epoch_metrics.jsonl",
             run_dir / "freqrec_per_epoch_predictions",
         ]
+    if victim_name == "wearec":
+        return [
+            run_dir / "export" / "wearec",
+            run_dir / "wearec_internal_output",
+        ]
     if victim_name == "srgnn":
         return [
             run_dir / "best_validation.pt",
@@ -2517,6 +2745,30 @@ def _update_artifact_manifest(
             "poisoned_train": _repo_relative_path(artifacts["shared_poisoned_train"]),
         },
     }
+    if victim_name == "wearec":
+        target_payload[victim_name]["local"].update(
+            {
+                "raw_predictions": _repo_relative_path(
+                    artifacts["wearec_raw_predictions"]
+                ),
+                "checkpoint": _repo_relative_path(artifacts["wearec_checkpoint"]),
+                "log": _repo_relative_path(artifacts["wearec_log"]),
+            }
+        )
+        target_payload[victim_name]["shared"].update(
+            {
+                "raw_predictions": _repo_relative_path(
+                    artifacts["shared_wearec_raw_predictions"]
+                ),
+                "checkpoint": _repo_relative_path(
+                    artifacts["shared_wearec_checkpoint"]
+                ),
+                "log": _repo_relative_path(artifacts["shared_wearec_log"]),
+                "artifact_manifest": _repo_relative_path(
+                    artifacts["shared_artifact_manifest"]
+                ),
+            }
+        )
     generated_configs = artifact_manifest.setdefault("generated_configs", {})
     if isinstance(generated_configs, dict) and victim_result.extra:
         generated_configs[f"{target_key}:{victim_name}"] = victim_result.extra
@@ -2527,6 +2779,34 @@ def _copy_if_exists(source: Path, destination: Path) -> None:
         return
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, destination)
+
+
+def _atomic_copy(source: Path, destination: Path) -> None:
+    if not source.is_file():
+        raise FileNotFoundError(f"Required retained artifact is missing: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp = destination.parent / f".{destination.name}.{uuid4().hex}.tmp"
+    try:
+        shutil.copyfile(source, temp)
+        os.replace(temp, destination)
+    finally:
+        if temp.exists():
+            temp.unlink()
+
+
+def _save_json_atomic(payload: Mapping[str, Any], destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp = destination.parent / f".{destination.name}.{uuid4().hex}.tmp"
+    try:
+        with temp.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, destination)
+    finally:
+        if temp.exists():
+            temp.unlink()
 
 
 def _shared_execution_extra(
