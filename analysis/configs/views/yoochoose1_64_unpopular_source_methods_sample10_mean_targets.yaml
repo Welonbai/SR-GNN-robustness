@@ -1,12 +1,12 @@
 name: mean_targets
 
-input: results/comparisons/yoochoose1_64_unpopular_source_methods_sample10_creat_no_pos0/merged_long_table.csv
-output: results/comparisons/yoochoose1_64_unpopular_source_methods_sample10_creat_no_pos0/mean_targets
+input: results/comparisons/yoochoose1_64_unpopular_source_methods_sample10/merged_long_table.csv
+output: results/comparisons/yoochoose1_64_unpopular_source_methods_sample10/mean_targets
 
 filters:
   target_item: [1440, 4092, 8637, 8829, 14514, 16571, 17290, 32070, 33739, 35833]
   victim_model: [srgnn, miasrec, tron]
-  attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem, creat_no_pos0]
+  attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem]
   poison_model: srgnn
   target_type: unpopular
   attack_size: 0.01
@@ -38,6 +38,8 @@ mean_std:
 ground_truth_relative_to_clean:
   enabled: true
   baseline_attack_method: clean
+  value_display: absolute
+  highlight: text
   ignore_pairing_columns:
     - run_id
     - replacement_topk_ratio

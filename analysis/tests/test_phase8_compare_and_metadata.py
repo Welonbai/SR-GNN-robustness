@@ -1172,6 +1172,8 @@ def test_view_table_builder_transforms_ground_truth_relative_to_clean_before_agg
         "enabled": True,
         "baseline_attack_method": "clean",
         "ignore_pairing_columns": ["run_id"],
+        "value_display": "signed_percent",
+        "highlight": "fill",
     }
 
 
@@ -1440,6 +1442,76 @@ def test_renderer_formats_gt_relative_cells_as_signed_percent_and_colors_by_sign
     assert negative_color is not None
     assert positive_color != negative_color
     assert targeted_color is None
+
+
+def test_renderer_keeps_absolute_gt_values_and_colors_text_relative_to_clean() -> None:
+    dataframe = pd.DataFrame(
+        [
+            {"victim_model": "tron", "attack_method": "clean", "ground_truth": 0.35},
+            {"victim_model": "tron", "attack_method": "random_nz", "ground_truth": 0.30},
+            {"victim_model": "tron", "attack_method": "generated_direct_cem", "ground_truth": 0.40},
+        ]
+    )
+    table_structure = TableStructure(
+        row_levels=["victim_model", "attack_method"],
+        col_levels=["metric_scope"],
+        row_tuples=[
+            ("tron", "clean"),
+            ("tron", "random_nz"),
+            ("tron", "generated_direct_cem"),
+        ],
+        column_tuples=[("ground_truth",)],
+        row_column_names=["victim_model", "attack_method"],
+        value_column_names=["ground_truth"],
+    )
+    meta_payload = {
+        "ground_truth_relative_to_clean": {
+            "enabled": True,
+            "baseline_attack_method": "clean",
+            "ignore_pairing_columns": ["run_id"],
+            "value_display": "absolute",
+            "highlight": "text",
+        },
+        "context": {},
+        "effective_filters": {"metric_name": "recall", "k": 10},
+        "split_values": {},
+    }
+
+    presentation = build_data_cell_presentation(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        meta_payload=meta_payload,
+    )
+    display_dataframe = format_dataframe_for_display(
+        dataframe,
+        identifier_columns={"victim_model", "attack_method"},
+        round_digits=6,
+        value_alias={},
+        table_structure=table_structure,
+        data_cell_presentation=presentation,
+    )
+
+    assert presentation.display_modes == [["absolute"], ["absolute"], ["absolute"]]
+    assert presentation.text_colors == [[None], ["#C00000"], ["#008000"]]
+    assert display_dataframe["ground_truth"].tolist() == [
+        "0.350000",
+        "0.300000",
+        "0.400000",
+    ]
+    for row_index in range(3):
+        assert (
+            resolve_data_cell_fill_color(
+                table_structure=table_structure,
+                row_tuple=table_structure.row_tuples[row_index],
+                column_tuple=table_structure.column_tuples[0],
+                raw_value=dataframe.iloc[row_index]["ground_truth"],
+                display_mode=presentation.display_modes[row_index][0],
+                signed_percent_heatmap_scale=presentation.signed_percent_scales[row_index][0],
+                leaf_column_fill_color=None,
+                scope_colors={},
+            )
+            is None
+        )
 
 
 def test_renderer_formats_absolute_mean_std_cells_with_separate_std_digits() -> None:

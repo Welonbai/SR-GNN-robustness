@@ -48,6 +48,8 @@ RELATIVE_HEATMAP_NEUTRAL_COLOR = "#FFFFFF"
 RELATIVE_HEATMAP_POSITIVE_COLOR = "#2CA25F"
 RELATIVE_HEATMAP_NEGATIVE_COLOR = "#DE2D26"
 RELATIVE_HEATMAP_STRENGTH = 0.5
+RELATIVE_TEXT_POSITIVE_COLOR = "#008000"
+RELATIVE_TEXT_NEGATIVE_COLOR = "#C00000"
 
 
 class AnalysisError(ValueError):
@@ -161,6 +163,7 @@ class DataCellPresentation:
 
     display_modes: list[list[str]]
     signed_percent_scales: list[list[SignedPercentHeatmapScale | None]]
+    text_colors: list[list[str | None]]
 
 
 @dataclass(frozen=True)
@@ -719,6 +722,7 @@ def draw_structured_table(
                 text=str(dataframe.iloc[row_index][value_column_name]),
                 font_weight="bold" if (row_index, leaf_column_index) in best_value_cells else "normal",
                 underline_text=(row_index, leaf_column_index) in second_best_value_cells,
+                text_color=data_cell_presentation.text_colors[row_index][leaf_column_index],
                 facecolor=resolve_data_cell_fill_color(
                     table_structure=table_structure,
                     row_tuple=table_structure.row_tuples[row_index],
@@ -760,6 +764,7 @@ def draw_cell_block(
     total_table_width: float,
     total_row_count: int,
     underline_text: bool = False,
+    text_color: str | None = None,
 ) -> None:
     """Draw one rectangular cell or merged block and its text."""
     edge_color = "black" if render_spec.table.show_grid else render_spec.figure.background_color
@@ -784,7 +789,7 @@ def draw_cell_block(
         text,
         ha=render_spec.table.cell_align,
         va="center",
-        color=render_spec.table.text_color,
+        color=text_color or render_spec.table.text_color,
         fontsize=resolve_font_size(
             text=text,
             cell_width=x1 - x0,
@@ -808,7 +813,7 @@ def draw_cell_block(
             y1=y1,
             text=text,
             align=render_spec.table.cell_align,
-            color=render_spec.table.text_color,
+            color=text_color or render_spec.table.text_color,
         )
 
 
@@ -1204,6 +1209,10 @@ def validate_data_cell_presentation(
         raise AnalysisError(
             "Resolved GT heatmap scale rows do not match the rendered dataframe row count."
         )
+    if len(data_cell_presentation.text_colors) != len(dataframe):
+        raise AnalysisError(
+            "Resolved data-cell text-color rows do not match the rendered dataframe row count."
+        )
     expected_column_count = len(table_structure.value_column_names)
     for row_index, row_modes in enumerate(data_cell_presentation.display_modes):
         if len(row_modes) != expected_column_count:
@@ -1217,6 +1226,12 @@ def validate_data_cell_presentation(
         if len(row_scales) != expected_column_count:
             raise AnalysisError(
                 "Resolved GT heatmap scale columns do not match the rendered value-column "
+                f"count at row {row_index}."
+            )
+    for row_index, row_colors in enumerate(data_cell_presentation.text_colors):
+        if len(row_colors) != expected_column_count:
+            raise AnalysisError(
+                "Resolved data-cell text-color columns do not match the rendered value-column "
                 f"count at row {row_index}."
             )
  
@@ -1249,6 +1264,7 @@ def build_data_cell_presentation(
     """Resolve one per-cell display-mode matrix plus GT-relative heatmap scaling."""
     display_modes: list[list[str]] = []
     signed_percent_scales: list[list[SignedPercentHeatmapScale | None]] = []
+    text_colors: list[list[str | None]] = []
     positive_abs_max_by_group: dict[tuple[tuple[Any, ...], int], float] = {}
     negative_abs_max_by_group: dict[tuple[tuple[Any, ...], int], float] = {}
 
@@ -1290,6 +1306,7 @@ def build_data_cell_presentation(
     for row_index, row_tuple in enumerate(table_structure.row_tuples):
         row_display_modes: list[str] = []
         row_signed_percent_scales: list[SignedPercentHeatmapScale | None] = []
+        row_text_colors: list[str | None] = []
         comparison_group_key = build_signed_percent_comparison_group_key(
             row_tuple=row_tuple,
             table_structure=table_structure,
@@ -1312,12 +1329,25 @@ def build_data_cell_presentation(
                 )
             else:
                 row_signed_percent_scales.append(None)
+            row_text_colors.append(
+                resolve_data_cell_text_color(
+                    dataframe=dataframe,
+                    table_structure=table_structure,
+                    row_index=row_index,
+                    leaf_column_index=leaf_column_index,
+                    row_tuple=row_tuple,
+                    column_tuple=column_tuple,
+                    meta_payload=meta_payload,
+                )
+            )
         display_modes.append(row_display_modes)
         signed_percent_scales.append(row_signed_percent_scales)
+        text_colors.append(row_text_colors)
 
     return DataCellPresentation(
         display_modes=display_modes,
         signed_percent_scales=signed_percent_scales,
+        text_colors=text_colors,
     )
 
 
@@ -1378,7 +1408,105 @@ def resolve_data_cell_display_mode(
         == ground_truth_relative_to_clean_config["baseline_attack_method"]
     ):
         return ABSOLUTE_VALUE_DISPLAY_MODE
+    if ground_truth_relative_to_clean_config["value_display"] == ABSOLUTE_VALUE_DISPLAY_MODE:
+        return ABSOLUTE_VALUE_DISPLAY_MODE
     return SIGNED_PERCENT_VALUE_DISPLAY_MODE
+
+
+def resolve_data_cell_text_color(
+    *,
+    dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    row_index: int,
+    leaf_column_index: int,
+    row_tuple: tuple[Any, ...],
+    column_tuple: tuple[Any, ...],
+    meta_payload: Mapping[str, Any],
+) -> str | None:
+    """Color absolute GT values by their direction relative to the clean baseline."""
+    config = resolve_ground_truth_relative_to_clean_config(meta_payload)
+    if config is None or config["highlight"] != "text":
+        return None
+
+    metric_scope = resolve_dimension_value_from_cell_or_meta(
+        dimension_name=METRIC_SCOPE_COLUMN,
+        table_structure=table_structure,
+        row_tuple=row_tuple,
+        column_tuple=column_tuple,
+        meta_payload=meta_payload,
+    )
+    if stringify_alias_lookup_value(metric_scope) != GROUND_TRUTH_SCOPE:
+        return None
+
+    attack_method = resolve_dimension_value_from_cell_or_meta(
+        dimension_name="attack_method",
+        table_structure=table_structure,
+        row_tuple=row_tuple,
+        column_tuple=column_tuple,
+        meta_payload=meta_payload,
+    )
+    if stringify_alias_lookup_value(attack_method) == config["baseline_attack_method"]:
+        return None
+
+    current_value = coerce_numeric_value(
+        dataframe.iloc[row_index][table_structure.value_column_names[leaf_column_index]]
+    )
+    baseline_value = find_baseline_cell_value(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        row_tuple=row_tuple,
+        column_tuple=column_tuple,
+        baseline_attack_method=config["baseline_attack_method"],
+    )
+    if current_value is None or baseline_value is None or are_close(current_value, baseline_value):
+        return None
+    if current_value > baseline_value:
+        return RELATIVE_TEXT_POSITIVE_COLOR
+    return RELATIVE_TEXT_NEGATIVE_COLOR
+
+
+def find_baseline_cell_value(
+    *,
+    dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    row_tuple: tuple[Any, ...],
+    column_tuple: tuple[Any, ...],
+    baseline_attack_method: str,
+) -> float | None:
+    """Find the clean value matching all rendered dimensions except attack_method."""
+    current_dimensions = dict(zip(table_structure.row_levels, row_tuple, strict=True))
+    current_dimensions.update(zip(table_structure.col_levels, column_tuple, strict=True))
+    if "attack_method" not in current_dimensions:
+        return None
+
+    for candidate_row_index, candidate_row_tuple in enumerate(table_structure.row_tuples):
+        candidate_row_dimensions = dict(
+            zip(table_structure.row_levels, candidate_row_tuple, strict=True)
+        )
+        for candidate_column_index, candidate_column_tuple in enumerate(
+            table_structure.column_tuples
+        ):
+            candidate_dimensions = dict(candidate_row_dimensions)
+            candidate_dimensions.update(
+                zip(table_structure.col_levels, candidate_column_tuple, strict=True)
+            )
+            if (
+                stringify_alias_lookup_value(candidate_dimensions.get("attack_method"))
+                != baseline_attack_method
+            ):
+                continue
+            if any(
+                candidate_dimensions.get(name) != value
+                for name, value in current_dimensions.items()
+                if name != "attack_method"
+            ):
+                continue
+            return coerce_numeric_value(
+                dataframe.iloc[candidate_row_index][
+                    table_structure.value_column_names[candidate_column_index]
+                ]
+            )
+    return None
 
 
 def resolve_ground_truth_relative_to_clean_config(
@@ -1398,7 +1526,22 @@ def resolve_ground_truth_relative_to_clean_config(
             "The bundle metadata ground_truth_relative_to_clean block must contain a non-empty "
             "'baseline_attack_method'."
         )
-    return {"baseline_attack_method": baseline_attack_method.strip()}
+    value_display = raw_config.get("value_display", SIGNED_PERCENT_VALUE_DISPLAY_MODE)
+    highlight = raw_config.get("highlight", "fill")
+    if value_display not in {SIGNED_PERCENT_VALUE_DISPLAY_MODE, ABSOLUTE_VALUE_DISPLAY_MODE}:
+        raise AnalysisError(
+            "The bundle metadata ground_truth_relative_to_clean.value_display must be "
+            "'signed_percent' or 'absolute'."
+        )
+    if highlight not in {"fill", "text"}:
+        raise AnalysisError(
+            "The bundle metadata ground_truth_relative_to_clean.highlight must be 'fill' or 'text'."
+        )
+    return {
+        "baseline_attack_method": baseline_attack_method.strip(),
+        "value_display": value_display,
+        "highlight": highlight,
+    }
 
 
 def resolve_dimension_value_from_cell_or_meta(

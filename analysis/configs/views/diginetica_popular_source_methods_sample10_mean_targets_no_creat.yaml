@@ -38,6 +38,8 @@ mean_std:
 ground_truth_relative_to_clean:
   enabled: true
   baseline_attack_method: clean
+  value_display: absolute
+  highlight: text
   ignore_pairing_columns:
     - run_id
     - replacement_topk_ratio

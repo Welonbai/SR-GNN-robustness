@@ -96,6 +96,31 @@ def _minimal_context(config, *, run_type: str) -> RunContext:
     )
 
 
+def _with_mdhg(config):
+    params = dict(config.victims.params)
+    params["mdhg"] = {
+        "train": {
+            "epochs": 2,
+            "batch_size": 4,
+            "lr": 0.001,
+            "checkpoint_protocol": "fixed_epoch",
+            "validation_enabled": False,
+            "export_model": "last",
+        }
+    }
+    runtime = dict(config.victims.runtime or {})
+    runtime["mdhg"] = {
+        "python_executable": "python",
+        "repo_root": "third_party/mdhg",
+        "working_dir": "third_party/mdhg",
+        "device": {"use_gpu": True, "gpu_id": "0"},
+    }
+    return replace(
+        config,
+        victims=replace(config.victims, params=params, runtime=runtime),
+    )
+
+
 def _expected_target_prefix(config) -> list[int]:
     cohort = build_ordered_target_cohort(_sample_stats(), config)
     return [int(item) for item in cohort["ordered_targets"][: int(config.targets.count)]]
@@ -218,6 +243,48 @@ def test_appending_new_victim_only_executes_missing_cells_for_that_victim(monkey
         assert set(summary_current["targets"][str(target_item)]["victims"]) == {"miasrec", "tron"}
     assert progress_payload["is_authoritative"] is False
     assert progress_payload["requested_victims"] == ["miasrec", "tron"]
+
+
+def test_appending_mdhg_only_executes_missing_mdhg_cells(monkeypatch) -> None:
+    with _phase5_temp_root() as temp_root:
+        initial_config = _config_for_temp_root(
+            temp_root,
+            count=2,
+            victims=("srgnn", "miasrec", "tron"),
+        )
+        expanded_config = _with_mdhg(
+            replace(
+                initial_config,
+                victims=replace(
+                    initial_config.victims,
+                    enabled=("srgnn", "miasrec", "tron", "mdhg"),
+                ),
+            )
+        )
+        context = _minimal_context(initial_config, run_type="clean")
+
+        first_calls: list[tuple[int, str]] = []
+        _install_fake_execution(monkeypatch, calls=first_calls)
+        run_targets_and_victims(
+            initial_config,
+            config_path=None,
+            context=context,
+            run_type="clean",
+            build_poisoned=_build_poisoned,
+        )
+
+        append_calls: list[tuple[int, str]] = []
+        _install_fake_execution(monkeypatch, calls=append_calls)
+        run_targets_and_victims(
+            expanded_config,
+            config_path=None,
+            context=context,
+            run_type="clean",
+            build_poisoned=_build_poisoned,
+        )
+
+    expected_targets = _expected_target_prefix(expanded_config)
+    assert append_calls == [(int(target_item), "mdhg") for target_item in expected_targets]
 
 
 def test_rerun_with_same_prefix_and_expanded_victim_set_does_not_rerun_completed_cells(

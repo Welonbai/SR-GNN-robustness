@@ -8,21 +8,17 @@ defaults:
 
 jobs:
   - summary: outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_clean_sample10_popular/run_group_2032e2af74/summary_current.json
-    output_name: yoochoose1_64_clean_popular_source_methods_sample10_creat_no_pos0
+    output_name: yoochoose1_64_clean_popular_source_methods_sample10
     attack_method_override: clean
 
   - summary: outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_attack_random_nonzero_when_possible_ratio1_sample_popular/run_group_4d1031540c/summary_current.json
-    output_name: yoochoose1_64_randomnz_popular_source_methods_sample10_creat_no_pos0
+    output_name: yoochoose1_64_randomnz_popular_source_methods_sample10
     attack_method_override: random_nz
 
   - summary: outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_attack_ptscem_direct_guassian_mlp_internal_sample_popular/run_group_7002c01c15/summary_current.json
-    output_name: yoochoose1_64_generated_direct_cem_popular_source_methods_sample10_creat_no_pos0
+    output_name: yoochoose1_64_generated_direct_cem_popular_source_methods_sample10
     attack_method_override: generated_direct_cem
 
   - summary: outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_attack_ptscem_direct_guassian_mlp_internal_sample_popular_copy_train/run_group_ba59b409bc/summary_current.json
-    output_name: yoochoose1_64_copy_direct_cem_popular_source_methods_sample10_creat_no_pos0
+    output_name: yoochoose1_64_copy_direct_cem_popular_source_methods_sample10
     attack_method_override: copy_direct_cem
-
-  - summary: outputs/runs/yoochoose1_64/yoochoose1_64_valbest_attack_create_copy_source_popular_sample/run_group_1fe75b96ac/summary_current.json
-    output_name: yoochoose1_64_creat_no_pos0_popular_source_methods_sample10
-    attack_method_override: creat_no_pos0

@@ -1,9 +1,9 @@
-style_name: yoochoose1_64_unpopular_source_methods_sample10_creat_no_pos0_mean_targets
+style_name: yoochoose1_64_unpopular_source_methods_sample10_mean_targets
 
 output_format: png
 
 title:
-  template: "Yoochoose 1/64 unpopular | mean of 10 target items | 3 victims | CREAT no position 0"
+  template: "Yoochoose 1/64 unpopular | mean of 10 target items | 3 victims"
   align: center
   font_size: 12
   color: black
@@ -38,7 +38,6 @@ table:
       random_nz: randomNZ
       generated_direct_cem: generated cem
       copy_direct_cem: copy cem
-      creat_no_pos0: creat no-pos0
     victim_model:
       miasrec: MiaSRec
       srgnn: SRGNN
@@ -54,7 +53,7 @@ table:
 
   dimension_value_orders:
     victim_model: [srgnn, miasrec, tron]
-    attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem, creat_no_pos0]
+    attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem]
 
   best_value_bolding:
     compare_along: rows

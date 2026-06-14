@@ -539,6 +539,50 @@ def test_shared_pts_cem_key_excludes_victims_enabled() -> None:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def test_shared_pts_cem_key_excludes_mdhg_runtime_diagnostics() -> None:
+    config = load_config(CONFIG_PATH)
+    runtime = dict(config.victims.runtime or {})
+    runtime["mdhg"] = {
+        "python_executable": "python",
+        "repo_root": "third_party/mdhg",
+        "working_dir": "third_party/mdhg",
+        "device": {"use_gpu": True, "gpu_id": "0"},
+    }
+    base = replace(config, victims=replace(config.victims, runtime=runtime))
+    diagnostic_runtime = dict(runtime)
+    diagnostic_runtime["mdhg"] = {
+        **runtime["mdhg"],
+        "diagnostics": {
+            "epoch_metrics": True,
+            "per_epoch_predictions": True,
+        },
+    }
+    diagnostic = replace(
+        base,
+        victims=replace(base.victims, runtime=diagnostic_runtime),
+    )
+    work_dir = _make_test_output_dir()
+    try:
+        fake_sessions, poison_model = _write_identity_inputs(work_dir)
+        base_identity = build_pts_cem_shared_cache_identity(
+            base,
+            target_item=5334,
+            fake_sessions_path=fake_sessions,
+            poison_model_path=poison_model,
+        )
+        diagnostic_identity = build_pts_cem_shared_cache_identity(
+            diagnostic,
+            target_item=5334,
+            fake_sessions_path=fake_sessions,
+            poison_model_path=poison_model,
+        )
+        assert pts_cem_shared_cache_key(base_identity) == pts_cem_shared_cache_key(
+            diagnostic_identity
+        )
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def test_shared_pts_cem_key_includes_target_item() -> None:
     config = load_config(CONFIG_PATH)
     work_dir = _make_test_output_dir()

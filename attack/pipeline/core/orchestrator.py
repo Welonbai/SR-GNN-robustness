@@ -2169,7 +2169,7 @@ def _legacy_pts_cem_metrics_match(
     ):
         return False
     if (
-        victim_name == "tron"
+        victim_name in {"tron", "mdhg"}
         and str(metrics_payload.get("victim_prediction_key", ""))
         != expected_victim_prediction_key
     ):
@@ -2268,6 +2268,11 @@ def _victim_intermediate_cleanup_paths(
             run_dir / "tron_logs",
             run_dir / "mlruns",
             run_dir / ".trash",
+        ]
+    if victim_name == "mdhg":
+        return [
+            run_dir / "mdhg_topk_raw.json",
+            run_dir / "export" / "mdhg",
         ]
     if victim_name == "srgnn":
         return [

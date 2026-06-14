@@ -29,6 +29,8 @@ ALLOWED_AGGREGATIONS = {
     "last",
 }
 ALLOWED_MEAN_COMPLETENESS_ON_MISSING = {"error", "warn"}
+ALLOWED_GT_RELATIVE_VALUE_DISPLAYS = {"signed_percent", "absolute"}
+ALLOWED_GT_RELATIVE_HIGHLIGHTS = {"fill", "text"}
 COLUMN_LABEL_SEPARATOR = " | "
 METRIC_COLUMN = "metric"
 METRIC_NAME_COLUMN = "metric_name"
@@ -75,6 +77,8 @@ class GroundTruthRelativeToCleanSpec:
 
     baseline_attack_method: str
     ignore_pairing_columns: list[str]
+    value_display: str
+    highlight: str
 
 
 @dataclass(frozen=True)
@@ -337,6 +341,8 @@ def apply_ground_truth_relative_to_clean_transform(
         ),
     )
     if transform_input.empty:
+        return transform_input.copy()
+    if config.value_display == "absolute":
         return transform_input.copy()
 
     ground_truth_mask = transform_input[METRIC_SCOPE_COLUMN] == GROUND_TRUTH_SCOPE
@@ -629,6 +635,8 @@ def write_view_bundle(
             "enabled": True,
             "baseline_attack_method": spec.ground_truth_relative_to_clean.baseline_attack_method,
             "ignore_pairing_columns": spec.ground_truth_relative_to_clean.ignore_pairing_columns,
+            "value_display": spec.ground_truth_relative_to_clean.value_display,
+            "highlight": spec.ground_truth_relative_to_clean.highlight,
         }
     if spec.mean_completeness is not None:
         mean_meta: dict[str, Any] = {
@@ -1328,6 +1336,16 @@ def normalize_ground_truth_relative_to_clean_spec(
             payload.get("ignore_pairing_columns"),
             label=f"{label}.ignore_pairing_columns",
         ),
+        value_display=require_choice(
+            payload.get("value_display", "signed_percent"),
+            allowed=ALLOWED_GT_RELATIVE_VALUE_DISPLAYS,
+            label=f"{label}.value_display",
+        ),
+        highlight=require_choice(
+            payload.get("highlight", "fill"),
+            allowed=ALLOWED_GT_RELATIVE_HIGHLIGHTS,
+            label=f"{label}.highlight",
+        ),
     )
 
 
@@ -1540,6 +1558,8 @@ def validate_ground_truth_relative_display_mode_consistency(
     """Reject pivot cells that would mix clean GT raw values with GT relative deltas."""
     config = spec.ground_truth_relative_to_clean
     if config is None:
+        return
+    if config.value_display == "absolute":
         return
     if "attack_method" not in dataframe.columns or METRIC_SCOPE_COLUMN not in dataframe.columns:
         raise AnalysisError(
@@ -1836,6 +1856,14 @@ def require_nonempty_string(value: Any, *, label: str) -> str:
     if not stripped:
         raise AnalysisError(f"Expected '{label}' to be a non-empty string.")
     return stripped
+
+
+def require_choice(value: Any, *, allowed: set[str], label: str) -> str:
+    """Require one normalized string from a fixed set."""
+    normalized = require_nonempty_string(value, label=label).lower()
+    if normalized not in allowed:
+        raise AnalysisError(f"{label} must be one of {sorted(allowed)}, got '{normalized}'.")
+    return normalized
 
 
 def require_mapping(value: Any, *, label: str) -> Mapping[str, Any]:

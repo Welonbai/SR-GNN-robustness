@@ -9,6 +9,7 @@ from attack.common.config import Config
 from attack.common.seed import derive_seed, set_seed
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
+from attack.data.exporters.mdhg_exporter import MDHGExporter
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.exporters.tron_exporter import TRONExporter
 from attack.common.srgnn_training_protocol import srgnn_validation_best_enabled
@@ -17,6 +18,7 @@ from attack.models.srgnn_validation_training import (
     train_srgnn_validation_best,
 )
 from attack.models.victim.registry import get_victim_runner
+from attack.models.victim.mdhg_diagnostics import summarize_mdhg_epoch_diagnostics
 from attack.pipeline.core.evaluator import save_predictions
 from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
 from attack.pipeline.core.train_history import save_train_history
@@ -277,6 +279,114 @@ def execute_single_victim(
             poisoned_train_path=None,
         )
 
+    if victim_name == "mdhg":
+        export_root = run_dir / "export" / "mdhg"
+        export_result = MDHGExporter().export_with_poisoned_train(
+            canonical_dataset,
+            poisoned_sessions=poisoned_sessions,
+            poisoned_labels=poisoned_labels,
+            raw_fake_sessions=raw_fake_sessions,
+            output_dir=export_root,
+            dataset_name=config.data.dataset_name,
+        )
+        runner = get_victim_runner(victim_name)(config)
+        raw_predictions_path = run_dir / "mdhg_topk_raw.json"
+        epoch_pipeline_metrics_path = run_dir / "mdhg_epoch_pipeline_metrics.jsonl"
+        victim_train_config = _require_victim_train_config(config, victim_name)
+        pipeline_injected = {
+            "data_dir": export_result.data_dir,
+            "n_node": int(export_result.n_node),
+            "expected_test_count": int(export_result.test_example_count),
+            "export_topk_k": int(max_topk),
+            "export_topk_path": raw_predictions_path,
+            "run_dir": run_dir,
+            "log_path": run_dir / "mdhg_stdout.log",
+            "victim_train_seed": int(victim_stage_seed),
+            "train_pairs_match_raw_expansion": export_result.train_pairs_match_raw_expansion,
+            "target_item": int(target_item),
+            "evaluation_topk": [int(k) for k in eval_topk],
+            "targeted_metrics": list(config.evaluation.targeted_metrics),
+            "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
+            "mdhg_test_data_path": export_result.files["test"].resolve(),
+            "epoch_pipeline_metrics_output_path": epoch_pipeline_metrics_path.resolve(),
+        }
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected=pipeline_injected,
+        )
+        run_info = runner.run(
+            data_dir=export_result.data_dir,
+            dataset_name=config.data.dataset_name,
+            n_node=export_result.n_node,
+            expected_test_count=export_result.test_example_count,
+            run_dir=run_dir,
+            export_topk_path=raw_predictions_path,
+            topk=max_topk,
+            max_epochs=int(victim_train_config["epochs"]),
+            victim_train_seed=int(victim_stage_seed),
+            target_item=int(target_item),
+        )
+        per_epoch_prediction_dir = run_info.get("per_epoch_prediction_dir")
+        if per_epoch_prediction_dir is not None:
+            summarize_mdhg_epoch_diagnostics(
+                run_dir,
+                target_item=int(target_item),
+                evaluation_topk=eval_topk,
+                targeted_metrics=config.evaluation.targeted_metrics,
+                ground_truth_metrics=config.evaluation.ground_truth_metrics,
+                test_data_path=export_result.files["test"],
+                expected_test_count=export_result.test_example_count,
+                n_node=export_result.n_node,
+                requested_topk=max_topk,
+                per_epoch_prediction_dir=Path(per_epoch_prediction_dir),
+                output_path=epoch_pipeline_metrics_path,
+            )
+            run_info["epoch_pipeline_metrics_output_path"] = str(
+                epoch_pipeline_metrics_path
+            )
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected={**pipeline_injected, **run_info},
+        )
+        _save_mdhg_history(run_dir, Path(run_info["log_path"]))
+        rankings = runner.predict_topk(
+            predictions_path=raw_predictions_path,
+            expected_test_count=export_result.test_example_count,
+            n_node=export_result.n_node,
+            requested_topk=max_topk,
+            topk=max_topk,
+        )
+        if predictions_path is not None:
+            effective_topk = len(rankings[0]) if rankings else min(max_topk, export_result.n_node)
+            save_predictions(
+                predictions_path,
+                topk=effective_topk,
+                rankings=rankings,
+                victim=victim_name,
+                target_item=target_item,
+            )
+        export_metadata = {
+            "data_dir": str(export_result.data_dir),
+            "n_node": export_result.n_node,
+            "train_example_count": export_result.train_example_count,
+            "test_example_count": export_result.test_example_count,
+            "raw_train_session_count": export_result.raw_train_session_count,
+            "observed_max_item_id": export_result.observed_max_item_id,
+            "expected_raw_expanded_pair_count": export_result.expected_raw_expanded_pair_count,
+            "train_pairs_match_raw_expansion": export_result.train_pairs_match_raw_expansion,
+            "files": {key: str(path) for key, path in export_result.files.items()},
+        }
+        return VictimExecutionResult(
+            predictions=rankings,
+            predictions_path=predictions_path,
+            extra={"mdhg": run_info, "mdhg_export": export_metadata},
+            poisoned_train_path=None,
+        )
+
     raise ValueError(f"Unsupported victim model: {victim_name}")
 
 
@@ -382,6 +492,21 @@ def _save_tron_history(run_dir: Path, log_dir: Path) -> None:
         run_dir / "train_history.json",
         role="victim",
         model="tron",
+        epochs=history["epochs"],
+        train_loss=history["train_loss"],
+        valid_loss=history["valid_loss"],
+        notes=history.get("notes"),
+    )
+
+
+def _save_mdhg_history(run_dir: Path, log_path: Path) -> None:
+    history = _extract_loss_from_log(log_path)
+    if history["epochs"] == 0:
+        return
+    save_train_history(
+        run_dir / "train_history.json",
+        role="victim",
+        model="mdhg",
         epochs=history["epochs"],
         train_loss=history["train_loss"],
         valid_loss=history["valid_loss"],
