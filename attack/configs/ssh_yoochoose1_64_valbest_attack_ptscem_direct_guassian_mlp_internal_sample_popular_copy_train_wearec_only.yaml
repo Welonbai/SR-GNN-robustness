@@ -134,8 +134,6 @@ victims:
         patience: 10
         nonhybrid: false
         checkpoint_protocol: fixed_last
-        validation_enabled: false
-        export_model: last
     wearec:
       train:
         model_type: WEARec

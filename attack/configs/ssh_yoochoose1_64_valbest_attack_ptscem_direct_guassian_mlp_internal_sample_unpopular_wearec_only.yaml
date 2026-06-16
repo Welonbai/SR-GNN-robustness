@@ -122,9 +122,7 @@ victims:
         step: 1
         patience: 10
         nonhybrid: false
-        checkpoint_protocol: validation_best
-        best_metric: valid_ground_truth_mrr@20
-        patience_metric: recall20_or_mrr20
+        checkpoint_protocol: fixed_last
     wearec:
       train:
         model_type: WEARec
