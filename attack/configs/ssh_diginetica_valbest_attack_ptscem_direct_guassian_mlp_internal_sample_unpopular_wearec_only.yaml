@@ -106,6 +106,21 @@ targets:
 victims:
   enabled: [wearec]
   params:
+    srgnn:
+      train:
+        epochs: 4
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-5
+        step: 1
+        patience: 10
+        nonhybrid: false
+        checkpoint_protocol: validation_best
+        best_metric: valid_ground_truth_mrr@20
+        patience_metric: recall20_or_mrr20
     wearec:
       train:
         model_type: WEARec

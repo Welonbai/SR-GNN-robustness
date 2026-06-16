@@ -1,5 +1,5 @@
 experiment:
-  name: ssh_yoochoose1_64_valbest_attack_create_copy_source_popular_sample
+  name: ssh_yoochoose1_64_valbest_attack_create_copy_source_popular_sample_nonzero_dpp001_consistency03
 
 data:
   dataset_name: yoochoose1_64
@@ -68,11 +68,11 @@ attack:
     local_weight: 0.0
     entropy_weight: 0.0
     pattern_reward_weight: 0.1
-    dpp_reward_weight: 0.0
+    dpp_reward_weight: 0.01
     dpp_score_mode: bounded_determinant
     dpp_eps: 1.0e-6
-    global_consistency_weight: 0.1
-    local_consistency_weight: 0.1
+    global_consistency_weight: 0.3
+    local_consistency_weight: 0.3
     local_window_size: 3
     consistency_mode: local_global
     final_policy_selection: last
