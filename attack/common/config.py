@@ -46,6 +46,12 @@ CREAT_ADDITIVE_SBR_DPP_BOUNDED_DETERMINANT = "bounded_determinant"
 CREAT_ADDITIVE_SBR_DPP_RAW_LOGDET = "raw_logdet"
 CREAT_ADDITIVE_SBR_CONSISTENCY_LOCAL_GLOBAL = "local_global"
 CREAT_ADDITIVE_SBR_FINAL_POLICY_LAST = "last"
+POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_TRAIN_SUB_P99 = "train_sub_p99"
+POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_FIXED = "fixed"
+_ALLOWED_POISONING_SSL_SBR_MAX_SEQ_LEN_POLICIES = {
+    POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_TRAIN_SUB_P99,
+    POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_FIXED,
+}
 _ALLOWED_POSITION_OPT_FINAL_POLICY_SELECTIONS = {
     "last",
     "best_deterministic",
@@ -2093,6 +2099,130 @@ class CreatAdditiveSBRConfig:
         object.__setattr__(self, "seed_source", seed_source)
 
 
+@dataclass(frozen=True)
+class PoisoningSSLSBRConfig:
+    enabled: bool = False
+    max_seq_len_policy: str = POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_TRAIN_SUB_P99
+    original_max_seq_len_cap: int = 50
+    max_seq_len_override: int | None = None
+    enforce_single_target: bool = True
+    enforce_nonzero_target_position: bool = False
+    filter_no_target: bool = True
+    filter_short_sessions: bool = True
+    candidate_multiplier: int = 1
+    max_generation_rounds: int = 10
+    length_diagnostics: bool = True
+    save_generated_candidates: bool = True
+    reuse_existing_artifacts: bool = True
+    generation_seed_offset: int = 0
+
+    def __post_init__(self) -> None:
+        enabled = _as_bool(self.enabled, "attack.poisoning_ssl_sbr.enabled")
+        max_seq_len_policy = _as_str(
+            self.max_seq_len_policy,
+            "attack.poisoning_ssl_sbr.max_seq_len_policy",
+        ).strip().lower()
+        original_max_seq_len_cap = _as_int(
+            self.original_max_seq_len_cap,
+            "attack.poisoning_ssl_sbr.original_max_seq_len_cap",
+        )
+        max_seq_len_override = self.max_seq_len_override
+        if max_seq_len_override is not None:
+            max_seq_len_override = _as_int(
+                max_seq_len_override,
+                "attack.poisoning_ssl_sbr.max_seq_len_override",
+            )
+        enforce_single_target = _as_bool(
+            self.enforce_single_target,
+            "attack.poisoning_ssl_sbr.enforce_single_target",
+        )
+        enforce_nonzero_target_position = _as_bool(
+            self.enforce_nonzero_target_position,
+            "attack.poisoning_ssl_sbr.enforce_nonzero_target_position",
+        )
+        filter_no_target = _as_bool(
+            self.filter_no_target,
+            "attack.poisoning_ssl_sbr.filter_no_target",
+        )
+        filter_short_sessions = _as_bool(
+            self.filter_short_sessions,
+            "attack.poisoning_ssl_sbr.filter_short_sessions",
+        )
+        candidate_multiplier = _as_int(
+            self.candidate_multiplier,
+            "attack.poisoning_ssl_sbr.candidate_multiplier",
+        )
+        max_generation_rounds = _as_int(
+            self.max_generation_rounds,
+            "attack.poisoning_ssl_sbr.max_generation_rounds",
+        )
+        length_diagnostics = _as_bool(
+            self.length_diagnostics,
+            "attack.poisoning_ssl_sbr.length_diagnostics",
+        )
+        save_generated_candidates = _as_bool(
+            self.save_generated_candidates,
+            "attack.poisoning_ssl_sbr.save_generated_candidates",
+        )
+        reuse_existing_artifacts = _as_bool(
+            self.reuse_existing_artifacts,
+            "attack.poisoning_ssl_sbr.reuse_existing_artifacts",
+        )
+        generation_seed_offset = _as_int(
+            self.generation_seed_offset,
+            "attack.poisoning_ssl_sbr.generation_seed_offset",
+        )
+
+        if max_seq_len_policy not in _ALLOWED_POISONING_SSL_SBR_MAX_SEQ_LEN_POLICIES:
+            allowed = ", ".join(sorted(_ALLOWED_POISONING_SSL_SBR_MAX_SEQ_LEN_POLICIES))
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.max_seq_len_policy must be one of: "
+                f"{allowed}."
+            )
+        if original_max_seq_len_cap <= 0:
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.original_max_seq_len_cap must be positive."
+            )
+        if max_seq_len_override is not None and max_seq_len_override <= 0:
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.max_seq_len_override must be positive when set."
+            )
+        if max_seq_len_policy == POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_FIXED and (
+            max_seq_len_override is None
+        ):
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.max_seq_len_override is required when "
+                "max_seq_len_policy == 'fixed'."
+            )
+        if candidate_multiplier <= 0:
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.candidate_multiplier must be positive."
+            )
+        if max_generation_rounds <= 0:
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.max_generation_rounds must be positive."
+            )
+
+        object.__setattr__(self, "enabled", enabled)
+        object.__setattr__(self, "max_seq_len_policy", max_seq_len_policy)
+        object.__setattr__(self, "original_max_seq_len_cap", original_max_seq_len_cap)
+        object.__setattr__(self, "max_seq_len_override", max_seq_len_override)
+        object.__setattr__(self, "enforce_single_target", enforce_single_target)
+        object.__setattr__(
+            self,
+            "enforce_nonzero_target_position",
+            enforce_nonzero_target_position,
+        )
+        object.__setattr__(self, "filter_no_target", filter_no_target)
+        object.__setattr__(self, "filter_short_sessions", filter_short_sessions)
+        object.__setattr__(self, "candidate_multiplier", candidate_multiplier)
+        object.__setattr__(self, "max_generation_rounds", max_generation_rounds)
+        object.__setattr__(self, "length_diagnostics", length_diagnostics)
+        object.__setattr__(self, "save_generated_candidates", save_generated_candidates)
+        object.__setattr__(self, "reuse_existing_artifacts", reuse_existing_artifacts)
+        object.__setattr__(self, "generation_seed_offset", generation_seed_offset)
+
+
 def _coerce_pts_dataclass(value: Any, cls: type[Any], context: str) -> Any:
     if isinstance(value, cls):
         return value
@@ -2589,6 +2719,7 @@ class AttackConfig:
     carrier_selection: CarrierSelectionConfig | None = None
     pts_construction: PTSConstructionConfig | None = None
     creat_additive_sbr: CreatAdditiveSBRConfig | None = None
+    poisoning_ssl_sbr: PoisoningSSLSBRConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -3084,6 +3215,14 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
             if "creat_additive_sbr" in attack and attack["creat_additive_sbr"] is not None
             else None
         ),
+        "poisoning_ssl_sbr": (
+            _normalize_poisoning_ssl_sbr_config(
+                attack["poisoning_ssl_sbr"],
+                "attack.poisoning_ssl_sbr",
+            )
+            if "poisoning_ssl_sbr" in attack and attack["poisoning_ssl_sbr"] is not None
+            else None
+        ),
     }
 
     if not 0.0 < normalized["size"] <= 1.0:
@@ -3113,6 +3252,18 @@ def _normalize_creat_additive_sbr_config(value: Any, context: str) -> dict[str, 
             + ", ".join(sorted(map(str, unknown)))
         )
     return _primitive_from_obj(CreatAdditiveSBRConfig(**dict(mapping)))
+
+
+def _normalize_poisoning_ssl_sbr_config(value: Any, context: str) -> dict[str, Any]:
+    mapping = _as_mapping(value, context)
+    allowed_fields = {field.name for field in fields(PoisoningSSLSBRConfig)}
+    unknown = set(mapping) - allowed_fields
+    if unknown:
+        raise ValueError(
+            "Unknown Poisoning-SSL-SBR config keys: "
+            + ", ".join(sorted(map(str, unknown)))
+        )
+    return _primitive_from_obj(PoisoningSSLSBRConfig(**dict(mapping)))
 
 
 def _normalize_pts_construction_config(value: Any, context: str) -> dict[str, Any]:
@@ -4566,6 +4717,18 @@ def _build_config(normalized: Mapping[str, Any]) -> Config:
                 if attack.get("creat_additive_sbr") is not None
                 else None
             ),
+            poisoning_ssl_sbr=(
+                PoisoningSSLSBRConfig(
+                    **dict(
+                        _as_mapping(
+                            attack["poisoning_ssl_sbr"],
+                            "attack.poisoning_ssl_sbr",
+                        )
+                    )
+                )
+                if attack.get("poisoning_ssl_sbr") is not None
+                else None
+            ),
         ),
         anchor_construction=AnchorConstructionConfig(
             **dict(anchor_construction)
@@ -4638,6 +4801,9 @@ __all__ = [
     "CarrierSelectionConfig",
     "Config",
     "CreatAdditiveSBRConfig",
+    "PoisoningSSLSBRConfig",
+    "POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_FIXED",
+    "POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_TRAIN_SUB_P99",
     "CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE",
     "CREAT_ADDITIVE_SBR_CONSISTENCY_LOCAL_GLOBAL",
     "CREAT_ADDITIVE_SBR_DPP_BOUNDED_DETERMINANT",
