@@ -20,17 +20,30 @@ from attack.common.paths import (
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.tron_exporter import TRONExporter
 from attack.data.exporters.freqrec_exporter import FreqRecExporter
+from attack.data.canonical_fingerprints import file_provenance
 from attack.data.poisoned_dataset_builder import PoisonedDataset, build_poisoned_dataset
 from attack.data.unified_split import ensure_canonical_dataset
 from attack.models.victim.miasrec_runner import MiaSRecRunner
 from attack.models.victim.tron_runner import TRONRunner
 from attack.models.victim.freqrec_runner import FreqRecRunner
+from attack.models.victim.wearec_runner import (
+    WEARecRunner,
+    load_wearec_prediction_payload,
+)
+from attack.models.victim.wearec_diagnostics import (
+    atomic_write_json,
+    load_wearec_epoch_metrics,
+    validate_wearec_diagnostic_bundle,
+    validate_wearec_per_epoch_predictions,
+)
 from attack.models.victim.freqrec_diagnostics import (
     summarize_freqrec_epoch_diagnostics,
 )
 from attack.data.poisoned_dataset_builder import expand_session_to_samples
 from attack.pipeline.core.pipeline_utils import build_clean_pairs
 from attack.pipeline.core.victim_execution import victim_effective_train_seed
+from attack.pipeline.core.victim_execution import prepare_wearec_execution
+from attack.pipeline.core.evaluator import save_predictions
 
 
 VICTIM_VALBEST_EPOCH_DIAGNOSTIC_RUN_TYPE = "victim_valbest_epoch_diagnostic"
@@ -110,6 +123,29 @@ def run_diagnostic(
                 config,
                 out_dir=freqrec_out_dir,
                 effective_epochs=effective_freqrec_epochs,
+            )
+        )
+    if "wearec" in selected_victims:
+        effective_wearec_epochs = int(
+            max_epochs
+            if max_epochs is not None
+            else config.victims.params["wearec"]["train"]["epochs"]
+        )
+        wearec_out_dir = (
+            runs_root(config)
+            / "victim_epoch_diagnostic"
+            / config.data.dataset_name
+            / "wearec"
+        )
+        out_dir = wearec_out_dir
+        if wearec_out_dir.exists() and force:
+            shutil.rmtree(wearec_out_dir)
+        wearec_out_dir.mkdir(parents=True, exist_ok=True)
+        summaries.append(
+            _run_wearec_diagnostic(
+                config,
+                out_dir=wearec_out_dir,
+                effective_epochs=effective_wearec_epochs,
             )
         )
 
@@ -745,6 +781,187 @@ def _run_freqrec_diagnostic(
     return summary
 
 
+def _run_wearec_diagnostic(
+    config: Config,
+    *,
+    out_dir: Path,
+    effective_epochs: int,
+    provenance_resolver=None,
+) -> dict[str, Any]:
+    canonical = ensure_canonical_dataset(config)
+    clean_prefixes, clean_labels = build_clean_pairs(canonical)
+    requested_topk = max(int(value) for value in config.evaluation.topk)
+    prepare_kwargs: dict[str, Any] = {}
+    if provenance_resolver is not None:
+        prepare_kwargs["provenance_resolver"] = provenance_resolver
+    prepared = prepare_wearec_execution(
+        config,
+        run_type="clean",
+        canonical_dataset=canonical,
+        train_prefixes=clean_prefixes,
+        train_labels=clean_labels,
+        run_dir=out_dir,
+        requested_topk=requested_topk,
+        target_item=0,
+        attack_identity_context=None,
+        **prepare_kwargs,
+    )
+    export = prepared["export_result"]
+    identity = dict(prepared["identity"])
+    effective = dict(identity["effective_config"])
+    effective["epochs"] = int(effective_epochs)
+    identity["effective_config"] = effective
+    runtime = (config.victims.runtime or {})["wearec"]
+    runtime_diagnostics = runtime.get("diagnostics", {})
+    per_epoch_predictions = bool(
+        isinstance(runtime_diagnostics, Mapping)
+        and runtime_diagnostics.get("per_epoch_predictions", False)
+    )
+    identity.update(
+        {
+            "identity_kind": "diagnostic",
+            "diagnostic_epoch_budget": int(effective_epochs),
+            "per_epoch_predictions": per_epoch_predictions,
+        }
+    )
+    identity_key = hashlib.sha256(
+        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    result_dir = out_dir / identity_key
+    result_dir.mkdir(parents=True, exist_ok=True)
+    runner = WEARecRunner(config)
+    raw_path = result_dir / "wearec_topk_raw.json"
+    run_info = runner.run(
+        train_path=export.files["train"],
+        valid_path=export.files["valid"],
+        test_path=export.files["test"],
+        metadata_path=export.files["metadata"],
+        item_count=export.item_count,
+        expected_test_count=export.test_example_count,
+        run_dir=result_dir,
+        prediction_output_path=raw_path,
+        requested_topk=requested_topk,
+        epochs=effective_epochs,
+        victim_train_seed=int(effective["seed"]),
+        target_item=None,
+        training_mode="clean",
+        dataset_name=config.data.dataset_name,
+        per_epoch_diagnostics=True,
+        per_epoch_predictions=per_epoch_predictions,
+    )
+    rows = load_wearec_epoch_metrics(
+        result_dir / "wearec_epoch_metrics.jsonl",
+        configured_epochs=effective_epochs,
+        metric_cutoffs=effective["metric_cutoffs"],
+    )
+    rankings = runner.predict_topk(
+        predictions_path=raw_path,
+        item_count=export.item_count,
+        expected_labels=prepared["test_labels"],
+        requested_topk=requested_topk,
+        configured_epochs=effective_epochs,
+        seed=int(effective["seed"]),
+        expected_training_mode="clean",
+        expected_dataset_name=config.data.dataset_name,
+    )
+    per_epoch_prediction_dir = result_dir / "wearec_per_epoch_predictions"
+    validated_epoch_paths: list[Path] = []
+    if per_epoch_predictions:
+        validated_epoch_paths = validate_wearec_per_epoch_predictions(
+            per_epoch_prediction_dir,
+            configured_epochs=effective_epochs,
+            expected_labels=prepared["valid_labels"],
+            item_count=export.item_count,
+            effective_config=effective,
+            dataset_name=config.data.dataset_name,
+            training_mode="clean",
+            diagnostic_rows=rows,
+        )
+    unified_path = result_dir / "predictions.json"
+    save_predictions(
+        unified_path,
+        topk=requested_topk,
+        rankings=rankings,
+        victim="wearec",
+        target_item=0,
+    )
+    retained = {
+        "predictions": file_provenance(unified_path),
+        "raw_predictions": file_provenance(raw_path),
+        "checkpoint": file_provenance(result_dir / "wearec_checkpoint.pt"),
+        "log": file_provenance(result_dir / "wearec_stdout.log"),
+        "epoch_metrics": file_provenance(
+            result_dir / "wearec_epoch_metrics.jsonl"
+        ),
+    }
+    if per_epoch_predictions:
+        retained["per_epoch_predictions"] = {
+            "path": str(per_epoch_prediction_dir),
+            "files": [
+                file_provenance(path)
+                for path in validated_epoch_paths
+            ],
+        }
+    summary = {
+        "dataset": config.data.dataset_name,
+        "victim": "wearec",
+        "training_mode": "clean",
+        "epochs_requested": effective_epochs,
+        "epochs_completed": effective_epochs,
+        "final_epoch": effective_epochs,
+        "batch_size": effective["batch_size"],
+        "checkpoint_protocol": "fixed_epoch",
+        "validation_metrics_path": str(result_dir / "wearec_epoch_metrics.jsonl"),
+        "per_epoch_prediction_dir": (
+            str(per_epoch_prediction_dir)
+            if per_epoch_predictions
+            else None
+        ),
+        "final_raw_prediction_path": str(raw_path),
+        "final_unified_prediction_path": str(unified_path),
+        "final_checkpoint_path": str(result_dir / "wearec_checkpoint.pt"),
+        "scientific_identity": identity,
+        "effective_config": effective,
+        "runtime_provenance": run_info,
+        "validation_epochs": [row["epoch"] for row in rows],
+    }
+    summary_path = result_dir / "diagnostic_summary.json"
+    atomic_write_json(summary, summary_path)
+    retained["diagnostic_summary"] = file_provenance(summary_path)
+    atomic_write_json(
+        {
+            "schema_version": 1,
+            "victim": "wearec",
+            "scientific_identity": identity,
+            "effective_config": effective,
+            "retained_artifacts": retained,
+        },
+        result_dir / "artifact_manifest.json",
+    )
+    load_wearec_prediction_payload(
+        raw_path,
+        item_count=export.item_count,
+        expected_labels=prepared["test_labels"],
+        effective_config=effective,
+        expected_training_mode="clean",
+        expected_dataset_name=config.data.dataset_name,
+    )
+    validate_wearec_diagnostic_bundle(
+        result_dir,
+        identity=identity,
+        expected_labels=prepared["test_labels"],
+        expected_validation_labels=prepared["valid_labels"],
+        per_epoch_predictions=per_epoch_predictions,
+    )
+    export_staging = out_dir / "export" / "wearec"
+    if export_staging.exists():
+        shutil.rmtree(export_staging)
+    internal_scratch = result_dir / "wearec_internal_output"
+    if internal_scratch.exists():
+        shutil.rmtree(internal_scratch)
+    return summary
+
+
 def _freqrec_diagnostic_dir(config: Config, *, effective_epochs: int) -> Path:
     return (
         runs_root(config)
@@ -1141,12 +1358,12 @@ def _selected_victims(config: Config, victim: str) -> list[str]:
         selected = [
             name
             for name in config.victims.enabled
-            if name in {"miasrec", "tron", "freqrec"}
+            if name in {"miasrec", "tron", "freqrec", "wearec"}
         ]
-    elif requested in {"miasrec", "tron", "freqrec"}:
+    elif requested in {"miasrec", "tron", "freqrec", "wearec"}:
         selected = [requested]
     else:
-        raise ValueError("victim must be one of: miasrec, tron, freqrec, all")
+        raise ValueError("victim must be one of: miasrec, tron, freqrec, wearec, all")
     if not selected:
         raise ValueError("No supported victims selected for diagnostic.")
     return selected
@@ -1157,7 +1374,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True)
     parser.add_argument("--target-item", type=int, default=None)
     parser.add_argument(
-        "--victim", choices=["miasrec", "tron", "freqrec", "all"], default="all"
+        "--victim", choices=["miasrec", "tron", "freqrec", "wearec", "all"], default="all"
     )
     parser.add_argument("--source-pts-cem-run", default=None)
     parser.add_argument("--candidate-rank", type=int, default=None)
