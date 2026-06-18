@@ -2142,6 +2142,7 @@ class PoisoningSSLSBRConfig:
     reward_target_weight: float | None = None
     reward_classifier_weight: float | None = None
     reward_discriminator_weight: float | None = None
+    target_probability: float | None = None
     checkpoint_dir: str | None = None
     save_checkpoints: bool = True
 
@@ -2295,6 +2296,10 @@ class PoisoningSSLSBRConfig:
             self.reward_discriminator_weight,
             "attack.poisoning_ssl_sbr.reward_discriminator_weight",
         )
+        target_probability = _optional_probability(
+            self.target_probability,
+            "attack.poisoning_ssl_sbr.target_probability",
+        )
         checkpoint_dir = (
             None
             if self.checkpoint_dir is None
@@ -2385,6 +2390,7 @@ class PoisoningSSLSBRConfig:
         object.__setattr__(self, "reward_target_weight", reward_target_weight)
         object.__setattr__(self, "reward_classifier_weight", reward_classifier_weight)
         object.__setattr__(self, "reward_discriminator_weight", reward_discriminator_weight)
+        object.__setattr__(self, "target_probability", target_probability)
         object.__setattr__(self, "checkpoint_dir", checkpoint_dir)
         object.__setattr__(self, "save_checkpoints", save_checkpoints)
 
@@ -3013,6 +3019,15 @@ def _optional_nonnegative_float(value: Any, context: str) -> float | None:
     result = _as_float(value, context)
     if result < 0.0:
         raise ValueError(f"{context} must be nonnegative when set.")
+    return float(result)
+
+
+def _optional_probability(value: Any, context: str) -> float | None:
+    if value is None:
+        return None
+    result = _as_float(value, context)
+    if result < 0.0 or result > 1.0:
+        raise ValueError(f"{context} must be between 0.0 and 1.0 when set.")
     return float(result)
 
 

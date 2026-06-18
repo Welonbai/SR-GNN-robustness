@@ -745,6 +745,7 @@ def _poisoning_ssl_sbr_identity_payload(config: Config) -> dict[str, Any]:
         "reward_target_weight": poisoning.reward_target_weight,
         "reward_classifier_weight": poisoning.reward_classifier_weight,
         "reward_discriminator_weight": poisoning.reward_discriminator_weight,
+        "target_probability": poisoning.target_probability,
     }
 
 

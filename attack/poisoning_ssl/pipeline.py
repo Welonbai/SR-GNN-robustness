@@ -281,6 +281,23 @@ def _metadata(
         ),
         "no_target_count": int(postprocess_counts.get("no_target_count", 0)),
         "multi_target_count": int(postprocess_counts.get("multi_target_count", 0)),
+        "target_containing_candidate_count_before_single_target_filter": int(
+            postprocess_counts.get(
+                "target_containing_candidate_count_before_single_target_filter",
+                0,
+            )
+        ),
+        "target_containing_candidate_ratio_before_single_target_filter": float(
+            postprocess_counts.get(
+                "target_containing_candidate_ratio_before_single_target_filter",
+                0.0,
+            )
+        ),
+        "target_acceptance_failure_reason": _target_acceptance_failure_reason(
+            n_generated=n_generated,
+            n_after_filtering=n_after_filtering,
+            postprocess_counts=postprocess_counts,
+        ),
         "single_target_count": int(target_stats["single_target_count"]),
         "target_occurrence_stats": target_stats["target_occurrence_stats"],
         "target_position_distribution": target_stats["target_position_distribution"],
@@ -337,6 +354,25 @@ def _metadata(
     return stringify_mapping_keys(metadata)  # stable JSON shape for int-keyed histograms
 
 
+def _target_acceptance_failure_reason(
+    *,
+    n_generated: int,
+    n_after_filtering: int,
+    postprocess_counts: dict[str, int],
+) -> str | None:
+    if int(n_generated) <= 0 or int(n_after_filtering) > 0:
+        return None
+    if int(postprocess_counts.get("no_target_count", 0)) == int(n_generated):
+        return "no_target_item_appeared_in_any_candidate"
+    if int(postprocess_counts.get("invalid_item_count", 0)) == int(n_generated):
+        return "all_candidates_had_invalid_items"
+    if int(postprocess_counts.get("filtered_short_session_count", 0)) == int(n_generated):
+        return "all_candidates_were_too_short"
+    if int(postprocess_counts.get("multi_target_count", 0)) == int(n_generated):
+        return "all_target_candidates_had_multiple_target_occurrences"
+    return "mixed_filter_reasons"
+
+
 def _write_artifacts(
     *,
     target_root: Path,
@@ -358,6 +394,33 @@ def _write_artifacts(
         target_root / "length_distribution.json",
     )
     save_json(provenance_payload(), target_root / "provenance.json")
+    save_json(
+        {
+            "generation_backend": metadata.get("generation_backend"),
+            "generation_rounds_used": metadata.get("generation_rounds_used"),
+            "raw_candidate_count_by_round": metadata.get("raw_candidate_count_by_round"),
+            "valid_count_by_round": metadata.get("valid_count_by_round"),
+            "filter_count_by_round": metadata.get("filter_count_by_round"),
+            "n_generated_candidates": metadata.get("n_generated_candidates"),
+            "n_after_filtering": metadata.get("n_after_filtering"),
+            "n_final_injected": metadata.get("n_final_injected"),
+            "no_target_count": metadata.get("no_target_count"),
+            "multi_target_count": metadata.get("multi_target_count"),
+            "invalid_item_count": metadata.get("invalid_item_count"),
+            "filtered_short_session_count": metadata.get("filtered_short_session_count"),
+            "target_containing_candidate_count_before_single_target_filter": metadata.get(
+                "target_containing_candidate_count_before_single_target_filter"
+            ),
+            "target_containing_candidate_ratio_before_single_target_filter": metadata.get(
+                "target_containing_candidate_ratio_before_single_target_filter"
+            ),
+            "target_acceptance_failure_reason": metadata.get(
+                "target_acceptance_failure_reason"
+            ),
+            "target_position_distribution": metadata.get("target_position_distribution"),
+        },
+        target_root / "generation_log.json",
+    )
 
 
 def _max_seq_len_violations(

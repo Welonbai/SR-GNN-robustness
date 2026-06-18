@@ -9,7 +9,7 @@ from typing import Sequence
 class PostprocessResult:
     final_sessions: list[list[int]]
     valid_sessions: list[list[int]]
-    counts: dict[str, int]
+    counts: dict[str, int | float]
 
 
 def postprocess_fake_user_sequences(
@@ -31,6 +31,7 @@ def postprocess_fake_user_sequences(
         "filtered_short_session_count": 0,
         "no_target_count": 0,
         "multi_target_count": 0,
+        "target_containing_candidate_count_before_single_target_filter": 0,
     }
     valid_sessions: list[list[int]] = []
     for candidate in candidates:
@@ -74,6 +75,8 @@ def postprocess_fake_user_sequences(
         if filter_no_target and target_count == 0:
             counts["no_target_count"] += 1
             continue
+        if target_count > 0:
+            counts["target_containing_candidate_count_before_single_target_filter"] += 1
         if enforce_single_target and target_count > 1:
             counts["multi_target_count"] += 1
             continue
@@ -82,6 +85,14 @@ def postprocess_fake_user_sequences(
     final_sessions = [list(session) for session in valid_sessions[: int(n_fake)]]
     counts["n_after_filtering"] = int(len(valid_sessions))
     counts["n_final_injected"] = int(len(final_sessions))
+    counts["target_containing_candidate_ratio_before_single_target_filter"] = (
+        0.0
+        if int(len(candidates)) <= 0
+        else float(
+            counts["target_containing_candidate_count_before_single_target_filter"]
+            / int(len(candidates))
+        )
+    )
     return PostprocessResult(
         final_sessions=final_sessions,
         valid_sessions=valid_sessions,

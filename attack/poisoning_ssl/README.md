@@ -75,6 +75,18 @@ smoke configs; leave it unset for formal runs. The count1 smoke configs also
 use a tiny `attack.size` and are generation diagnostics only, not reportable
 1% baselines.
 
+Phase 2B adds target acceptance diagnostics:
+
+- `target_containing_candidate_count_before_single_target_filter`
+- `target_containing_candidate_ratio_before_single_target_filter`
+
+Use `attack/configs/diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_acceptance_diag.yaml`
+only for generation calibration. It strengthens faithful Seq-poison generation
+parameters (`candidate_multiplier`, `max_generation_rounds`,
+`adversarial_epochs`, `reward_target_weight`, `target_probability`, and
+`max_train_sequences`) without inserting, moving, cropping, or repairing target
+items.
+
 The local Phase 2 trainer preserves the upstream structure: classifier
 pretraining, generator MLE pretraining, discriminator training, and adversarial
 generator updates with target-related, bi-classifier, and GAN discriminator

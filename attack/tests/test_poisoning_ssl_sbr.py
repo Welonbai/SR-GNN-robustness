@@ -134,6 +134,8 @@ def test_poisoning_ssl_sbr_config_rejects_invalid_values() -> None:
         PoisoningSSLSBRConfig(classifier_epochs=0)
     with pytest.raises(ValueError, match="max_train_sequences"):
         PoisoningSSLSBRConfig(max_train_sequences=0)
+    with pytest.raises(ValueError, match="target_probability"):
+        PoisoningSSLSBRConfig(target_probability=1.1)
 
 
 def test_compute_seqpoison_max_seq_len_policies() -> None:
@@ -172,6 +174,13 @@ def test_postprocess_filters_and_allows_pos0() -> None:
     assert result.counts["invalid_item_count"] == 1
     assert result.counts["multi_target_count"] == 1
     assert result.counts["n_after_filtering"] == 3
+    assert (
+        result.counts["target_containing_candidate_count_before_single_target_filter"]
+        == 4
+    )
+    assert result.counts[
+        "target_containing_candidate_ratio_before_single_target_filter"
+    ] == pytest.approx(4 / 7)
     diag = target_diagnostics(result.final_sessions, target_item=9)
     assert diag["target_pos0_count"] == 1
     assert diag["target_position_distribution"] == {0: 1, 1: 1}
@@ -252,6 +261,10 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
     assert result.metadata["target_label_pair_count_added"] == 1
     assert result.metadata["phase1_interface_mock_only"] is False
     assert result.metadata["real_generation_implemented"] is False
+    assert (
+        result.metadata["target_containing_candidate_count_before_single_target_filter"]
+        == 2
+    )
     target_root = (
         Path(config.artifacts.root)
         / config.artifacts.runs_dir
