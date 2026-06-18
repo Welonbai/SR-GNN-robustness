@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import sys
 
 import pytest
+import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
@@ -29,7 +30,8 @@ from attack.poisoning_ssl.diagnostics import (
     target_diagnostics,
     target_label_pair_count,
 )
-from attack.poisoning_ssl.generator import StaticCandidateGenerator
+from attack.poisoning_ssl.dataset_bridge import export_pseudo_user_sequences
+from attack.poisoning_ssl.generator import RealSeqPoisonCandidateGenerator, StaticCandidateGenerator
 from attack.poisoning_ssl.pipeline import (
     compute_seqpoison_max_seq_len,
     generate_poisoning_ssl_sbr_target,
@@ -87,8 +89,10 @@ def test_poisoning_ssl_sbr_config_parses_defaults_and_identity(tmp_path: Path) -
     assert poisoning.enforce_nonzero_target_position is False
     assert poisoning.candidate_multiplier == 1
     assert poisoning.max_generation_rounds == 10
+    assert poisoning.generation_backend == "real"
     primitive = config.to_primitive()
     assert primitive["attack"]["poisoning_ssl_sbr"]["enabled"] is True
+    assert primitive["attack"]["poisoning_ssl_sbr"]["generation_backend"] == "real"
 
     attack_payload = attack_key_payload(config, run_type=POISONING_SSL_SBR_RUN_TYPE)
     shared_payload = shared_attack_artifact_key_payload(
@@ -106,6 +110,7 @@ def test_poisoning_ssl_sbr_config_parses_defaults_and_identity(tmp_path: Path) -
     assert "reuse_existing_artifacts" not in identity
     assert identity["candidate_multiplier"] == 1
     assert identity["max_generation_rounds"] == 10
+    assert identity["generation_backend"] == "real"
     assert classify_victim_training_run_type(POISONING_SSL_SBR_RUN_TYPE) == "poisoned"
     assert not shared_attack_identity_requires_poison_runner(POISONING_SSL_SBR_RUN_TYPE)
 
@@ -123,6 +128,12 @@ def test_poisoning_ssl_sbr_config_rejects_invalid_values() -> None:
         PoisoningSSLSBRConfig(max_generation_rounds=0)
     with pytest.raises(ValueError, match="max_seq_len_override"):
         PoisoningSSLSBRConfig(max_seq_len_policy="fixed")
+    with pytest.raises(ValueError, match="generation_backend"):
+        PoisoningSSLSBRConfig(generation_backend="mock")
+    with pytest.raises(ValueError, match="classifier_epochs"):
+        PoisoningSSLSBRConfig(classifier_epochs=0)
+    with pytest.raises(ValueError, match="max_train_sequences"):
+        PoisoningSSLSBRConfig(max_train_sequences=0)
 
 
 def test_compute_seqpoison_max_seq_len_policies() -> None:
@@ -176,6 +187,28 @@ def test_postprocess_auto_user_id_keeps_plain_sessions() -> None:
     assert result.final_sessions == [[9, 1], [1, 9]]
 
 
+def test_dataset_bridge_filters_too_long_sessions_and_records_metadata(tmp_path: Path) -> None:
+    bundle = export_pseudo_user_sequences(
+        [[10, 20], [20, 30, 40], [10, 20, 30, 40]],
+        target_item=40,
+        output_dir=tmp_path,
+        valid_item_ids={10, 20, 30, 40},
+        max_seq_len=3,
+        max_train_sequences=1,
+    )
+    assert bundle.remap_used is True
+    assert bundle.train_sequences == [[1, 2]]
+    assert bundle.to_canonical_sequence([1, 2, 0]) == [10, 20, 0]
+    assert bundle.metadata["train_session_count_before_length_filter"] == 3
+    assert bundle.metadata["train_session_count_after_length_filter"] == 2
+    assert bundle.metadata["excluded_train_session_count"] == 1
+    assert bundle.metadata["excluded_train_session_ratio"] == pytest.approx(1 / 3)
+    assert bundle.metadata["max_seq_len_value"] == 3
+    assert bundle.metadata["diagnostic_max_train_sequences"] == 1
+    assert bundle.metadata["train_sequence_count_used_for_training"] == 1
+    assert bundle.item_id_mapping_path is not None
+
+
 def test_diagnostics_budget_and_duplicates() -> None:
     sessions = [[9, 1], [1, 9, 2], [1, 9, 2]]
     stats = length_stats(sessions)
@@ -217,7 +250,8 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
     assert result.metadata["n_generated_candidates"] == 3
     assert result.metadata["target_pos0_count"] == 1
     assert result.metadata["target_label_pair_count_added"] == 1
-    assert result.metadata["phase1_interface_mock_only"] is True
+    assert result.metadata["phase1_interface_mock_only"] is False
+    assert result.metadata["real_generation_implemented"] is False
     target_root = (
         Path(config.artifacts.root)
         / config.artifacts.runs_dir
@@ -227,16 +261,97 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
     assert list(target_root.rglob("poisoning_ssl_sbr_metadata.json"))
 
 
-def test_pipeline_without_generator_fails_clearly(tmp_path: Path) -> None:
+def test_pipeline_without_generator_selects_real_backend(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     config = _config(tmp_path)
-    with pytest.raises(NotImplementedError, match="Phase 1 has no real candidate generator"):
-        generate_poisoning_ssl_sbr_target(
-            config=config,
-            shared=_toy_shared(fake_session_count=2),
-            target_item=9,
-            run_type=POISONING_SSL_SBR_RUN_TYPE,
-            n_fake_requested=2,
-        )
+    called = {"value": False}
+
+    class FakeRealGenerator:
+        last_metadata = {
+            "generation_backend": "real",
+            "real_generation_implemented": True,
+        }
+
+        def generate(self, request):
+            called["value"] = True
+            assert request.dataset_bundle is not None
+            assert request.config.generation_backend == "real"
+            return [[100, 9, 1], [101, 1, 9]]
+
+    import attack.poisoning_ssl.pipeline as pipeline_module
+
+    monkeypatch.setattr(
+        pipeline_module,
+        "RealSeqPoisonCandidateGenerator",
+        FakeRealGenerator,
+    )
+    result = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=_toy_shared(fake_session_count=2),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+    )
+    assert called["value"] is True
+    assert result.metadata["real_generation_implemented"] is True
+
+
+def test_real_generator_prepends_synthetic_user_id(tmp_path: Path) -> None:
+    bundle = export_pseudo_user_sequences(
+        [[1, 9], [2, 9]],
+        target_item=9,
+        output_dir=tmp_path / "bridge",
+        valid_item_ids={1, 2, 9},
+        max_seq_len=3,
+    )
+
+    class FakeSampleGenerator:
+        def sample(self, n, *, device):
+            assert n == 2
+            return torch.tensor([[1, 3, 0], [2, 3, 0]], dtype=torch.long)
+
+    class FakeTrainer:
+        def train_or_load(self, **kwargs):
+            return SimpleNamespace(
+                classifier_checkpoint_path=tmp_path / "classifier.pt",
+                generator_checkpoint_path=tmp_path / "generator.pt",
+                discriminator_checkpoint_path=tmp_path / "discriminator.pt",
+                training_log_path=tmp_path / "training_log.json",
+                generation_log_path=tmp_path / "generation_log.json",
+                metadata={
+                    "enabled_reward_components": [
+                        "target_related_reward",
+                        "bi_classifier_reward",
+                        "gan_discriminator_reward",
+                    ],
+                    "training_epochs": {},
+                    "batch_size": 2,
+                    "learning_rate": 0.001,
+                    "embedding_dim": 4,
+                    "hidden_dim": 4,
+                    "device": "cpu",
+                },
+                generator=FakeSampleGenerator(),
+                device=torch.device("cpu"),
+            )
+
+    generator = RealSeqPoisonCandidateGenerator(trainer=FakeTrainer())
+    request = SimpleNamespace(
+        target_item=9,
+        n_candidates=2,
+        max_seq_len=3,
+        seed=123,
+        output_dir=tmp_path,
+        round_index=0,
+        dataset_bundle=bundle,
+        valid_item_ids={1, 2, 9},
+        config=PoisoningSSLSBRConfig(),
+    )
+    candidates = generator.generate(request)
+    assert candidates == [[1, 1, 9], [2, 2, 9]]
+    assert generator.last_metadata["real_generation_implemented"] is True
 
 
 def test_pipeline_rejects_final_sessions_longer_than_max_seq_len(tmp_path: Path) -> None:

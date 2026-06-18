@@ -19,7 +19,7 @@ seeds:
   victim_train_seed: 20260405
 
 attack:
-  size: 0.01
+  size: 0.0001
   fake_session_generation_topk: 100
   replacement_topk_ratio: 1.0
   fake_session_source:
@@ -56,6 +56,23 @@ attack:
     save_generated_candidates: true
     reuse_existing_artifacts: true
     generation_seed_offset: 0
+    generation_backend: real
+    device: cpu
+    classifier_epochs: 1
+    mle_epochs: 1
+    adversarial_epochs: 1
+    discriminator_pretrain_steps: 1
+    discriminator_pretrain_epochs: 1
+    discriminator_adversarial_steps: 1
+    discriminator_adversarial_epochs: 1
+    batch_size: 16
+    pos_neg_samples: 64
+    embedding_dim: 16
+    hidden_dim: 16
+    discriminator_embedding_dim: 16
+    discriminator_hidden_dim: 16
+    classifier_embedding_dim: 16
+    max_train_sequences: 512
 
 targets:
   mode: sampled

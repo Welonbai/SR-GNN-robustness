@@ -184,6 +184,10 @@ PTS_CONTINUOUS_POLICY_PARAMETERIZATION_SUFFIX_LENGTH_MLP = "suffix_length_mlp"
 PTS_CONTINUOUS_POLICY_CONSUME_DISTRIBUTION_BETA = "beta"
 PTS_CONTINUOUS_BETA_SOURCE_POLICY_Q_AND_RHO_LOGISTIC = "q_and_rho_logistic"
 PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1 = "behavior_covering_v1"
+POISONING_SSL_SBR_GENERATION_BACKEND_REAL = "real"
+_ALLOWED_POISONING_SSL_SBR_GENERATION_BACKENDS = {
+    POISONING_SSL_SBR_GENERATION_BACKEND_REAL,
+}
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -2115,6 +2119,31 @@ class PoisoningSSLSBRConfig:
     save_generated_candidates: bool = True
     reuse_existing_artifacts: bool = True
     generation_seed_offset: int = 0
+    generation_backend: str = POISONING_SSL_SBR_GENERATION_BACKEND_REAL
+    device: str | None = None
+    gpu_id: str | None = None
+    classifier_epochs: int | None = None
+    mle_epochs: int | None = None
+    adversarial_epochs: int | None = None
+    discriminator_pretrain_steps: int | None = None
+    discriminator_pretrain_epochs: int | None = None
+    discriminator_adversarial_steps: int | None = None
+    discriminator_adversarial_epochs: int | None = None
+    batch_size: int | None = None
+    learning_rate: float | None = None
+    classifier_learning_rate: float | None = None
+    embedding_dim: int | None = None
+    hidden_dim: int | None = None
+    discriminator_embedding_dim: int | None = None
+    discriminator_hidden_dim: int | None = None
+    classifier_embedding_dim: int | None = None
+    pos_neg_samples: int | None = None
+    max_train_sequences: int | None = None
+    reward_target_weight: float | None = None
+    reward_classifier_weight: float | None = None
+    reward_discriminator_weight: float | None = None
+    checkpoint_dir: str | None = None
+    save_checkpoints: bool = True
 
     def __post_init__(self) -> None:
         enabled = _as_bool(self.enabled, "attack.poisoning_ssl_sbr.enabled")
@@ -2172,6 +2201,112 @@ class PoisoningSSLSBRConfig:
             self.generation_seed_offset,
             "attack.poisoning_ssl_sbr.generation_seed_offset",
         )
+        generation_backend = _as_str(
+            self.generation_backend,
+            "attack.poisoning_ssl_sbr.generation_backend",
+        ).strip().lower()
+        device = (
+            None
+            if self.device is None
+            else _as_str(self.device, "attack.poisoning_ssl_sbr.device").strip()
+        )
+        gpu_id = (
+            None
+            if self.gpu_id is None
+            else _as_str(self.gpu_id, "attack.poisoning_ssl_sbr.gpu_id").strip()
+        )
+        classifier_epochs = _optional_positive_int(
+            self.classifier_epochs,
+            "attack.poisoning_ssl_sbr.classifier_epochs",
+        )
+        mle_epochs = _optional_positive_int(
+            self.mle_epochs,
+            "attack.poisoning_ssl_sbr.mle_epochs",
+        )
+        adversarial_epochs = _optional_positive_int(
+            self.adversarial_epochs,
+            "attack.poisoning_ssl_sbr.adversarial_epochs",
+        )
+        discriminator_pretrain_steps = _optional_positive_int(
+            self.discriminator_pretrain_steps,
+            "attack.poisoning_ssl_sbr.discriminator_pretrain_steps",
+        )
+        discriminator_pretrain_epochs = _optional_positive_int(
+            self.discriminator_pretrain_epochs,
+            "attack.poisoning_ssl_sbr.discriminator_pretrain_epochs",
+        )
+        discriminator_adversarial_steps = _optional_positive_int(
+            self.discriminator_adversarial_steps,
+            "attack.poisoning_ssl_sbr.discriminator_adversarial_steps",
+        )
+        discriminator_adversarial_epochs = _optional_positive_int(
+            self.discriminator_adversarial_epochs,
+            "attack.poisoning_ssl_sbr.discriminator_adversarial_epochs",
+        )
+        batch_size = _optional_positive_int(
+            self.batch_size,
+            "attack.poisoning_ssl_sbr.batch_size",
+        )
+        learning_rate = _optional_positive_float(
+            self.learning_rate,
+            "attack.poisoning_ssl_sbr.learning_rate",
+        )
+        classifier_learning_rate = _optional_positive_float(
+            self.classifier_learning_rate,
+            "attack.poisoning_ssl_sbr.classifier_learning_rate",
+        )
+        embedding_dim = _optional_positive_int(
+            self.embedding_dim,
+            "attack.poisoning_ssl_sbr.embedding_dim",
+        )
+        hidden_dim = _optional_positive_int(
+            self.hidden_dim,
+            "attack.poisoning_ssl_sbr.hidden_dim",
+        )
+        discriminator_embedding_dim = _optional_positive_int(
+            self.discriminator_embedding_dim,
+            "attack.poisoning_ssl_sbr.discriminator_embedding_dim",
+        )
+        discriminator_hidden_dim = _optional_positive_int(
+            self.discriminator_hidden_dim,
+            "attack.poisoning_ssl_sbr.discriminator_hidden_dim",
+        )
+        classifier_embedding_dim = _optional_positive_int(
+            self.classifier_embedding_dim,
+            "attack.poisoning_ssl_sbr.classifier_embedding_dim",
+        )
+        pos_neg_samples = _optional_positive_int(
+            self.pos_neg_samples,
+            "attack.poisoning_ssl_sbr.pos_neg_samples",
+        )
+        max_train_sequences = _optional_positive_int(
+            self.max_train_sequences,
+            "attack.poisoning_ssl_sbr.max_train_sequences",
+        )
+        reward_target_weight = _optional_nonnegative_float(
+            self.reward_target_weight,
+            "attack.poisoning_ssl_sbr.reward_target_weight",
+        )
+        reward_classifier_weight = _optional_nonnegative_float(
+            self.reward_classifier_weight,
+            "attack.poisoning_ssl_sbr.reward_classifier_weight",
+        )
+        reward_discriminator_weight = _optional_nonnegative_float(
+            self.reward_discriminator_weight,
+            "attack.poisoning_ssl_sbr.reward_discriminator_weight",
+        )
+        checkpoint_dir = (
+            None
+            if self.checkpoint_dir is None
+            else _as_str(
+                self.checkpoint_dir,
+                "attack.poisoning_ssl_sbr.checkpoint_dir",
+            ).strip()
+        )
+        save_checkpoints = _as_bool(
+            self.save_checkpoints,
+            "attack.poisoning_ssl_sbr.save_checkpoints",
+        )
 
         if max_seq_len_policy not in _ALLOWED_POISONING_SSL_SBR_MAX_SEQ_LEN_POLICIES:
             allowed = ", ".join(sorted(_ALLOWED_POISONING_SSL_SBR_MAX_SEQ_LEN_POLICIES))
@@ -2202,6 +2337,12 @@ class PoisoningSSLSBRConfig:
             raise ValueError(
                 "attack.poisoning_ssl_sbr.max_generation_rounds must be positive."
             )
+        if generation_backend not in _ALLOWED_POISONING_SSL_SBR_GENERATION_BACKENDS:
+            allowed = ", ".join(sorted(_ALLOWED_POISONING_SSL_SBR_GENERATION_BACKENDS))
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.generation_backend must be one of: "
+                f"{allowed}."
+            )
 
         object.__setattr__(self, "enabled", enabled)
         object.__setattr__(self, "max_seq_len_policy", max_seq_len_policy)
@@ -2221,6 +2362,31 @@ class PoisoningSSLSBRConfig:
         object.__setattr__(self, "save_generated_candidates", save_generated_candidates)
         object.__setattr__(self, "reuse_existing_artifacts", reuse_existing_artifacts)
         object.__setattr__(self, "generation_seed_offset", generation_seed_offset)
+        object.__setattr__(self, "generation_backend", generation_backend)
+        object.__setattr__(self, "device", device)
+        object.__setattr__(self, "gpu_id", gpu_id)
+        object.__setattr__(self, "classifier_epochs", classifier_epochs)
+        object.__setattr__(self, "mle_epochs", mle_epochs)
+        object.__setattr__(self, "adversarial_epochs", adversarial_epochs)
+        object.__setattr__(self, "discriminator_pretrain_steps", discriminator_pretrain_steps)
+        object.__setattr__(self, "discriminator_pretrain_epochs", discriminator_pretrain_epochs)
+        object.__setattr__(self, "discriminator_adversarial_steps", discriminator_adversarial_steps)
+        object.__setattr__(self, "discriminator_adversarial_epochs", discriminator_adversarial_epochs)
+        object.__setattr__(self, "batch_size", batch_size)
+        object.__setattr__(self, "learning_rate", learning_rate)
+        object.__setattr__(self, "classifier_learning_rate", classifier_learning_rate)
+        object.__setattr__(self, "embedding_dim", embedding_dim)
+        object.__setattr__(self, "hidden_dim", hidden_dim)
+        object.__setattr__(self, "discriminator_embedding_dim", discriminator_embedding_dim)
+        object.__setattr__(self, "discriminator_hidden_dim", discriminator_hidden_dim)
+        object.__setattr__(self, "classifier_embedding_dim", classifier_embedding_dim)
+        object.__setattr__(self, "pos_neg_samples", pos_neg_samples)
+        object.__setattr__(self, "max_train_sequences", max_train_sequences)
+        object.__setattr__(self, "reward_target_weight", reward_target_weight)
+        object.__setattr__(self, "reward_classifier_weight", reward_classifier_weight)
+        object.__setattr__(self, "reward_discriminator_weight", reward_discriminator_weight)
+        object.__setattr__(self, "checkpoint_dir", checkpoint_dir)
+        object.__setattr__(self, "save_checkpoints", save_checkpoints)
 
 
 def _coerce_pts_dataclass(value: Any, cls: type[Any], context: str) -> Any:
@@ -2821,6 +2987,33 @@ def _as_float(value: Any, context: str) -> float:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise TypeError(f"Expected {context} to be a number, got {type(value).__name__}")
     return float(value)
+
+
+def _optional_positive_int(value: Any, context: str) -> int | None:
+    if value is None:
+        return None
+    result = _as_int(value, context)
+    if result <= 0:
+        raise ValueError(f"{context} must be positive when set.")
+    return int(result)
+
+
+def _optional_positive_float(value: Any, context: str) -> float | None:
+    if value is None:
+        return None
+    result = _as_float(value, context)
+    if result <= 0.0:
+        raise ValueError(f"{context} must be positive when set.")
+    return float(result)
+
+
+def _optional_nonnegative_float(value: Any, context: str) -> float | None:
+    if value is None:
+        return None
+    result = _as_float(value, context)
+    if result < 0.0:
+        raise ValueError(f"{context} must be nonnegative when set.")
+    return float(result)
 
 
 def _as_bool(value: Any, context: str) -> bool:
@@ -4802,6 +4995,7 @@ __all__ = [
     "Config",
     "CreatAdditiveSBRConfig",
     "PoisoningSSLSBRConfig",
+    "POISONING_SSL_SBR_GENERATION_BACKEND_REAL",
     "POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_FIXED",
     "POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_TRAIN_SUB_P99",
     "CREAT_ADDITIVE_SBR_ATTACK_REWARD_SCORE",

@@ -85,7 +85,7 @@ def _validate_poisoning_ssl_sbr_run_config(config: Config) -> None:
         raise ValueError("SeqPoison-SBR requires attack.poisoning_ssl_sbr.enabled == true.")
     if bool(poisoning_config.enforce_nonzero_target_position):
         raise NotImplementedError(
-            "SeqPoison-SBR Phase 1 does not implement "
+            "SeqPoison-SBR Phase 2 does not implement "
             "enforce_nonzero_target_position=true."
         )
 

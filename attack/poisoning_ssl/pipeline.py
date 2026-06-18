@@ -8,6 +8,7 @@ from attack.common.artifact_io import save_fake_sessions, save_json
 from attack.common.config import (
     Config,
     PoisoningSSLSBRConfig,
+    POISONING_SSL_SBR_GENERATION_BACKEND_REAL,
     POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_FIXED,
     POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_TRAIN_SUB_P99,
 )
@@ -26,7 +27,7 @@ from attack.poisoning_ssl.diagnostics import (
 from attack.poisoning_ssl.generator import (
     CandidateGenerator,
     GenerationRequest,
-    UnimplementedSeqPoisonCandidateGenerator,
+    RealSeqPoisonCandidateGenerator,
 )
 from attack.poisoning_ssl.postprocess import postprocess_fake_user_sequences
 from attack.poisoning_ssl.provenance import (
@@ -94,14 +95,18 @@ def generate_poisoning_ssl_sbr_target(
     target_root = target_dir(config, target, run_type=run_type)
     target_root.mkdir(parents=True, exist_ok=True)
     generation_dir = target_root / "poisoning_ssl_sbr_generation"
+    max_seq_len = compute_seqpoison_max_seq_len(
+        shared.canonical_dataset.train_sub,
+        poisoning_config,
+    )
+    valid_item_ids = _valid_item_ids(shared.canonical_dataset)
     bridge = export_pseudo_user_sequences(
         shared.canonical_dataset.train_sub,
         target_item=target,
         output_dir=generation_dir / "dataset_bridge",
-    )
-    max_seq_len = compute_seqpoison_max_seq_len(
-        shared.canonical_dataset.train_sub,
-        poisoning_config,
+        valid_item_ids=valid_item_ids,
+        max_seq_len=max_seq_len,
+        max_train_sequences=poisoning_config.max_train_sequences,
     )
     generation_seed = derive_seed(
         int(config.seeds.fake_session_seed) + int(poisoning_config.generation_seed_offset),
@@ -109,11 +114,14 @@ def generate_poisoning_ssl_sbr_target(
         target,
     )
     postprocess_seed = derive_seed(generation_seed, "postprocess")
-    generator = candidate_generator or UnimplementedSeqPoisonCandidateGenerator()
-    valid_item_ids = _valid_item_ids(shared.canonical_dataset)
+    generator = candidate_generator or _default_candidate_generator(poisoning_config)
 
     all_candidates: list[list[int]] = []
     postprocess_result = None
+    generation_round_metadata: list[dict[str, object]] = []
+    raw_candidate_count_by_round: list[int] = []
+    valid_count_by_round: list[int] = []
+    filter_count_by_round: list[int] = []
     for round_index in range(int(poisoning_config.max_generation_rounds)):
         request = GenerationRequest(
             target_item=target,
@@ -122,8 +130,13 @@ def generate_poisoning_ssl_sbr_target(
             seed=derive_seed(generation_seed, "round", round_index),
             output_dir=generation_dir,
             round_index=round_index,
+            dataset_bundle=bridge,
+            valid_item_ids=valid_item_ids,
+            config=poisoning_config,
+            training_seed=generation_seed,
         )
         round_candidates = generator.generate(request)
+        raw_candidate_count_by_round.append(int(len(round_candidates)))
         all_candidates.extend([[int(item) for item in session] for session in round_candidates])
         postprocess_result = postprocess_fake_user_sequences(
             all_candidates,
@@ -135,6 +148,13 @@ def generate_poisoning_ssl_sbr_target(
             filter_short_sessions=bool(poisoning_config.filter_short_sessions),
             remove_user_id=True,
         )
+        valid_count_by_round.append(int(postprocess_result.counts.get("n_after_filtering", 0)))
+        filter_count_by_round.append(
+            int(len(all_candidates)) - int(postprocess_result.counts.get("n_after_filtering", 0))
+        )
+        last_metadata = getattr(generator, "last_metadata", None)
+        if isinstance(last_metadata, dict) and last_metadata:
+            generation_round_metadata.append(dict(last_metadata))
         if len(postprocess_result.final_sessions) == n_fake:
             break
 
@@ -153,6 +173,10 @@ def generate_poisoning_ssl_sbr_target(
         final_sessions=postprocess_result.final_sessions,
         postprocess_counts=postprocess_result.counts,
         bridge_metadata=bridge.metadata,
+        generation_round_metadata=generation_round_metadata,
+        raw_candidate_count_by_round=raw_candidate_count_by_round,
+        valid_count_by_round=valid_count_by_round,
+        filter_count_by_round=filter_count_by_round,
     )
     max_observed_length, max_seq_len_violation_count = _max_seq_len_violations(
         postprocess_result.final_sessions,
@@ -187,6 +211,17 @@ def generate_poisoning_ssl_sbr_target(
     )
 
 
+def _default_candidate_generator(
+    poisoning_config: PoisoningSSLSBRConfig,
+) -> CandidateGenerator:
+    if poisoning_config.generation_backend == POISONING_SSL_SBR_GENERATION_BACKEND_REAL:
+        return RealSeqPoisonCandidateGenerator()
+    raise ValueError(
+        "Unsupported SeqPoison-SBR generation_backend: "
+        f"{poisoning_config.generation_backend!r}."
+    )
+
+
 def _metadata(
     *,
     config: Config,
@@ -200,6 +235,10 @@ def _metadata(
     final_sessions: list[list[int]],
     postprocess_counts: dict[str, int],
     bridge_metadata: dict[str, object],
+    generation_round_metadata: list[dict[str, object]],
+    raw_candidate_count_by_round: list[int],
+    valid_count_by_round: list[int],
+    filter_count_by_round: list[int],
 ) -> dict[str, object]:
     target_stats = target_diagnostics(final_sessions, target_item=int(target_item))
     duplicate_stats = duplicate_diagnostics(final_sessions)
@@ -212,6 +251,9 @@ def _metadata(
     n_after_filtering = int(postprocess_counts.get("n_after_filtering", 0))
     n_final = int(len(final_sessions))
     poisoning_config = config.attack.poisoning_ssl_sbr
+    latest_generation_metadata = (
+        generation_round_metadata[-1] if generation_round_metadata else {}
+    )
     metadata = {
         "method_name": METHOD_NAME,
         "original_method_name": ORIGINAL_METHOD_NAME,
@@ -247,10 +289,49 @@ def _metadata(
         "target_nonzero_count": int(target_stats["target_nonzero_count"]),
         "target_nonzero_ratio": float(target_stats["target_nonzero_ratio"]),
         "dataset_bridge": bridge_metadata,
+        "generation_backend": (
+            None if poisoning_config is None else poisoning_config.generation_backend
+        ),
+        "real_generation_implemented": bool(
+            latest_generation_metadata.get("real_generation_implemented", False)
+        ),
+        "upstream_component_map": provenance_payload()["upstream_migration_map"],
+        "enabled_reward_components": latest_generation_metadata.get(
+            "enabled_reward_components",
+            [],
+        ),
+        "classifier_checkpoint_path": latest_generation_metadata.get(
+            "classifier_checkpoint_path"
+        ),
+        "generator_checkpoint_path": latest_generation_metadata.get(
+            "generator_checkpoint_path"
+        ),
+        "discriminator_checkpoint_path": latest_generation_metadata.get(
+            "discriminator_checkpoint_path"
+        ),
+        "training_epochs": latest_generation_metadata.get("training_epochs", {}),
+        "batch_size": latest_generation_metadata.get("batch_size"),
+        "learning_rate": latest_generation_metadata.get("learning_rate"),
+        "embedding_dim": latest_generation_metadata.get("embedding_dim"),
+        "hidden_dim": latest_generation_metadata.get("hidden_dim"),
+        "device": latest_generation_metadata.get("device"),
+        "generation_rounds_used": int(len(raw_candidate_count_by_round)),
+        "candidate_multiplier": (
+            None if poisoning_config is None else int(poisoning_config.candidate_multiplier)
+        ),
+        "max_generation_rounds": (
+            None if poisoning_config is None else int(poisoning_config.max_generation_rounds)
+        ),
+        "raw_candidate_count_by_round": list(raw_candidate_count_by_round),
+        "valid_count_by_round": list(valid_count_by_round),
+        "filter_count_by_round": list(filter_count_by_round),
+        "generation_round_metadata": generation_round_metadata,
+        "remap_used": bool(bridge_metadata.get("remap_applied", False)),
+        "item_id_mapping_path": bridge_metadata.get("item_id_mapping_path"),
         **duplicate_stats,
         **budget_stats,
         "provenance": provenance_payload(),
-        "phase1_interface_mock_only": True,
+        "phase1_interface_mock_only": False,
         "reportable_baseline": False,
     }
     return stringify_mapping_keys(metadata)  # stable JSON shape for int-keyed histograms
