@@ -108,7 +108,10 @@ def duplicate_diagnostics(sessions: Sequence[Sequence[int]]) -> dict[str, object
     counts = Counter(tuple(int(item) for item in session) for session in sessions)
     duplicate_count = int(sum(value - 1 for value in counts.values() if value > 1))
     total = int(len(sessions))
+    unique_count = int(len(counts))
     return {
+        "unique_fake_session_count": unique_count,
+        "unique_fake_session_ratio": 0.0 if total <= 0 else float(unique_count / total),
         "duplicate_session_count": duplicate_count,
         "duplicate_session_ratio": 0.0 if total <= 0 else float(duplicate_count / total),
     }

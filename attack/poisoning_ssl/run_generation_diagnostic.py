@@ -40,6 +40,7 @@ def run_generation_diagnostic(
         target_item=target,
         run_type=POISONING_SSL_SBR_RUN_TYPE,
         n_fake_requested=int(shared.fake_session_count),
+        config_path=config_path,
     )
     return {
         "target_item": target,

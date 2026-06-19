@@ -230,7 +230,13 @@ class SeqPoisonTrainer:
         effective = EffectiveSeqPoisonTrainingConfig.from_config(config)
         device = _resolve_device(config)
         output = Path(output_dir)
-        checkpoint_dir = _checkpoint_dir(
+        identity = _checkpoint_identity(
+            dataset_bundle=dataset_bundle,
+            target_item=target_item,
+            seed=seed,
+            effective=effective,
+        )
+        preferred_checkpoint_dir = _checkpoint_dir(
             output,
             config=config,
             dataset_bundle=dataset_bundle,
@@ -238,13 +244,19 @@ class SeqPoisonTrainer:
             seed=seed,
             effective=effective,
         )
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        identity = _checkpoint_identity(
-            dataset_bundle=dataset_bundle,
-            target_item=target_item,
-            seed=seed,
-            effective=effective,
+        checkpoint_dir = preferred_checkpoint_dir
+        discovered_checkpoint_dir = (
+            None
+            if config.checkpoint_dir or not bool(config.reuse_existing_artifacts)
+            else _find_existing_checkpoint_dir(
+                output=output,
+                target_item=int(target_item),
+                identity=identity,
+            )
         )
+        if discovered_checkpoint_dir is not None:
+            checkpoint_dir = discovered_checkpoint_dir
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
         identity_path = checkpoint_dir / "checkpoint_identity.json"
         classifier_path = checkpoint_dir / "classifier.pt"
         generator_path = checkpoint_dir / "generator.pt"
@@ -278,10 +290,28 @@ class SeqPoisonTrainer:
             and discriminator_path.exists()
             and _load_json(identity_path) == identity
         )
+        _progress(
+            target_item,
+            "Trainer setup: "
+            f"device={device} checkpoint_dir={checkpoint_dir} "
+            f"preferred_checkpoint_dir={preferred_checkpoint_dir} "
+            f"reuse_existing_artifacts={bool(config.reuse_existing_artifacts)} "
+            f"reuse_hit={bool(can_reuse)} "
+            f"first_step_target_mask={bool(config.first_step_target_mask)} "
+            f"target_logit_bias_after_first_step="
+            f"{float(config.target_logit_bias_after_first_step):.6g}",
+        )
         if can_reuse:
+            reuse_start = time.perf_counter()
+            _progress(target_item, "Stage start: checkpoint load")
             classifier.load_state_dict(torch.load(classifier_path, map_location=device))
             generator.load_state_dict(torch.load(generator_path, map_location=device))
             discriminator.load_state_dict(torch.load(discriminator_path, map_location=device))
+            _progress(
+                target_item,
+                "Stage done: checkpoint load "
+                f"duration={_fmt_duration(time.perf_counter() - reuse_start)}",
+            )
             training_log = {
                 "reused_checkpoints": True,
                 "checkpoint_dir": str(checkpoint_dir),
@@ -312,6 +342,8 @@ class SeqPoisonTrainer:
                 config=config,
                 device=device,
                 seed=seed,
+                target_item=int(target_item),
+                progress_path=output / "training_progress.json",
             )
             training_log["training_start_time"] = training_start_time
             training_log["training_end_time"] = _now_iso()
@@ -333,6 +365,14 @@ class SeqPoisonTrainer:
         save_json(training_log, training_log_path)
         metadata = {
             "checkpoint_dir": str(checkpoint_dir),
+            "preferred_checkpoint_dir": str(preferred_checkpoint_dir),
+            "discovered_checkpoint_dir": (
+                None if discovered_checkpoint_dir is None else str(discovered_checkpoint_dir)
+            ),
+            "training_checkpoint_path": str(checkpoint_dir),
+            "training_checkpoint_identity": identity,
+            "training_checkpoint_identity_hash": _hash_json(identity),
+            "training_checkpoint_reused": bool(can_reuse),
             "classifier_checkpoint_path": str(classifier_path),
             "generator_checkpoint_path": str(generator_path),
             "discriminator_checkpoint_path": str(discriminator_path),
@@ -418,6 +458,8 @@ class SeqPoisonTrainer:
         config: PoisoningSSLSBRConfig,
         device: torch.device,
         seed: int,
+        target_item: int,
+        progress_path: Path,
     ) -> dict[str, object]:
         log: dict[str, object] = {
             "classifier": [],
@@ -431,6 +473,10 @@ class SeqPoisonTrainer:
             "acceptance_evaluations": [],
         }
         stage_start = time.perf_counter()
+        _progress(
+            target_item,
+            f"Stage start: classifier training epochs={effective.classifier_epochs}",
+        )
         self._train_classifier(
             classifier=classifier,
             dataset_bundle=dataset_bundle,
@@ -438,20 +484,44 @@ class SeqPoisonTrainer:
             device=device,
             seed=seed,
             log=log,
+            target_item=target_item,
+            progress_path=progress_path,
         )
         log["classifier_training_duration_sec"] = float(time.perf_counter() - stage_start)
+        _progress(
+            target_item,
+            "Stage done: classifier training "
+            f"duration={_fmt_duration(log['classifier_training_duration_sec'])}",
+        )
         gen_optimizer = optim.Adam(generator.parameters(), lr=effective.learning_rate)
         dis_optimizer = optim.Adagrad(discriminator.parameters(), lr=effective.learning_rate)
         stage_start = time.perf_counter()
+        _progress(
+            target_item,
+            f"Stage start: generator MLE pretraining epochs={effective.mle_epochs}",
+        )
         self._train_generator_mle(
             generator=generator,
             optimizer=gen_optimizer,
             train_samples=train_samples,
             effective=effective,
             log=log,
+            target_item=target_item,
+            progress_path=progress_path,
         )
         log["mle_pretraining_duration_sec"] = float(time.perf_counter() - stage_start)
+        _progress(
+            target_item,
+            "Stage done: generator MLE pretraining "
+            f"duration={_fmt_duration(log['mle_pretraining_duration_sec'])}",
+        )
         stage_start = time.perf_counter()
+        _progress(
+            target_item,
+            "Stage start: discriminator pretraining "
+            f"steps={effective.discriminator_pretrain_steps} "
+            f"epochs_per_step={effective.discriminator_pretrain_epochs}",
+        )
         self._train_discriminator(
             discriminator=discriminator,
             optimizer=dis_optimizer,
@@ -462,11 +532,22 @@ class SeqPoisonTrainer:
             effective=effective,
             log_key="discriminator_pretrain",
             log=log,
+            target_item=target_item,
+            progress_path=progress_path,
         )
         log["discriminator_pretraining_duration_sec"] = float(
             time.perf_counter() - stage_start
         )
+        _progress(
+            target_item,
+            "Stage done: discriminator pretraining "
+            f"duration={_fmt_duration(log['discriminator_pretraining_duration_sec'])}",
+        )
         adversarial_start = time.perf_counter()
+        _progress(
+            target_item,
+            f"Stage start: adversarial generator training epochs={effective.adversarial_epochs}",
+        )
         for epoch in range(effective.adversarial_epochs):
             epoch_start = time.perf_counter()
             update_start = time.perf_counter()
@@ -491,25 +572,58 @@ class SeqPoisonTrainer:
                 effective=effective,
                 log_key="adversarial_discriminator",
                 log=log,
+                target_item=target_item,
+                progress_path=progress_path,
             )
             epoch_duration = float(time.perf_counter() - epoch_start)
             log["adversarial_epoch_durations_sec"].append(epoch_duration)
             log["adversarial"].append(
                 {"epoch": epoch + 1, "duration_sec": epoch_duration, **adv}
             )
+            _progress(
+                target_item,
+                "adv epoch "
+                f"{epoch + 1}/{effective.adversarial_epochs} "
+                f"loss={adv['loss']:.4g} "
+                f"loss_a={adv['loss_target']:.4g} "
+                f"loss_b={adv['loss_classifier']:.4g} "
+                f"loss_c={adv['loss_discriminator']:.4g} "
+                f"duration={_fmt_duration(epoch_duration)}",
+            )
+            _write_training_progress(
+                progress_path,
+                target_item=target_item,
+                stage="adversarial",
+                current_epoch=epoch + 1,
+                total_epochs=effective.adversarial_epochs,
+                latest_metrics=adv,
+                elapsed_sec=float(time.perf_counter() - adversarial_start),
+            )
             if _acceptance_eval_due(config, epoch + 1):
-                log["acceptance_evaluations"].append(
-                    _acceptance_eval(
-                        generator=generator,
-                        dataset_bundle=dataset_bundle,
-                        config=config,
-                        epoch=epoch + 1,
-                        device=train_samples.device,
-                        seed=seed + epoch + 2000,
-                    )
+                eval_payload = _acceptance_eval(
+                    generator=generator,
+                    dataset_bundle=dataset_bundle,
+                    config=config,
+                    epoch=epoch + 1,
+                    device=train_samples.device,
+                    seed=seed + epoch + 2000,
+                )
+                log["acceptance_evaluations"].append(eval_payload)
+                _progress(
+                    target_item,
+                    "adv eval epoch "
+                    f"{epoch + 1} candidates={eval_payload['eval_candidate_count']} "
+                    f"target_ratio={float(eval_payload['target_containing_candidate_ratio']):.6g} "
+                    f"valid={eval_payload['n_after_filtering']} "
+                    f"duration={_fmt_duration(eval_payload['eval_duration_sec'])}",
                 )
         log["adversarial_training_duration_sec"] = float(
             time.perf_counter() - adversarial_start
+        )
+        _progress(
+            target_item,
+            "Stage done: adversarial generator training "
+            f"duration={_fmt_duration(log['adversarial_training_duration_sec'])}",
         )
         return log
 
@@ -522,6 +636,8 @@ class SeqPoisonTrainer:
         device: torch.device,
         seed: int,
         log: dict[str, object],
+        target_item: int,
+        progress_path: Path,
     ) -> None:
         dataset = _ClassifierPretrainDataset(
             user_sequences=dataset_bundle.train_sequences,
@@ -559,14 +675,29 @@ class SeqPoisonTrainer:
                 total_acc += float((pred == target).float().mean().detach().cpu())
                 batches += 1
             duration = float(time.perf_counter() - epoch_start)
+            loss_value = total_loss / max(1, batches)
             log["classifier_epoch_durations_sec"].append(duration)
             log["classifier"].append(
                 {
                     "epoch": epoch + 1,
-                    "loss": total_loss / max(1, batches),
+                    "loss": loss_value,
                     "accuracy": total_acc / max(1, batches),
                     "duration_sec": duration,
                 }
+            )
+            _progress(
+                target_item,
+                "classifier epoch "
+                f"{epoch + 1}/{effective.classifier_epochs} "
+                f"loss={loss_value:.4g} duration={_fmt_duration(duration)}",
+            )
+            _write_training_progress(
+                progress_path,
+                target_item=target_item,
+                stage="classifier",
+                current_epoch=epoch + 1,
+                total_epochs=effective.classifier_epochs,
+                latest_metrics={"loss": loss_value},
             )
 
     def _train_generator_mle(
@@ -577,6 +708,8 @@ class SeqPoisonTrainer:
         train_samples: torch.Tensor,
         effective: EffectiveSeqPoisonTrainingConfig,
         log: dict[str, object],
+        target_item: int,
+        progress_path: Path,
     ) -> None:
         train_len = int(train_samples.size(0))
         for epoch in range(effective.mle_epochs):
@@ -596,15 +729,32 @@ class SeqPoisonTrainer:
                 total_loss += float(loss.detach().cpu())
                 batches += 1
             duration = float(time.perf_counter() - epoch_start)
+            loss_value = (
+                total_loss
+                / max(1, batches)
+                / max(1, int(train_samples.size(1)))
+            )
             log["mle_epoch_durations_sec"].append(duration)
             log["mle"].append(
                 {
                     "epoch": epoch + 1,
-                    "average_train_nll": total_loss
-                    / max(1, batches)
-                    / max(1, int(train_samples.size(1))),
+                    "average_train_nll": loss_value,
                     "duration_sec": duration,
                 }
+            )
+            _progress(
+                target_item,
+                "mle epoch "
+                f"{epoch + 1}/{effective.mle_epochs} "
+                f"loss={loss_value:.4g} duration={_fmt_duration(duration)}",
+            )
+            _write_training_progress(
+                progress_path,
+                target_item=target_item,
+                stage="mle",
+                current_epoch=epoch + 1,
+                total_epochs=effective.mle_epochs,
+                latest_metrics={"average_train_nll": loss_value},
             )
 
     def _train_discriminator(
@@ -619,6 +769,8 @@ class SeqPoisonTrainer:
         effective: EffectiveSeqPoisonTrainingConfig,
         log_key: str,
         log: dict[str, object],
+        target_item: int,
+        progress_path: Path,
     ) -> None:
         device = train_samples.device
         if log_key not in log:
@@ -664,15 +816,34 @@ class SeqPoisonTrainer:
                     total_acc += float(((out > 0.5) == (target > 0.5)).float().mean().detach().cpu())
                     batches += 1
                 duration = float(time.perf_counter() - update_start)
+                loss_value = total_loss / max(1, batches)
+                acc_value = total_acc / max(1, batches)
                 log["discriminator_update_durations_sec"].append(duration)
                 log[log_key].append(
                     {
                         "step": step + 1,
                         "epoch": epoch + 1,
-                        "loss": total_loss / max(1, batches),
-                        "accuracy": total_acc / max(1, batches),
+                        "loss": loss_value,
+                        "accuracy": acc_value,
                         "duration_sec": duration,
                     }
+                )
+                _progress(
+                    target_item,
+                    "discriminator "
+                    f"{log_key} step {step + 1}/{int(d_steps)} "
+                    f"epoch {epoch + 1}/{int(epochs)} "
+                    f"loss={loss_value:.4g} duration={_fmt_duration(duration)}",
+                )
+                _write_training_progress(
+                    progress_path,
+                    target_item=target_item,
+                    stage=log_key,
+                    current_step=step + 1,
+                    total_steps=int(d_steps),
+                    current_epoch=epoch + 1,
+                    total_epochs=int(epochs),
+                    latest_metrics={"loss": loss_value, "accuracy": acc_value},
                 )
 
     def _train_generator_pg(
@@ -807,6 +978,48 @@ def _checkpoint_dir(
     return root / f"target_{int(target_item)}_seqpoison_{token}"
 
 
+def _find_existing_checkpoint_dir(
+    *,
+    output: Path,
+    target_item: int,
+    identity: dict[str, object],
+) -> Path | None:
+    token = _hash_json(identity)
+    expected_name = f"target_{int(target_item)}_seqpoison_{token}"
+    dataset_runs_dir = _dataset_runs_dir_from_output(output)
+    if dataset_runs_dir is None or not dataset_runs_dir.exists():
+        return None
+    candidates = sorted(
+        dataset_runs_dir.rglob(expected_name),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for candidate in candidates:
+        identity_path = candidate / "checkpoint_identity.json"
+        if not identity_path.exists():
+            continue
+        if _load_json(identity_path) != identity:
+            continue
+        if not all(
+            (candidate / filename).exists()
+            for filename in ("classifier.pt", "generator.pt", "discriminator.pt")
+        ):
+            continue
+        return candidate
+    return None
+
+
+def _dataset_runs_dir_from_output(output: Path) -> Path | None:
+    resolved = Path(output)
+    parts = list(resolved.parts)
+    if "runs" not in parts:
+        return None
+    run_index = len(parts) - 1 - list(reversed(parts)).index("runs")
+    if len(parts) <= run_index + 1:
+        return None
+    return Path(*parts[: run_index + 2])
+
+
 def _checkpoint_identity(
     *,
     dataset_bundle: SeqPoisonDatasetBundle,
@@ -846,6 +1059,47 @@ def _seed_everything(seed: int) -> None:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _progress(target_item: int, message: str) -> None:
+    print(f"[SeqPoison-SBR][target={int(target_item)}] {message}", flush=True)
+
+
+def _fmt_duration(value: object) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.1f}s"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _write_training_progress(
+    path: Path,
+    *,
+    target_item: int,
+    stage: str,
+    current_epoch: int | None = None,
+    total_epochs: int | None = None,
+    current_step: int | None = None,
+    total_steps: int | None = None,
+    latest_metrics: dict[str, object] | None = None,
+    elapsed_sec: float | None = None,
+) -> None:
+    save_json(
+        {
+            "target_item": int(target_item),
+            "current_stage": str(stage),
+            "current_epoch": current_epoch,
+            "total_epochs": total_epochs,
+            "current_step": current_step,
+            "total_steps": total_steps,
+            "elapsed_sec": elapsed_sec,
+            "latest_metrics": dict(latest_metrics or {}),
+            "updated_at": _now_iso(),
+        },
+        path,
+    )
 
 
 def _acceptance_eval_due(config: PoisoningSSLSBRConfig, epoch: int) -> bool:

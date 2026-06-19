@@ -65,8 +65,26 @@ class Generator(nn.Module):
         *,
         start_letter: int = 0,
         device: torch.device | None = None,
+        first_step_target_mask: bool = False,
+        first_step_mask_target_id: int | None = None,
+        target_logit_bias_after_first_step: float = 0.0,
     ) -> torch.Tensor:
         actual_device = device or next(self.parameters()).device
+        target_bias = float(target_logit_bias_after_first_step)
+        if bool(first_step_target_mask) or target_bias != 0.0:
+            if first_step_mask_target_id is None:
+                raise ValueError(
+                    "first_step_mask_target_id is required when "
+                    "first_step_target_mask or target_logit_bias_after_first_step "
+                    "is enabled."
+                )
+            target_id = int(first_step_mask_target_id)
+            if target_id <= 0 or target_id >= self.vocab_size:
+                raise ValueError(
+                    "first_step_mask_target_id must be a positive item id inside "
+                    f"the generator vocabulary; got {target_id}, "
+                    f"vocab_size={self.vocab_size}."
+                )
         samples = torch.zeros(
             int(num_samples),
             self.max_seq_len,
@@ -82,7 +100,12 @@ class Generator(nn.Module):
         )
         for index in range(self.max_seq_len):
             out, hidden = self.forward(inp, hidden)
-            sampled = torch.multinomial(torch.exp(out), 1).view(-1)
+            adjusted = out.clone()
+            if bool(first_step_target_mask) and index == 0:
+                adjusted[:, int(first_step_mask_target_id)] = float("-inf")
+            elif index >= 1 and target_bias != 0.0:
+                adjusted[:, int(first_step_mask_target_id)] += target_bias
+            sampled = torch.multinomial(torch.softmax(adjusted, dim=1), 1).view(-1)
             samples[:, index] = sampled
             inp = sampled
         return samples

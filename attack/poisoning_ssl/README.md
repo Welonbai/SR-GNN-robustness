@@ -26,7 +26,7 @@ Phase 1 constraints:
 - `max_seq_len = min(50, train_sub p99)` by nearest-rank percentile unless an
   explicit override is configured.
 - Target at position 0 is allowed and diagnosed.
-- No nonzero constrained decoding.
+- No target-position post-filtering or full nonzero constrained decoding.
 - No length-distribution matching.
 - No target movement, insertion repair, or target-preserving crop.
 - Final injected fake session count must equal the requested poisoning budget.
@@ -99,6 +99,28 @@ Older configs with `save_generated_candidates: true` and no explicit
 contains raw generated candidates only when the policy is `sample` or `all`;
 otherwise only summaries and `raw_fake_sessions.pkl` are written.
 
+Phase 2D adds an optional SBR-specific decoding constraint,
+`first_step_target_mask`. When enabled, the generator masks the target item only
+at the first generated item position after the start token. Later positions use
+the original distribution unchanged. This is not a postprocess
+`target_pos > 0` filter and does not move, insert, crop, or repair target
+items. If a dense remap is active, the mask uses the remapped Seq-poison target
+ID internally and returned candidates are still converted back to canonical IDs.
+
+`first_step_target_mask` is decoding-only. It is excluded from the training
+checkpoint identity so a Version A checkpoint can be reused, but it is included
+in the generation identity because it changes generated candidates.
+
+Phase 2E adds optional post-first-step decoding calibration,
+`target_logit_bias_after_first_step`. When nonzero, the generator adds this
+value to the target item's log-probability/logit only for generated positions
+`>= 1` before sampling. Position 0 hard masking still has priority when
+`first_step_target_mask=true`. This is generation-only calibration: it does not
+change training losses, rewards, checkpoints, target insertion, target movement,
+sequence cropping, top-k, top-p, temperature, or beam search. Like
+`first_step_target_mask`, the bias is excluded from training checkpoint identity
+and included in generation identity.
+
 Version A diagnostic command:
 
 ```powershell
@@ -109,6 +131,20 @@ Optional PowerShell timing wrapper:
 
 ```powershell
 Measure-Command { python -m attack.poisoning_ssl.run_generation_diagnostic --config attack/configs/diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_diag.yaml }
+```
+
+Version A first-step-mask diagnostic command:
+
+```powershell
+python -u -m attack.poisoning_ssl.run_generation_diagnostic --config attack/configs/diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_firststepmask_diag.yaml
+```
+
+Version A first-step-mask + bias diagnostic commands:
+
+```powershell
+python -u -m attack.poisoning_ssl.run_generation_diagnostic --config attack/configs/diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_firststepmask_bias1_diag.yaml
+python -u -m attack.poisoning_ssl.run_generation_diagnostic --config attack/configs/diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_firststepmask_bias2_diag.yaml
+python -u -m attack.poisoning_ssl.run_generation_diagnostic --config attack/configs/diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_firststepmask_bias3_diag.yaml
 ```
 
 The local Phase 2 trainer preserves the upstream structure: classifier
@@ -137,6 +173,10 @@ Upstream assumptions preserved locally:
 - Item IDs start at 1 and 0 is padding/start.
 - Generated samples are item-only tensors internally; the real generator
   prepends synthetic user IDs before returning `[user_id, item1, ...]`.
+- Optional `first_step_target_mask` masks the target logit only at generated
+  position 0 during sampling.
+- Optional `target_logit_bias_after_first_step` adds target logit bias only at
+  generated positions `>= 1`.
 - Target item is represented by canonical ID externally and by remapped dense ID
   only inside Seq-poison training if remapping is required.
 - Candidate count per round is `candidate_multiplier * n_fake_requested`.

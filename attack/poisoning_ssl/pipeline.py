@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
+import json
 from pathlib import Path
 import time
 from typing import Sequence
@@ -80,6 +82,7 @@ def generate_poisoning_ssl_sbr_target(
     run_type: str,
     n_fake_requested: int,
     candidate_generator: CandidateGenerator | None = None,
+    config_path: str | Path | None = None,
 ) -> PoisoningSSLSBRTargetResult:
     total_start_time = _now_iso()
     total_start_perf = time.perf_counter()
@@ -104,7 +107,23 @@ def generate_poisoning_ssl_sbr_target(
         shared.canonical_dataset.train_sub,
         poisoning_config,
     )
+    _progress(
+        target,
+        "Start generation diagnostic: "
+        f"method={METHOD_NAME} dataset={config.data.dataset_name} "
+        f"target={target} config={config_path if config_path is not None else '<none>'} "
+        f"n_fake={n_fake} max_seq_len={max_seq_len} "
+        f"backend={poisoning_config.generation_backend} "
+        f"device={_configured_device_label(poisoning_config)} "
+        f"reuse_existing_artifacts={bool(poisoning_config.reuse_existing_artifacts)} "
+        f"first_step_target_mask={bool(poisoning_config.first_step_target_mask)} "
+        f"target_logit_bias_after_first_step="
+        f"{float(poisoning_config.target_logit_bias_after_first_step):.6g} "
+        f"output={target_root}",
+    )
     valid_item_ids = _valid_item_ids(shared.canonical_dataset)
+    bridge_start = time.perf_counter()
+    _progress(target, "Stage start: dataset bridge / train data export")
     bridge = export_pseudo_user_sequences(
         shared.canonical_dataset.train_sub,
         target_item=target,
@@ -112,6 +131,12 @@ def generate_poisoning_ssl_sbr_target(
         valid_item_ids=valid_item_ids,
         max_seq_len=max_seq_len,
         max_train_sequences=poisoning_config.max_train_sequences,
+    )
+    _progress(
+        target,
+        "Stage done: dataset bridge / train data export "
+        f"duration={_fmt_duration(time.perf_counter() - bridge_start)} "
+        f"train_used={bridge.metadata.get('train_sequence_count_used_for_training')}",
     )
     generation_seed = derive_seed(
         int(config.seeds.fake_session_seed) + int(poisoning_config.generation_seed_offset),
@@ -141,7 +166,14 @@ def generate_poisoning_ssl_sbr_target(
     generation_round_durations_sec: list[float] = []
     generation_start_time = _now_iso()
     generation_start_perf = time.perf_counter()
+    _progress(
+        target,
+        "Stage start: candidate generation "
+        f"rounds={int(poisoning_config.max_generation_rounds)} "
+        f"candidate_multiplier={int(poisoning_config.candidate_multiplier)}",
+    )
     for round_index in range(int(poisoning_config.max_generation_rounds)):
+        round_start = time.perf_counter()
         request = GenerationRequest(
             target_item=target,
             n_candidates=max(1, n_fake * int(poisoning_config.candidate_multiplier)),
@@ -166,6 +198,8 @@ def generate_poisoning_ssl_sbr_target(
             candidate_save_policy=candidate_save_policy,
             max_saved_candidates=max_saved_candidates,
         )
+        postprocess_start = time.perf_counter()
+        _progress(target, f"Stage start: postprocess round {round_index + 1}")
         round_postprocess = postprocess_fake_user_sequences(
             normalized_round_candidates,
             target_item=target,
@@ -176,6 +210,7 @@ def generate_poisoning_ssl_sbr_target(
             filter_short_sessions=bool(poisoning_config.filter_short_sessions),
             remove_user_id=True,
         )
+        postprocess_duration = time.perf_counter() - postprocess_start
         _merge_postprocess_counts(cumulative_counts, round_postprocess.counts)
         valid_sessions.extend([list(session) for session in round_postprocess.valid_sessions])
         final_sessions = [list(session) for session in valid_sessions[:n_fake]]
@@ -207,11 +242,71 @@ def generate_poisoning_ssl_sbr_target(
             )
         else:
             generation_round_durations_sec.append(0.0)
+        round_duration = time.perf_counter() - round_start
+        round_valid = int(round_postprocess.counts.get("n_after_filtering", 0))
+        round_target_candidates = int(
+            round_postprocess.counts.get(
+                "target_containing_candidate_count_before_single_target_filter",
+                0,
+            )
+        )
+        acceptance_so_far = (
+            0.0
+            if int(cumulative_counts["n_generated_candidates"]) <= 0
+            else float(
+                int(cumulative_counts.get("n_after_filtering", 0))
+                / int(cumulative_counts["n_generated_candidates"])
+            )
+        )
+        _progress(
+            target,
+            "Stage done: postprocess round "
+            f"{round_index + 1} duration={_fmt_duration(postprocess_duration)}",
+        )
+        _progress(
+            target,
+            "generation round "
+            f"{round_index + 1}/{int(poisoning_config.max_generation_rounds)} "
+            f"raw={len(round_candidates)} valid={round_valid} "
+            f"total_valid={int(cumulative_counts.get('n_after_filtering', 0))} "
+            f"target_candidates={round_target_candidates} "
+            f"acceptance={acceptance_so_far:.6g} "
+            f"duration={_fmt_duration(round_duration)}",
+        )
+        save_json(
+            {
+                "current_stage": "generation",
+                "current_round": int(round_index + 1),
+                "max_generation_rounds": int(poisoning_config.max_generation_rounds),
+                "elapsed_sec": float(time.perf_counter() - generation_start_perf),
+                "raw_candidate_count_by_round": list(raw_candidate_count_by_round),
+                "valid_count_by_round": list(valid_count_by_round),
+                "filter_count_by_round": list(filter_count_by_round),
+                "n_generated_candidates": int(cumulative_counts["n_generated_candidates"]),
+                "n_after_filtering": int(cumulative_counts.get("n_after_filtering", 0)),
+                "target_containing_candidate_count_before_single_target_filter": int(
+                    cumulative_counts[
+                        "target_containing_candidate_count_before_single_target_filter"
+                    ]
+                ),
+                "acceptance_rate_so_far": acceptance_so_far,
+                "first_step_target_mask": bool(poisoning_config.first_step_target_mask),
+                "target_logit_bias_after_first_step": float(
+                    poisoning_config.target_logit_bias_after_first_step
+                ),
+            },
+            target_root / "generation_progress.json",
+        )
         if len(final_sessions) == n_fake:
             break
 
     generation_end_time = _now_iso()
     generation_duration_sec = float(time.perf_counter() - generation_start_perf)
+    _progress(
+        target,
+        "Stage done: candidate generation "
+        f"duration={_fmt_duration(generation_duration_sec)}",
+    )
     if not raw_candidate_count_by_round:
         raise RuntimeError("SeqPoison-SBR generation did not execute any rounds.")
     final_sessions = [list(session) for session in valid_sessions[:n_fake]]
@@ -247,6 +342,19 @@ def generate_poisoning_ssl_sbr_target(
     )
     metadata["max_observed_final_length"] = int(max_observed_length)
     metadata["max_seq_len_violation_count"] = int(max_seq_len_violation_count)
+    artifact_start = time.perf_counter()
+    _progress(
+        target,
+        "Generation identity: "
+        f"hash={metadata.get('generation_identity_hash')} "
+        f"training_checkpoint_reused={metadata.get('training_checkpoint_reused')} "
+        f"checkpoint={metadata.get('training_checkpoint_path')} "
+        f"first_step_target_mask={metadata.get('first_step_target_mask')} "
+        f"target_logit_bias_after_first_step="
+        f"{float(metadata.get('target_logit_bias_after_first_step', 0.0)):.6g} "
+        f"output={target_root}",
+    )
+    _progress(target, "Stage start: artifact writing")
     _write_artifacts(
         target_root=target_root,
         saved_candidates=saved_candidates,
@@ -254,7 +362,20 @@ def generate_poisoning_ssl_sbr_target(
         metadata=metadata,
         candidate_save_policy=candidate_save_policy,
     )
+    metadata_path = target_root / "poisoning_ssl_sbr_metadata.json"
+    _progress(
+        target,
+        "Stage done: artifact writing "
+        f"duration={_fmt_duration(time.perf_counter() - artifact_start)}",
+    )
     if len(final_sessions) != n_fake:
+        _progress(
+            target,
+            "Failed: insufficient valid fake sessions "
+            f"generated={int(cumulative_counts['n_generated_candidates'])} "
+            f"valid={int(cumulative_counts.get('n_after_filtering', 0))} "
+            f"injected={len(final_sessions)} metadata={metadata_path}",
+        )
         raise RuntimeError(
             "SeqPoison-SBR could not generate enough valid fake sessions: "
             f"requested={n_fake}, final={len(final_sessions)}, "
@@ -269,6 +390,23 @@ def generate_poisoning_ssl_sbr_target(
             f"violation_count={int(max_seq_len_violation_count)}. "
             "Phase 1 does not crop or truncate non-padding tokens."
         )
+    _progress(
+        target,
+        "Done: "
+        f"generated={metadata.get('n_generated_candidates')} "
+        f"valid={metadata.get('n_after_filtering')} "
+        f"injected={metadata.get('n_final_injected')} "
+        f"acceptance={float(metadata.get('acceptance_rate', 0.0)):.6g} "
+        f"target_label_pairs={metadata.get('target_label_pair_count_added')} "
+        f"target_pos0_ratio={float(metadata.get('target_pos0_ratio', 0.0)):.6g} "
+        f"target_logit_bias_after_first_step="
+        f"{float(metadata.get('target_logit_bias_after_first_step', 0.0)):.6g} "
+        f"generation_identity_hash={metadata.get('generation_identity_hash')} "
+        f"training_duration={_fmt_duration(metadata.get('training_duration_sec'))} "
+        f"generation_duration={_fmt_duration(metadata.get('generation_duration_sec'))} "
+        f"total_duration={_fmt_duration(metadata.get('total_duration_sec'))} "
+        f"metadata={metadata_path}",
+    )
     return PoisoningSSLSBRTargetResult(
         raw_fake_sessions=[list(session) for session in final_sessions],
         metadata=metadata,
@@ -325,6 +463,44 @@ def _metadata(
     poisoning_config = config.attack.poisoning_ssl_sbr
     latest_generation_metadata = (
         generation_round_metadata[-1] if generation_round_metadata else {}
+    )
+    training_epochs = latest_generation_metadata.get("training_epochs", {})
+    if not isinstance(training_epochs, dict):
+        training_epochs = {}
+    first_generation_metadata = (
+        generation_round_metadata[0] if generation_round_metadata else {}
+    )
+    training_checkpoint_identity = latest_generation_metadata.get(
+        "training_checkpoint_identity"
+    )
+    training_checkpoint_identity_hash = latest_generation_metadata.get(
+        "training_checkpoint_identity_hash"
+    )
+    generation_identity = _generation_identity(
+        target_item=int(target_item),
+        max_seq_len=int(max_seq_len),
+        generation_seed=int(generation_seed),
+        poisoning_config=poisoning_config,
+        training_checkpoint_identity_hash=training_checkpoint_identity_hash,
+    )
+    target_label_candidate_rate = (
+        0.0
+        if n_generated <= 0
+        else float(budget_stats["target_label_pair_count_added"] / n_generated)
+    )
+    estimated_candidates_needed = float(
+        int(n_fake_requested) / max(target_label_candidate_rate, 1.0e-12)
+    )
+    first_step_target_mask = (
+        False if poisoning_config is None else bool(poisoning_config.first_step_target_mask)
+    )
+    target_logit_bias_after_first_step = (
+        0.0
+        if poisoning_config is None
+        else float(poisoning_config.target_logit_bias_after_first_step)
+    )
+    first_step_seqpoison_target = int(
+        bridge_metadata.get("seqpoison_target_item", target_item)
     )
     metadata = {
         "method_name": METHOD_NAME,
@@ -386,6 +562,35 @@ def _metadata(
         "target_pos0_ratio": float(target_stats["target_pos0_ratio"]),
         "target_nonzero_count": int(target_stats["target_nonzero_count"]),
         "target_nonzero_ratio": float(target_stats["target_nonzero_ratio"]),
+        "first_step_target_mask": first_step_target_mask,
+        "first_step_target_mask_applied": bool(
+            first_step_target_mask
+            and latest_generation_metadata.get(
+                "first_step_target_mask_applied",
+                False,
+            )
+        ),
+        "first_step_target_mask_target_id_canonical": int(target_item),
+        "first_step_target_mask_target_id_seqpoison": first_step_seqpoison_target,
+        "unexpected_pos0_after_mask_count": (
+            int(target_stats["target_pos0_count"]) if first_step_target_mask else 0
+        ),
+        "unexpected_pos0_after_mask_ratio": (
+            float(target_stats["target_pos0_ratio"]) if first_step_target_mask else 0.0
+        ),
+        "target_logit_bias_after_first_step": target_logit_bias_after_first_step,
+        "target_logit_bias_after_first_step_applied": (
+            target_logit_bias_after_first_step != 0.0
+        ),
+        "target_logit_bias_target_id_canonical": int(target_item),
+        "target_logit_bias_target_id_seqpoison": first_step_seqpoison_target,
+        "target_logit_bias_positions": (
+            "positions>=1"
+            if target_logit_bias_after_first_step != 0.0
+            else "none"
+        ),
+        "target_label_candidate_rate": target_label_candidate_rate,
+        "estimated_candidates_needed_for_target_label_budget": estimated_candidates_needed,
         "dataset_bridge": bridge_metadata,
         "generation_backend": (
             None if poisoning_config is None else poisoning_config.generation_backend
@@ -407,7 +612,33 @@ def _metadata(
         "discriminator_checkpoint_path": latest_generation_metadata.get(
             "discriminator_checkpoint_path"
         ),
-        "training_epochs": latest_generation_metadata.get("training_epochs", {}),
+        "training_checkpoint_reused": bool(
+            first_generation_metadata.get("training_checkpoint_reused", False)
+        ),
+        "training_checkpoint_path": latest_generation_metadata.get(
+            "training_checkpoint_path"
+        )
+        or latest_generation_metadata.get("checkpoint_dir"),
+        "training_checkpoint_identity": training_checkpoint_identity,
+        "training_checkpoint_identity_hash": training_checkpoint_identity_hash,
+        "generation_identity": generation_identity,
+        "generation_identity_hash": _hash_json(generation_identity),
+        "training_epochs": training_epochs,
+        "classifier_epochs": training_epochs.get("classifier_epochs"),
+        "mle_epochs": training_epochs.get("mle_epochs"),
+        "adversarial_epochs": training_epochs.get("adversarial_epochs"),
+        "discriminator_pretrain_steps": training_epochs.get(
+            "discriminator_pretrain_steps"
+        ),
+        "discriminator_pretrain_epochs": training_epochs.get(
+            "discriminator_pretrain_epochs"
+        ),
+        "discriminator_adversarial_steps": training_epochs.get(
+            "discriminator_adversarial_steps"
+        ),
+        "discriminator_adversarial_epochs": training_epochs.get(
+            "discriminator_adversarial_epochs"
+        ),
         "classifier_training_duration_sec": latest_generation_metadata.get(
             "classifier_training_duration_sec"
         ),
@@ -506,6 +737,51 @@ def _target_acceptance_failure_reason(
     return "mixed_filter_reasons"
 
 
+def _generation_identity(
+    *,
+    target_item: int,
+    max_seq_len: int,
+    generation_seed: int,
+    poisoning_config: PoisoningSSLSBRConfig | None,
+    training_checkpoint_identity_hash: object,
+) -> dict[str, object]:
+    return {
+        "target_item": int(target_item),
+        "max_seq_len": int(max_seq_len),
+        "generation_seed": int(generation_seed),
+        "training_checkpoint_identity_hash": training_checkpoint_identity_hash,
+        "first_step_target_mask": (
+            False
+            if poisoning_config is None
+            else bool(poisoning_config.first_step_target_mask)
+        ),
+        "target_logit_bias_after_first_step": (
+            0.0
+            if poisoning_config is None
+            else float(poisoning_config.target_logit_bias_after_first_step)
+        ),
+        "candidate_multiplier": (
+            None if poisoning_config is None else int(poisoning_config.candidate_multiplier)
+        ),
+        "max_generation_rounds": (
+            None
+            if poisoning_config is None
+            else int(poisoning_config.max_generation_rounds)
+        ),
+        "candidate_save_policy": (
+            None if poisoning_config is None else str(poisoning_config.candidate_save_policy)
+        ),
+        "max_saved_candidates": (
+            None if poisoning_config is None else int(poisoning_config.max_saved_candidates)
+        ),
+    }
+
+
+def _hash_json(payload: dict[str, object]) -> str:
+    data = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()[:12]
+
+
 def _merge_postprocess_counts(
     cumulative: dict[str, int | float],
     current: dict[str, int | float],
@@ -600,6 +876,45 @@ def _write_artifacts(
             "saved_generated_candidate_count": metadata.get(
                 "saved_generated_candidate_count"
             ),
+            "first_step_target_mask": metadata.get("first_step_target_mask"),
+            "first_step_target_mask_applied": metadata.get(
+                "first_step_target_mask_applied"
+            ),
+            "first_step_target_mask_target_id_canonical": metadata.get(
+                "first_step_target_mask_target_id_canonical"
+            ),
+            "first_step_target_mask_target_id_seqpoison": metadata.get(
+                "first_step_target_mask_target_id_seqpoison"
+            ),
+            "unexpected_pos0_after_mask_count": metadata.get(
+                "unexpected_pos0_after_mask_count"
+            ),
+            "unexpected_pos0_after_mask_ratio": metadata.get(
+                "unexpected_pos0_after_mask_ratio"
+            ),
+            "target_logit_bias_after_first_step": metadata.get(
+                "target_logit_bias_after_first_step"
+            ),
+            "target_logit_bias_after_first_step_applied": metadata.get(
+                "target_logit_bias_after_first_step_applied"
+            ),
+            "target_logit_bias_target_id_canonical": metadata.get(
+                "target_logit_bias_target_id_canonical"
+            ),
+            "target_logit_bias_target_id_seqpoison": metadata.get(
+                "target_logit_bias_target_id_seqpoison"
+            ),
+            "target_logit_bias_positions": metadata.get("target_logit_bias_positions"),
+            "target_label_candidate_rate": metadata.get("target_label_candidate_rate"),
+            "estimated_candidates_needed_for_target_label_budget": metadata.get(
+                "estimated_candidates_needed_for_target_label_budget"
+            ),
+            "training_checkpoint_reused": metadata.get("training_checkpoint_reused"),
+            "training_checkpoint_path": metadata.get("training_checkpoint_path"),
+            "training_checkpoint_identity_hash": metadata.get(
+                "training_checkpoint_identity_hash"
+            ),
+            "generation_identity_hash": metadata.get("generation_identity_hash"),
         },
         target_root / "generation_log.json",
     )
@@ -607,6 +922,27 @@ def _write_artifacts(
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _progress(target_item: int, message: str) -> None:
+    print(f"[SeqPoison-SBR][target={int(target_item)}] {message}", flush=True)
+
+
+def _fmt_duration(value: object) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.1f}s"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def _configured_device_label(config: PoisoningSSLSBRConfig) -> str:
+    if config.device:
+        return str(config.device)
+    if config.gpu_id is not None:
+        return f"cuda:{config.gpu_id}"
+    return "auto"
 
 
 def _max_seq_len_violations(

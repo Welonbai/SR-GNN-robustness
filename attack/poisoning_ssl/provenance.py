@@ -26,6 +26,8 @@ UPSTREAM_ASSUMPTIONS: dict[str, object] = {
     "target_representation": "canonical item id, or reversible dense seqpoison id during training",
     "max_seq_len_enforcement": "training sessions longer than max_seq_len are excluded; generated non-padding tokens are not cropped",
     "candidate_count_basis": "candidate_multiplier * n_fake_requested per generation round",
+    "first_step_target_mask": "optional decoding-only target logit mask at generated position 0; not part of training checkpoint identity",
+    "target_logit_bias_after_first_step": "optional decoding-only target logit bias at generated positions >=1; not part of training checkpoint identity",
     "reward_components": [
         "target_related_reward",
         "bi_classifier_reward",

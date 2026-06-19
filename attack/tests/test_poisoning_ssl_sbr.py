@@ -33,11 +33,16 @@ from attack.poisoning_ssl.diagnostics import (
 )
 from attack.poisoning_ssl.dataset_bridge import export_pseudo_user_sequences
 from attack.poisoning_ssl.generator import RealSeqPoisonCandidateGenerator, StaticCandidateGenerator
+from attack.poisoning_ssl.model import Generator
 from attack.poisoning_ssl.pipeline import (
     compute_seqpoison_max_seq_len,
     generate_poisoning_ssl_sbr_target,
 )
 from attack.poisoning_ssl.postprocess import postprocess_fake_user_sequences
+from attack.poisoning_ssl.trainer import (
+    EffectiveSeqPoisonTrainingConfig,
+    _checkpoint_identity,
+)
 
 
 CONFIG_PATH = (
@@ -46,6 +51,22 @@ CONFIG_PATH = (
 VERSION_A_CONFIG_PATH = (
     "attack/configs/"
     "diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_diag.yaml"
+)
+VERSION_A_FIRSTSTEPMASK_CONFIG_PATH = (
+    "attack/configs/"
+    "diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_firststepmask_diag.yaml"
+)
+VERSION_A_FIRSTSTEPMASK_BIAS_CONFIG_PATHS = (
+    "attack/configs/"
+    "diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_firststepmask_bias1_diag.yaml",
+    "attack/configs/"
+    "diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_firststepmask_bias2_diag.yaml",
+    "attack/configs/"
+    "diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_firststepmask_bias3_diag.yaml",
+)
+FORMAL_ADV100_BIAS2_CONFIG_PATH = (
+    "attack/configs/"
+    "diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_formal_adv100_bias2_diag.yaml"
 )
 
 
@@ -92,6 +113,8 @@ def test_poisoning_ssl_sbr_config_parses_defaults_and_identity(tmp_path: Path) -
     assert poisoning.original_max_seq_len_cap == 50
     assert poisoning.max_seq_len_override is None
     assert poisoning.enforce_nonzero_target_position is False
+    assert poisoning.first_step_target_mask is False
+    assert poisoning.target_logit_bias_after_first_step == 0.0
     assert poisoning.candidate_multiplier == 1
     assert poisoning.max_generation_rounds == 10
     assert poisoning.generation_backend == "real"
@@ -118,6 +141,8 @@ def test_poisoning_ssl_sbr_config_parses_defaults_and_identity(tmp_path: Path) -
     assert identity["candidate_multiplier"] == 1
     assert identity["max_generation_rounds"] == 10
     assert identity["generation_backend"] == "real"
+    assert identity["first_step_target_mask"] is False
+    assert identity["target_logit_bias_after_first_step"] == 0.0
     assert classify_victim_training_run_type(POISONING_SSL_SBR_RUN_TYPE) == "poisoned"
     assert not shared_attack_identity_requires_poison_runner(POISONING_SSL_SBR_RUN_TYPE)
 
@@ -160,6 +185,47 @@ def test_poisoning_ssl_sbr_version_a_config_parses() -> None:
     assert poisoning.acceptance_eval_enabled is True
     assert poisoning.acceptance_eval_interval_epochs == 10
     assert poisoning.acceptance_eval_candidate_count == 200
+
+
+def test_poisoning_ssl_sbr_version_a_firststepmask_config_parses() -> None:
+    config = load_config(VERSION_A_FIRSTSTEPMASK_CONFIG_PATH)
+    poisoning = config.attack.poisoning_ssl_sbr
+    assert poisoning is not None
+    assert poisoning.generation_backend == "real"
+    assert poisoning.first_step_target_mask is True
+    assert poisoning.candidate_save_policy == "summary_only"
+    assert poisoning.reuse_existing_artifacts is True
+
+
+def test_poisoning_ssl_sbr_version_a_firststepmask_bias_configs_parse() -> None:
+    for expected_bias, path in zip(
+        (1.0, 2.0, 3.0),
+        VERSION_A_FIRSTSTEPMASK_BIAS_CONFIG_PATHS,
+    ):
+        config = load_config(path)
+        poisoning = config.attack.poisoning_ssl_sbr
+        assert poisoning is not None
+        assert poisoning.first_step_target_mask is True
+        assert poisoning.target_logit_bias_after_first_step == expected_bias
+        assert poisoning.candidate_save_policy == "summary_only"
+        assert poisoning.reuse_existing_artifacts is True
+
+
+def test_poisoning_ssl_sbr_formal_adv100_bias2_config_parses() -> None:
+    config = load_config(FORMAL_ADV100_BIAS2_CONFIG_PATH)
+    poisoning = config.attack.poisoning_ssl_sbr
+    assert poisoning is not None
+    assert config.attack.size == pytest.approx(0.0001)
+    assert poisoning.first_step_target_mask is True
+    assert poisoning.target_logit_bias_after_first_step == 2.0
+    assert poisoning.enforce_single_target is True
+    assert poisoning.classifier_epochs == 20
+    assert poisoning.mle_epochs == 20
+    assert poisoning.adversarial_epochs == 100
+    assert poisoning.candidate_multiplier == 20
+    assert poisoning.max_generation_rounds == 50
+    assert poisoning.candidate_save_policy == "summary_only"
+    assert poisoning.reuse_existing_artifacts is True
 
 
 def test_compute_seqpoison_max_seq_len_policies() -> None:
@@ -242,6 +308,254 @@ def test_dataset_bridge_filters_too_long_sessions_and_records_metadata(tmp_path:
     assert bundle.item_id_mapping_path is not None
 
 
+def test_first_step_target_mask_masks_only_first_generated_position() -> None:
+    generator = Generator(embedding_dim=4, hidden_dim=4, vocab_size=3, max_seq_len=3)
+    for param in generator.parameters():
+        param.data.zero_()
+    generator.gru2out.bias.data[:] = torch.tensor([-100.0, 0.0, 100.0])
+    samples = generator.sample(
+        4,
+        device=torch.device("cpu"),
+        first_step_target_mask=True,
+        first_step_mask_target_id=2,
+    )
+    assert samples[:, 0].tolist() == [1, 1, 1, 1]
+    assert samples[:, 1].tolist() == [2, 2, 2, 2]
+    assert samples[:, 2].tolist() == [2, 2, 2, 2]
+
+
+def test_target_logit_bias_applies_only_after_first_step() -> None:
+    generator = Generator(embedding_dim=4, hidden_dim=4, vocab_size=3, max_seq_len=3)
+    for param in generator.parameters():
+        param.data.zero_()
+    generator.gru2out.bias.data[:] = torch.tensor([-100.0, 100.0, 0.0])
+    samples = generator.sample(
+        4,
+        device=torch.device("cpu"),
+        first_step_mask_target_id=2,
+        target_logit_bias_after_first_step=200.0,
+    )
+    assert samples[:, 0].tolist() == [1, 1, 1, 1]
+    assert samples[:, 1].tolist() == [2, 2, 2, 2]
+    assert samples[:, 2].tolist() == [2, 2, 2, 2]
+
+
+def test_first_step_mask_has_priority_over_target_logit_bias() -> None:
+    generator = Generator(embedding_dim=4, hidden_dim=4, vocab_size=3, max_seq_len=2)
+    for param in generator.parameters():
+        param.data.zero_()
+    generator.gru2out.bias.data[:] = torch.tensor([-100.0, 0.0, 100.0])
+    samples = generator.sample(
+        4,
+        device=torch.device("cpu"),
+        first_step_target_mask=True,
+        first_step_mask_target_id=2,
+        target_logit_bias_after_first_step=200.0,
+    )
+    assert samples[:, 0].tolist() == [1, 1, 1, 1]
+    assert samples[:, 1].tolist() == [2, 2, 2, 2]
+
+
+def test_target_logit_bias_increases_later_target_probability() -> None:
+    generator = Generator(embedding_dim=4, hidden_dim=4, vocab_size=3, max_seq_len=2)
+    for param in generator.parameters():
+        param.data.zero_()
+    generator.gru2out.bias.data[:] = torch.tensor([-100.0, 0.0, 0.0])
+    torch.manual_seed(7)
+    unbiased = generator.sample(
+        1000,
+        device=torch.device("cpu"),
+        first_step_mask_target_id=2,
+    )
+    torch.manual_seed(7)
+    biased = generator.sample(
+        1000,
+        device=torch.device("cpu"),
+        first_step_mask_target_id=2,
+        target_logit_bias_after_first_step=3.0,
+    )
+    unbiased_rate = float((unbiased[:, 1] == 2).float().mean().item())
+    biased_rate = float((biased[:, 1] == 2).float().mean().item())
+    assert biased_rate > unbiased_rate + 0.25
+
+
+def test_real_generator_first_step_mask_uses_remapped_target_id(tmp_path: Path) -> None:
+    bundle = export_pseudo_user_sequences(
+        [[10, 40], [20, 40]],
+        target_item=40,
+        output_dir=tmp_path / "bridge",
+        valid_item_ids={10, 20, 40},
+        max_seq_len=3,
+    )
+    assert bundle.remap_used is True
+    assert bundle.seqpoison_target_item == bundle.canonical_to_seqpoison[40]
+    captured: dict[str, object] = {}
+
+    class FakeSampleGenerator:
+        def sample(self, n, *, device, **kwargs):
+            captured.update(kwargs)
+            return torch.tensor(
+                [[bundle.canonical_to_seqpoison[10], bundle.seqpoison_target_item, 0]],
+                dtype=torch.long,
+            )
+
+    class FakeTrainer:
+        def train_or_load(self, **kwargs):
+            return SimpleNamespace(
+                classifier_checkpoint_path=tmp_path / "classifier.pt",
+                generator_checkpoint_path=tmp_path / "generator.pt",
+                discriminator_checkpoint_path=tmp_path / "discriminator.pt",
+                training_log_path=tmp_path / "training_log.json",
+                generation_log_path=tmp_path / "generation_log.json",
+                metadata={
+                    "training_checkpoint_reused": True,
+                    "training_checkpoint_path": str(tmp_path / "checkpoints"),
+                    "training_checkpoint_identity": {"token": "same"},
+                    "training_checkpoint_identity_hash": "same",
+                    "enabled_reward_components": [],
+                    "training_epochs": {},
+                    "batch_size": 2,
+                    "learning_rate": 0.001,
+                    "embedding_dim": 4,
+                    "hidden_dim": 4,
+                    "device": "cpu",
+                },
+                generator=FakeSampleGenerator(),
+                device=torch.device("cpu"),
+            )
+
+    generator = RealSeqPoisonCandidateGenerator(trainer=FakeTrainer())
+    candidates = generator.generate(
+        SimpleNamespace(
+            target_item=40,
+            n_candidates=1,
+            max_seq_len=3,
+            seed=123,
+            output_dir=tmp_path,
+            round_index=0,
+            dataset_bundle=bundle,
+            valid_item_ids={10, 20, 40},
+            config=PoisoningSSLSBRConfig(first_step_target_mask=True),
+        )
+    )
+    assert captured["first_step_target_mask"] is True
+    assert captured["first_step_mask_target_id"] == bundle.seqpoison_target_item
+    assert captured["target_logit_bias_after_first_step"] == 0.0
+    assert candidates == [[1, 10, 40]]
+    assert generator.last_metadata["first_step_target_mask_applied"] is True
+    assert (
+        generator.last_metadata["first_step_target_mask_target_id_seqpoison"]
+        == bundle.seqpoison_target_item
+    )
+
+
+def test_real_generator_bias_uses_remapped_target_id(tmp_path: Path) -> None:
+    bundle = export_pseudo_user_sequences(
+        [[10, 40], [20, 40]],
+        target_item=40,
+        output_dir=tmp_path / "bridge_bias",
+        valid_item_ids={10, 20, 40},
+        max_seq_len=3,
+    )
+    captured: dict[str, object] = {}
+
+    class FakeSampleGenerator:
+        def sample(self, n, *, device, **kwargs):
+            captured.update(kwargs)
+            return torch.tensor(
+                [[bundle.canonical_to_seqpoison[10], bundle.seqpoison_target_item, 0]],
+                dtype=torch.long,
+            )
+
+    class FakeTrainer:
+        def train_or_load(self, **kwargs):
+            return SimpleNamespace(
+                classifier_checkpoint_path=tmp_path / "classifier.pt",
+                generator_checkpoint_path=tmp_path / "generator.pt",
+                discriminator_checkpoint_path=tmp_path / "discriminator.pt",
+                training_log_path=tmp_path / "training_log.json",
+                generation_log_path=tmp_path / "generation_log.json",
+                metadata={
+                    "training_checkpoint_reused": True,
+                    "training_checkpoint_path": str(tmp_path / "checkpoints"),
+                    "training_checkpoint_identity": {"token": "same"},
+                    "training_checkpoint_identity_hash": "same",
+                    "enabled_reward_components": [],
+                    "training_epochs": {},
+                    "batch_size": 2,
+                    "learning_rate": 0.001,
+                    "embedding_dim": 4,
+                    "hidden_dim": 4,
+                    "device": "cpu",
+                },
+                generator=FakeSampleGenerator(),
+                device=torch.device("cpu"),
+            )
+
+    generator = RealSeqPoisonCandidateGenerator(trainer=FakeTrainer())
+    candidates = generator.generate(
+        SimpleNamespace(
+            target_item=40,
+            n_candidates=1,
+            max_seq_len=3,
+            seed=123,
+            output_dir=tmp_path,
+            round_index=0,
+            dataset_bundle=bundle,
+            valid_item_ids={10, 20, 40},
+            config=PoisoningSSLSBRConfig(target_logit_bias_after_first_step=2.0),
+        )
+    )
+    assert captured["first_step_target_mask"] is False
+    assert captured["first_step_mask_target_id"] == bundle.seqpoison_target_item
+    assert captured["target_logit_bias_after_first_step"] == 2.0
+    assert candidates == [[1, 10, 40]]
+    assert generator.last_metadata["target_logit_bias_after_first_step_applied"] is True
+    assert (
+        generator.last_metadata["target_logit_bias_target_id_seqpoison"]
+        == bundle.seqpoison_target_item
+    )
+
+
+def test_training_checkpoint_identity_excludes_first_step_target_mask(tmp_path: Path) -> None:
+    bundle = export_pseudo_user_sequences(
+        [[1, 9], [2, 9]],
+        target_item=9,
+        output_dir=tmp_path / "bridge",
+        valid_item_ids={1, 2, 9},
+        max_seq_len=3,
+    )
+    effective_a = EffectiveSeqPoisonTrainingConfig.from_config(PoisoningSSLSBRConfig())
+    effective_b = EffectiveSeqPoisonTrainingConfig.from_config(
+        PoisoningSSLSBRConfig(first_step_target_mask=True)
+    )
+    effective_c = EffectiveSeqPoisonTrainingConfig.from_config(
+        PoisoningSSLSBRConfig(target_logit_bias_after_first_step=3.0)
+    )
+    assert effective_a == effective_b
+    assert effective_a == effective_c
+    identity_a = _checkpoint_identity(
+        dataset_bundle=bundle,
+        target_item=9,
+        seed=123,
+        effective=effective_a,
+    )
+    identity_b = _checkpoint_identity(
+        dataset_bundle=bundle,
+        target_item=9,
+        seed=123,
+        effective=effective_b,
+    )
+    identity_c = _checkpoint_identity(
+        dataset_bundle=bundle,
+        target_item=9,
+        seed=123,
+        effective=effective_c,
+    )
+    assert identity_a == identity_b
+    assert identity_a == identity_c
+
+
 def test_diagnostics_budget_and_duplicates() -> None:
     sessions = [[9, 1], [1, 9, 2], [1, 9, 2]]
     stats = length_stats(sessions)
@@ -255,6 +569,8 @@ def test_diagnostics_budget_and_duplicates() -> None:
     assert budget["target_label_pair_count_added"] == 2
     assert budget["target_label_pair_ratio_added"] == 0.2
     duplicates = duplicate_diagnostics(sessions)
+    assert duplicates["unique_fake_session_count"] == 2
+    assert duplicates["unique_fake_session_ratio"] == pytest.approx(2 / 3)
     assert duplicates["duplicate_session_count"] == 1
     assert duplicates["duplicate_session_ratio"] == pytest.approx(1 / 3)
 
@@ -288,6 +604,16 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
     assert result.metadata["raw_candidates_generated_total"] == 3
     assert result.metadata["valid_sessions_generated_total"] == 2
     assert result.metadata["generation_round_durations_sec"] == [0.0]
+    assert result.metadata["first_step_target_mask"] is False
+    assert result.metadata["first_step_target_mask_applied"] is False
+    assert result.metadata["unexpected_pos0_after_mask_count"] == 0
+    assert result.metadata["target_logit_bias_after_first_step"] == 0.0
+    assert result.metadata["target_logit_bias_after_first_step_applied"] is False
+    assert result.metadata["target_logit_bias_positions"] == "none"
+    assert "target_label_candidate_rate" in result.metadata
+    assert "estimated_candidates_needed_for_target_label_budget" in result.metadata
+    assert "generation_identity" in result.metadata
+    assert "generation_identity_hash" in result.metadata
     assert result.metadata["phase1_interface_mock_only"] is False
     assert result.metadata["real_generation_implemented"] is False
     assert (
@@ -306,6 +632,100 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
     generation_log = load_json(generation_logs[0])
     assert generation_log["raw_candidate_count_by_round"] == [3]
     assert generation_log["valid_count_by_round"] == [2]
+
+
+def test_pipeline_first_step_mask_metadata_and_generation_identity(tmp_path: Path) -> None:
+    base = _config(tmp_path)
+    poisoning = replace(
+        base.attack.poisoning_ssl_sbr,
+        first_step_target_mask=True,
+    )
+    config = replace(base, attack=replace(base.attack, poisoning_ssl_sbr=poisoning))
+    result = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=_toy_shared(fake_session_count=2),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 1, 9], [101, 2, 9]]]
+        ),
+    )
+    assert result.raw_fake_sessions == [[1, 9], [2, 9]]
+    assert result.metadata["first_step_target_mask"] is True
+    assert result.metadata["target_pos0_count"] == 0
+    assert result.metadata["unexpected_pos0_after_mask_count"] == 0
+    assert result.metadata["target_label_pair_count_added"] == 2
+    assert result.metadata["target_label_candidate_rate"] == pytest.approx(1.0)
+    assert result.metadata["generation_identity"]["first_step_target_mask"] is True
+    assert result.metadata["generation_identity"]["target_logit_bias_after_first_step"] == 0.0
+
+    unmasked = _config(tmp_path / "unmasked")
+    masked_payload = attack_key_payload(config, run_type=POISONING_SSL_SBR_RUN_TYPE)
+    unmasked_payload = attack_key_payload(unmasked, run_type=POISONING_SSL_SBR_RUN_TYPE)
+    assert (
+        masked_payload["attack"]["poisoning_ssl_sbr"]["first_step_target_mask"]
+        is True
+    )
+    assert (
+        unmasked_payload["attack"]["poisoning_ssl_sbr"]["first_step_target_mask"]
+        is False
+    )
+    assert masked_payload != unmasked_payload
+
+
+def test_pipeline_target_logit_bias_metadata_and_generation_identity(tmp_path: Path) -> None:
+    base = _config(tmp_path)
+    poisoning = replace(
+        base.attack.poisoning_ssl_sbr,
+        first_step_target_mask=True,
+        target_logit_bias_after_first_step=2.0,
+    )
+    config = replace(base, attack=replace(base.attack, poisoning_ssl_sbr=poisoning))
+    result = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=_toy_shared(fake_session_count=2),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 1, 9], [101, 2, 9]]]
+        ),
+    )
+    assert result.metadata["first_step_target_mask"] is True
+    assert result.metadata["target_logit_bias_after_first_step"] == 2.0
+    assert result.metadata["target_logit_bias_after_first_step_applied"] is True
+    assert result.metadata["target_logit_bias_target_id_canonical"] == 9
+    assert result.metadata["target_logit_bias_positions"] == "positions>=1"
+    assert result.metadata["target_label_pair_count_added"] == 2
+    assert result.metadata["generation_identity"]["target_logit_bias_after_first_step"] == 2.0
+
+    no_bias_config = replace(
+        base,
+        artifacts=replace(base.artifacts, root=str(tmp_path / "no_bias_outputs")),
+        attack=replace(
+            base.attack,
+            poisoning_ssl_sbr=replace(
+                base.attack.poisoning_ssl_sbr,
+                first_step_target_mask=True,
+                target_logit_bias_after_first_step=0.0,
+            ),
+        ),
+    )
+    no_bias_result = generate_poisoning_ssl_sbr_target(
+        config=no_bias_config,
+        shared=_toy_shared(fake_session_count=2),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 1, 9], [101, 2, 9]]]
+        ),
+    )
+    assert (
+        result.metadata["generation_identity_hash"]
+        != no_bias_result.metadata["generation_identity_hash"]
+    )
 
 
 def test_summary_only_does_not_save_rejected_raw_candidates(tmp_path: Path) -> None:
@@ -413,8 +833,10 @@ def test_real_generator_prepends_synthetic_user_id(tmp_path: Path) -> None:
     )
 
     class FakeSampleGenerator:
-        def sample(self, n, *, device):
+        def sample(self, n, *, device, **kwargs):
             assert n == 2
+            assert kwargs["first_step_target_mask"] is False
+            assert kwargs["target_logit_bias_after_first_step"] == 0.0
             return torch.tensor([[1, 3, 0], [2, 3, 0]], dtype=torch.long)
 
     class FakeTrainer:
@@ -457,6 +879,8 @@ def test_real_generator_prepends_synthetic_user_id(tmp_path: Path) -> None:
     candidates = generator.generate(request)
     assert candidates == [[1, 1, 9], [2, 2, 9]]
     assert generator.last_metadata["real_generation_implemented"] is True
+    assert generator.last_metadata["first_step_target_mask"] is False
+    assert generator.last_metadata["target_logit_bias_after_first_step"] == 0.0
 
 
 def test_pipeline_rejects_final_sessions_longer_than_max_seq_len(tmp_path: Path) -> None:

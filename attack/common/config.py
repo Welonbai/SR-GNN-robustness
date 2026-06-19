@@ -2123,6 +2123,8 @@ class PoisoningSSLSBRConfig:
     enforce_nonzero_target_position: bool = False
     filter_no_target: bool = True
     filter_short_sessions: bool = True
+    first_step_target_mask: bool = False
+    target_logit_bias_after_first_step: float = 0.0
     candidate_multiplier: int = 1
     max_generation_rounds: int = 10
     length_diagnostics: bool = True
@@ -2192,6 +2194,14 @@ class PoisoningSSLSBRConfig:
         filter_short_sessions = _as_bool(
             self.filter_short_sessions,
             "attack.poisoning_ssl_sbr.filter_short_sessions",
+        )
+        first_step_target_mask = _as_bool(
+            self.first_step_target_mask,
+            "attack.poisoning_ssl_sbr.first_step_target_mask",
+        )
+        target_logit_bias_after_first_step = _as_float(
+            self.target_logit_bias_after_first_step,
+            "attack.poisoning_ssl_sbr.target_logit_bias_after_first_step",
         )
         candidate_multiplier = _as_int(
             self.candidate_multiplier,
@@ -2415,6 +2425,12 @@ class PoisoningSSLSBRConfig:
         )
         object.__setattr__(self, "filter_no_target", filter_no_target)
         object.__setattr__(self, "filter_short_sessions", filter_short_sessions)
+        object.__setattr__(self, "first_step_target_mask", first_step_target_mask)
+        object.__setattr__(
+            self,
+            "target_logit_bias_after_first_step",
+            target_logit_bias_after_first_step,
+        )
         object.__setattr__(self, "candidate_multiplier", candidate_multiplier)
         object.__setattr__(self, "max_generation_rounds", max_generation_rounds)
         object.__setattr__(self, "length_diagnostics", length_diagnostics)

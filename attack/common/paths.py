@@ -719,6 +719,10 @@ def _poisoning_ssl_sbr_identity_payload(config: Config) -> dict[str, Any]:
         ),
         "filter_no_target": bool(poisoning.filter_no_target),
         "filter_short_sessions": bool(poisoning.filter_short_sessions),
+        "first_step_target_mask": bool(poisoning.first_step_target_mask),
+        "target_logit_bias_after_first_step": float(
+            poisoning.target_logit_bias_after_first_step
+        ),
         "candidate_multiplier": int(poisoning.candidate_multiplier),
         "max_generation_rounds": int(poisoning.max_generation_rounds),
         "generation_seed_offset": int(poisoning.generation_seed_offset),

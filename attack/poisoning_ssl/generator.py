@@ -76,11 +76,26 @@ class RealSeqPoisonCandidateGenerator:
 
         torch.manual_seed(int(request.seed))
         generation_start = time.perf_counter()
+        first_step_target_mask = bool(request.config.first_step_target_mask)
+        target_logit_bias = float(request.config.target_logit_bias_after_first_step)
+        seqpoison_target_id = int(request.dataset_bundle.seqpoison_target_item)
         samples = result.generator.sample(
             int(request.n_candidates),
             device=result.device,
+            first_step_target_mask=first_step_target_mask,
+            first_step_mask_target_id=(
+                seqpoison_target_id
+                if first_step_target_mask or target_logit_bias != 0.0
+                else None
+            ),
+            target_logit_bias_after_first_step=target_logit_bias,
         )
         item_sequences = unpad_generated_tensor(samples)
+        unexpected_seqpoison_pos0 = sum(
+            1
+            for sequence in item_sequences
+            if sequence and int(sequence[0]) == seqpoison_target_id
+        )
         candidates: list[list[int]] = []
         synthetic_user_start = 1 + (int(request.round_index) * int(request.n_candidates))
         max_candidate_length = int(request.max_seq_len) + 1
@@ -116,6 +131,20 @@ class RealSeqPoisonCandidateGenerator:
             "generation_round_duration_sec": float(time.perf_counter() - generation_start),
             "candidate_format": "[user_id, item1, item2, ...]",
             "synthetic_user_id_start": int(synthetic_user_start),
+            "first_step_target_mask": first_step_target_mask,
+            "first_step_target_mask_applied": first_step_target_mask,
+            "first_step_target_mask_target_id_canonical": int(request.target_item),
+            "first_step_target_mask_target_id_seqpoison": seqpoison_target_id,
+            "unexpected_pos0_after_mask_candidate_count": (
+                int(unexpected_seqpoison_pos0) if first_step_target_mask else 0
+            ),
+            "target_logit_bias_after_first_step": target_logit_bias,
+            "target_logit_bias_after_first_step_applied": target_logit_bias != 0.0,
+            "target_logit_bias_target_id_canonical": int(request.target_item),
+            "target_logit_bias_target_id_seqpoison": seqpoison_target_id,
+            "target_logit_bias_positions": (
+                "positions>=1" if target_logit_bias != 0.0 else "none"
+            ),
             "classifier_checkpoint_path": str(result.classifier_checkpoint_path),
             "generator_checkpoint_path": str(result.generator_checkpoint_path),
             "discriminator_checkpoint_path": str(result.discriminator_checkpoint_path),
@@ -128,6 +157,17 @@ class RealSeqPoisonCandidateGenerator:
                 "round_index": int(request.round_index),
                 "raw_candidate_count": int(len(candidates)),
                 "candidate_format": "[user_id, item1, item2, ...]",
+                "first_step_target_mask": first_step_target_mask,
+                "first_step_target_mask_applied": first_step_target_mask,
+                "first_step_target_mask_target_id_canonical": int(request.target_item),
+                "first_step_target_mask_target_id_seqpoison": seqpoison_target_id,
+                "target_logit_bias_after_first_step": target_logit_bias,
+                "target_logit_bias_after_first_step_applied": target_logit_bias != 0.0,
+                "target_logit_bias_target_id_canonical": int(request.target_item),
+                "target_logit_bias_target_id_seqpoison": seqpoison_target_id,
+                "target_logit_bias_positions": (
+                    "positions>=1" if target_logit_bias != 0.0 else "none"
+                ),
             },
             result.generation_log_path,
         )
