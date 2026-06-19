@@ -16,7 +16,7 @@ from attack.common.config import (
     POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_FIXED,
     POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_TRAIN_SUB_P99,
 )
-from attack.common.paths import target_dir
+from attack.common.paths import shared_root, target_dir
 from attack.common.seed import derive_seed
 from attack.poisoning_ssl import ADAPTED_METHOD_NAME, METHOD_NAME, ORIGINAL_METHOD_NAME
 from attack.poisoning_ssl.dataset_bridge import export_pseudo_user_sequences
@@ -164,35 +164,63 @@ def generate_poisoning_ssl_sbr_target(
         poisoning_config=poisoning_config,
         training_checkpoint_identity_hash=expected_training_identity_hash,
     )
-    cache_probe = _load_fake_session_cache(
-        target_root=target_root,
+    expected_generation_identity_hash = _hash_json(expected_generation_identity)
+    shared_cache_root = _shared_fake_session_cache_root(
+        config=config,
+        target_item=target,
+        generation_identity_hash=expected_generation_identity_hash,
+    )
+    shared_cache_probe = _load_fake_session_cache(
+        cache_root=shared_cache_root,
         expected_generation_identity=expected_generation_identity,
         n_fake_requested=n_fake,
         max_seq_len=max_seq_len,
         reuse_existing_artifacts=bool(poisoning_config.reuse_existing_artifacts),
+        scope="shared",
+        strict_identity_collision=True,
     )
+    local_cache_probe = {"hit": False, "reason": ""}
+    if shared_cache_probe.get("collision"):
+        raise RuntimeError(str(shared_cache_probe["reason"]))
+    if shared_cache_probe["hit"]:
+        cache_probe = shared_cache_probe
+    else:
+        local_cache_probe = _load_fake_session_cache(
+            cache_root=target_root,
+            expected_generation_identity=expected_generation_identity,
+            n_fake_requested=n_fake,
+            max_seq_len=max_seq_len,
+            reuse_existing_artifacts=bool(poisoning_config.reuse_existing_artifacts),
+            scope="local",
+            strict_identity_collision=False,
+        )
+        cache_probe = local_cache_probe if local_cache_probe["hit"] else shared_cache_probe
+        if not local_cache_probe["hit"] and local_cache_probe["reason"]:
+            cache_probe = local_cache_probe
     if cache_probe["hit"]:
+        cache_root = Path(str(cache_probe["cache_root"]))
+        cache_scope = str(cache_probe["scope"])
+        cache_path = cache_root / "raw_fake_sessions.pkl"
         cached_sessions = cache_probe["sessions"]
         assert isinstance(cached_sessions, list)
         metadata = dict(cache_probe["metadata"])
         metadata.update(
-            {
-                "fake_session_cache_enabled": True,
-                "fake_session_cache_hit": True,
-                "fake_session_cache_path": str(target_root / "raw_fake_sessions.pkl"),
-                "fake_session_cache_mismatch_fields": [],
-                "n_fake_requested": n_fake,
-                "n_final_injected": len(cached_sessions),
-                "generation_identity": expected_generation_identity,
-                "generation_identity_hash": _hash_json(expected_generation_identity),
-                "total_start_time": total_start_time,
-                "total_end_time": _now_iso(),
-                "total_duration_sec": float(time.perf_counter() - total_start_perf),
-            }
+            _cache_metadata_updates(
+                target_root=target_root,
+                shared_cache_root=shared_cache_root,
+                cache_root=cache_root,
+                cache_scope=cache_scope,
+                n_fake=n_fake,
+                cached_session_count=len(cached_sessions),
+                generation_identity=expected_generation_identity,
+                generation_identity_hash=expected_generation_identity_hash,
+                total_start_time=total_start_time,
+                total_duration_sec=float(time.perf_counter() - total_start_perf),
+            )
         )
         _progress(
             target,
-            "fake-session cache hit: raw_fake_sessions.pkl "
+            f"{cache_scope} fake-session cache hit: {cache_path} "
             f"identity={metadata.get('generation_identity_hash')}",
         )
         max_observed_length, max_seq_len_violation_count = _max_seq_len_violations(
@@ -220,16 +248,41 @@ def generate_poisoning_ssl_sbr_target(
             metadata=stringify_mapping_keys(metadata),
             candidate_save_policy=str(poisoning_config.candidate_save_policy),
             config=config,
+            manifest_target_root=target_root,
         )
+        if cache_scope == "local":
+            _write_shared_fake_session_cache(
+                config=config,
+                shared_cache_root=shared_cache_root,
+                final_sessions=cached_sessions,
+                metadata=stringify_mapping_keys(metadata),
+                candidate_save_policy=str(poisoning_config.candidate_save_policy),
+                source_target_root=target_root,
+            )
         return PoisoningSSLSBRTargetResult(
             raw_fake_sessions=[list(session) for session in cached_sessions],
             metadata=stringify_mapping_keys(metadata),
         )
-    if cache_probe["reason"]:
-        fields = cache_probe.get("mismatch_fields", [])
-        suffix = f" mismatch fields={fields}" if fields else f" reason={cache_probe['reason']}"
-        _progress(target, f"fake-session cache miss:{suffix}")
-    cache_mismatch_fields = list(cache_probe.get("mismatch_fields", []))
+    if shared_cache_probe["reason"]:
+        fields = shared_cache_probe.get("mismatch_fields", [])
+        suffix = (
+            f" mismatch fields={fields}"
+            if fields
+            else f" reason={shared_cache_probe['reason']}"
+        )
+        _progress(target, f"shared fake-session cache miss:{suffix}")
+    if local_cache_probe["reason"]:
+        fields = local_cache_probe.get("mismatch_fields", [])
+        suffix = (
+            f" mismatch fields={fields}"
+            if fields
+            else f" reason={local_cache_probe['reason']}"
+        )
+        _progress(target, f"local fake-session cache miss:{suffix}")
+    cache_mismatch_fields = list(
+        cache_probe.get("mismatch_fields", [])
+        or shared_cache_probe.get("mismatch_fields", [])
+    )
     generator = candidate_generator or _default_candidate_generator(poisoning_config)
 
     candidate_save_policy = str(poisoning_config.candidate_save_policy)
@@ -426,7 +479,10 @@ def generate_poisoning_ssl_sbr_target(
     )
     metadata["fake_session_cache_enabled"] = bool(poisoning_config.reuse_existing_artifacts)
     metadata["fake_session_cache_hit"] = False
-    metadata["fake_session_cache_path"] = str(target_root / "raw_fake_sessions.pkl")
+    metadata["fake_session_cache_scope"] = "miss"
+    metadata["fake_session_cache_path"] = None
+    metadata["shared_fake_session_cache_path"] = str(shared_cache_root)
+    metadata["local_target_root"] = str(target_root)
     metadata["fake_session_cache_mismatch_fields"] = cache_mismatch_fields
     max_observed_length, max_seq_len_violation_count = _max_seq_len_violations(
         final_sessions,
@@ -454,6 +510,7 @@ def generate_poisoning_ssl_sbr_target(
         metadata=metadata,
         candidate_save_policy=candidate_save_policy,
         config=config,
+        manifest_target_root=target_root,
     )
     metadata_path = target_root / "poisoning_ssl_sbr_metadata.json"
     _progress(
@@ -483,6 +540,14 @@ def generate_poisoning_ssl_sbr_target(
             f"violation_count={int(max_seq_len_violation_count)}. "
             "Phase 1 does not crop or truncate non-padding tokens."
         )
+    _write_shared_fake_session_cache(
+        config=config,
+        shared_cache_root=shared_cache_root,
+        final_sessions=final_sessions,
+        metadata=metadata,
+        candidate_save_policy=candidate_save_policy,
+        source_target_root=target_root,
+    )
     _progress(
         target,
         "Done: "
@@ -913,53 +978,143 @@ def _split_identity_payload(config: Config) -> dict[str, object]:
     }
 
 
-def _load_fake_session_cache(
+def _shared_fake_session_cache_root(
+    *,
+    config: Config,
+    target_item: int,
+    generation_identity_hash: str,
+) -> Path:
+    return (
+        shared_root(config)
+        / "poisoning_ssl_sbr_fake_sessions"
+        / str(int(target_item))
+        / str(generation_identity_hash)
+    )
+
+
+def _cache_metadata_updates(
     *,
     target_root: Path,
+    shared_cache_root: Path,
+    cache_root: Path,
+    cache_scope: str,
+    n_fake: int,
+    cached_session_count: int,
+    generation_identity: dict[str, object],
+    generation_identity_hash: str,
+    total_start_time: str,
+    total_duration_sec: float,
+) -> dict[str, object]:
+    return {
+        "fake_session_cache_enabled": True,
+        "fake_session_cache_hit": True,
+        "fake_session_cache_scope": cache_scope,
+        "fake_session_cache_path": str(cache_root),
+        "shared_fake_session_cache_path": str(shared_cache_root),
+        "local_target_root": str(target_root),
+        "fake_session_cache_mismatch_fields": [],
+        "n_fake_requested": int(n_fake),
+        "n_final_injected": int(cached_session_count),
+        "generation_identity": generation_identity,
+        "generation_identity_hash": generation_identity_hash,
+        "total_start_time": total_start_time,
+        "total_end_time": _now_iso(),
+        "total_duration_sec": float(total_duration_sec),
+    }
+
+
+def _load_fake_session_cache(
+    *,
+    cache_root: Path,
     expected_generation_identity: dict[str, object],
     n_fake_requested: int,
     max_seq_len: int,
     reuse_existing_artifacts: bool,
+    scope: str,
+    strict_identity_collision: bool,
 ) -> dict[str, object]:
-    raw_path = target_root / "raw_fake_sessions.pkl"
-    metadata_path = target_root / "poisoning_ssl_sbr_metadata.json"
+    raw_path = cache_root / "raw_fake_sessions.pkl"
+    metadata_path = cache_root / "poisoning_ssl_sbr_metadata.json"
     if not reuse_existing_artifacts:
-        return {"hit": False, "reason": "reuse_existing_artifacts=false"}
+        return {
+            "hit": False,
+            "reason": "reuse_existing_artifacts=false",
+            "scope": scope,
+            "cache_root": str(cache_root),
+        }
     if not raw_path.exists() and not metadata_path.exists():
-        return {"hit": False, "reason": ""}
+        return {"hit": False, "reason": "", "scope": scope, "cache_root": str(cache_root)}
     if not raw_path.exists():
-        return {"hit": False, "reason": "raw_fake_sessions.pkl missing"}
+        return {
+            "hit": False,
+            "reason": "raw_fake_sessions.pkl missing",
+            "scope": scope,
+            "cache_root": str(cache_root),
+        }
     if not metadata_path.exists():
-        return {"hit": False, "reason": "poisoning_ssl_sbr_metadata.json missing"}
+        return {
+            "hit": False,
+            "reason": "poisoning_ssl_sbr_metadata.json missing",
+            "scope": scope,
+            "cache_root": str(cache_root),
+        }
     metadata = load_json(metadata_path)
     if not isinstance(metadata, dict):
-        return {"hit": False, "reason": "metadata is not a JSON object"}
+        return {
+            "hit": False,
+            "reason": "metadata is not a JSON object",
+            "scope": scope,
+            "cache_root": str(cache_root),
+        }
     observed_identity = metadata.get("generation_identity")
     if not isinstance(observed_identity, dict):
         return {
             "hit": False,
             "reason": "generation_identity missing",
             "mismatch_fields": ["generation_identity"],
+            "scope": scope,
+            "cache_root": str(cache_root),
         }
     mismatch_fields = _identity_mismatch_fields(
         observed_identity,
         expected_generation_identity,
     )
     if mismatch_fields:
+        if strict_identity_collision:
+            return {
+                "hit": False,
+                "collision": True,
+                "reason": (
+                    "SeqPoison-SBR shared fake-session cache identity mismatch "
+                    f"at hash path {cache_root}; mismatch_fields={mismatch_fields}."
+                ),
+                "mismatch_fields": mismatch_fields,
+                "scope": scope,
+                "cache_root": str(cache_root),
+            }
         return {
             "hit": False,
             "reason": "generation_identity mismatch",
             "mismatch_fields": mismatch_fields,
+            "scope": scope,
+            "cache_root": str(cache_root),
         }
     sessions = load_fake_sessions(raw_path)
     if sessions is None:
-        return {"hit": False, "reason": "raw_fake_sessions.pkl unreadable"}
+        return {
+            "hit": False,
+            "reason": "raw_fake_sessions.pkl unreadable",
+            "scope": scope,
+            "cache_root": str(cache_root),
+        }
     sessions = [[int(item) for item in session] for session in sessions]
     if len(sessions) != int(n_fake_requested):
         return {
             "hit": False,
             "reason": "n_final_injected mismatch",
             "mismatch_fields": ["n_fake_requested"],
+            "scope": scope,
+            "cache_root": str(cache_root),
         }
     _max_observed, violation_count = _max_seq_len_violations(
         sessions,
@@ -970,6 +1125,8 @@ def _load_fake_session_cache(
             "hit": False,
             "reason": "max_seq_len violation",
             "mismatch_fields": ["max_seq_len"],
+            "scope": scope,
+            "cache_root": str(cache_root),
         }
     return {
         "hit": True,
@@ -977,6 +1134,8 @@ def _load_fake_session_cache(
         "sessions": sessions,
         "metadata": metadata,
         "mismatch_fields": [],
+        "scope": scope,
+        "cache_root": str(cache_root),
     }
 
 
@@ -1055,6 +1214,7 @@ def _write_artifacts(
     metadata: dict[str, object],
     candidate_save_policy: str,
     config: Config,
+    manifest_target_root: Path,
 ) -> None:
     if candidate_save_policy in {"sample", "all"} and saved_candidates:
         save_fake_sessions(saved_candidates, target_root / "generated_candidates.pkl")
@@ -1153,7 +1313,12 @@ def _write_artifacts(
             "generation_identity_hash": metadata.get("generation_identity_hash"),
             "fake_session_cache_enabled": metadata.get("fake_session_cache_enabled"),
             "fake_session_cache_hit": metadata.get("fake_session_cache_hit"),
+            "fake_session_cache_scope": metadata.get("fake_session_cache_scope"),
             "fake_session_cache_path": metadata.get("fake_session_cache_path"),
+            "shared_fake_session_cache_path": metadata.get(
+                "shared_fake_session_cache_path"
+            ),
+            "local_target_root": metadata.get("local_target_root"),
             "fake_session_cache_mismatch_fields": metadata.get(
                 "fake_session_cache_mismatch_fields"
             ),
@@ -1165,8 +1330,46 @@ def _write_artifacts(
             config=config,
             target_root=target_root,
             metadata=metadata,
+            manifest_target_root=manifest_target_root,
         ),
         target_root / "seqpoison_sbr_manifest.json",
+    )
+
+
+def _write_shared_fake_session_cache(
+    *,
+    config: Config,
+    shared_cache_root: Path,
+    final_sessions: list[list[int]],
+    metadata: dict[str, object],
+    candidate_save_policy: str,
+    source_target_root: Path,
+) -> None:
+    existing_metadata = load_json(shared_cache_root / "poisoning_ssl_sbr_metadata.json")
+    if isinstance(existing_metadata, dict):
+        existing_identity = existing_metadata.get("generation_identity")
+        current_identity = metadata.get("generation_identity")
+        if isinstance(existing_identity, dict) and existing_identity != current_identity:
+            mismatch_fields = _identity_mismatch_fields(
+                existing_identity,
+                current_identity if isinstance(current_identity, dict) else {},
+            )
+            raise RuntimeError(
+                "SeqPoison-SBR shared fake-session cache hash collision or "
+                "corrupt cache: "
+                f"path={shared_cache_root}, mismatch_fields={mismatch_fields}."
+            )
+    shared_metadata = dict(metadata)
+    shared_metadata["shared_fake_session_cache_path"] = str(shared_cache_root)
+    shared_metadata["local_target_root"] = str(source_target_root)
+    _write_artifacts(
+        target_root=shared_cache_root,
+        saved_candidates=[],
+        final_sessions=final_sessions,
+        metadata=stringify_mapping_keys(shared_metadata),
+        candidate_save_policy=candidate_save_policy,
+        config=config,
+        manifest_target_root=source_target_root,
     )
 
 
@@ -1221,6 +1424,7 @@ def _target_manifest(
     config: Config,
     target_root: Path,
     metadata: dict[str, object],
+    manifest_target_root: Path,
 ) -> dict[str, object]:
     poisoning_config = config.attack.poisoning_ssl_sbr
     return {
@@ -1257,6 +1461,13 @@ def _target_manifest(
         "candidate_multiplier": metadata.get("candidate_multiplier"),
         "max_generation_rounds": metadata.get("max_generation_rounds"),
         "candidate_save_policy": metadata.get("candidate_save_policy"),
+        "shared_fake_session_cache_path": metadata.get(
+            "shared_fake_session_cache_path"
+        ),
+        "local_target_root": str(manifest_target_root),
+        "fake_session_cache_hit": metadata.get("fake_session_cache_hit"),
+        "fake_session_cache_scope": metadata.get("fake_session_cache_scope"),
+        "fake_session_cache_path": metadata.get("fake_session_cache_path"),
         "created_at": _now_iso(),
         "cache_hit": metadata.get("fake_session_cache_hit"),
     }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import shutil
 from types import SimpleNamespace
 import sys
 
@@ -13,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from attack.common.config import PoisoningSSLSBRConfig, load_config
-from attack.common.artifact_io import load_fake_sessions, load_json, save_json
+from attack.common.artifact_io import load_fake_sessions, load_json, save_fake_sessions, save_json
 from attack.common.paths import (
     POISONING_SSL_SBR_RUN_TYPE,
     attack_key_payload,
@@ -38,6 +39,7 @@ from attack.poisoning_ssl.model import Generator
 from attack.poisoning_ssl.pipeline import (
     compute_seqpoison_max_seq_len,
     generate_poisoning_ssl_sbr_target,
+    _shared_fake_session_cache_root,
 )
 from attack.poisoning_ssl.postprocess import postprocess_fake_user_sequences
 from attack.poisoning_ssl.trainer import (
@@ -725,6 +727,162 @@ def test_fake_session_cache_hit_loads_sessions_and_skips_generator(tmp_path: Pat
     root = target_dir(config, 9, run_type=POISONING_SSL_SBR_RUN_TYPE)
     manifest = load_json(root / "seqpoison_sbr_manifest.json")
     assert manifest["cache_hit"] is True
+    assert manifest["fake_session_cache_scope"] == "shared"
+
+
+def test_shared_cache_path_is_independent_of_experiment_name(tmp_path: Path) -> None:
+    config_a = _config(tmp_path)
+    config_b = replace(
+        config_a,
+        experiment=replace(config_a.experiment, name="same_attack_different_name"),
+    )
+    result_a = generate_poisoning_ssl_sbr_target(
+        config=config_a,
+        shared=_toy_shared(fake_session_count=2),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9]]]
+        ),
+    )
+    shared_a = _shared_fake_session_cache_root(
+        config=config_a,
+        target_item=9,
+        generation_identity_hash=result_a.metadata["generation_identity_hash"],
+    )
+    shared_b = _shared_fake_session_cache_root(
+        config=config_b,
+        target_item=9,
+        generation_identity_hash=result_a.metadata["generation_identity_hash"],
+    )
+    assert shared_a == shared_b
+    assert str(shared_a).endswith(
+        "shared\\diginetica\\poisoning_ssl_sbr_fake_sessions\\9\\"
+        + result_a.metadata["generation_identity_hash"]
+    )
+
+
+def test_same_generation_identity_different_experiment_hits_shared_cache(
+    tmp_path: Path,
+) -> None:
+    config_a = _config(tmp_path)
+    shared = _toy_shared(fake_session_count=2)
+    first = generate_poisoning_ssl_sbr_target(
+        config=config_a,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9]]]
+        ),
+    )
+    config_b = replace(
+        config_a,
+        experiment=replace(config_a.experiment, name="different_experiment_name"),
+    )
+
+    class FailingGenerator:
+        def generate(self, request):
+            raise AssertionError("shared cache hit should skip candidate generation")
+
+    second = generate_poisoning_ssl_sbr_target(
+        config=config_b,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=FailingGenerator(),
+    )
+    assert second.raw_fake_sessions == first.raw_fake_sessions
+    assert second.metadata["fake_session_cache_hit"] is True
+    assert second.metadata["fake_session_cache_scope"] == "shared"
+    local_root_b = target_dir(config_b, 9, run_type=POISONING_SSL_SBR_RUN_TYPE)
+    assert (local_root_b / "raw_fake_sessions.pkl").exists()
+    assert (local_root_b / "seqpoison_sbr_manifest.json").exists()
+    manifest_b = load_json(local_root_b / "seqpoison_sbr_manifest.json")
+    assert manifest_b["fake_session_cache_scope"] == "shared"
+    assert manifest_b["local_target_root"] == str(local_root_b)
+
+
+def test_shared_cache_hit_takes_precedence_over_local_cache(tmp_path: Path) -> None:
+    config_a = _config(tmp_path)
+    shared = _toy_shared(fake_session_count=2)
+    first = generate_poisoning_ssl_sbr_target(
+        config=config_a,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9]]]
+        ),
+    )
+    config_b = replace(
+        config_a,
+        experiment=replace(config_a.experiment, name="local_cache_conflict"),
+    )
+    local_root_b = target_dir(config_b, 9, run_type=POISONING_SSL_SBR_RUN_TYPE)
+    local_root_b.mkdir(parents=True, exist_ok=True)
+    save_fake_sessions([[1, 9], [2, 9]], local_root_b / "raw_fake_sessions.pkl")
+    local_metadata = dict(first.metadata)
+    local_metadata["n_final_injected"] = 2
+    save_json(local_metadata, local_root_b / "poisoning_ssl_sbr_metadata.json")
+
+    class FailingGenerator:
+        def generate(self, request):
+            raise AssertionError("shared cache should take precedence")
+
+    result = generate_poisoning_ssl_sbr_target(
+        config=config_b,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=FailingGenerator(),
+    )
+    assert result.raw_fake_sessions == first.raw_fake_sessions
+    assert result.raw_fake_sessions != [[1, 9], [2, 9]]
+    assert result.metadata["fake_session_cache_scope"] == "shared"
+
+
+def test_local_cache_used_when_shared_cache_misses(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    shared = _toy_shared(fake_session_count=2)
+    first = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9]]]
+        ),
+    )
+    shared_cache_root = _shared_fake_session_cache_root(
+        config=config,
+        target_item=9,
+        generation_identity_hash=first.metadata["generation_identity_hash"],
+    )
+    shutil.rmtree(shared_cache_root)
+
+    class FailingGenerator:
+        def generate(self, request):
+            raise AssertionError("local cache hit should skip generation")
+
+    second = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=FailingGenerator(),
+    )
+    assert second.raw_fake_sessions == first.raw_fake_sessions
+    assert second.metadata["fake_session_cache_hit"] is True
+    assert second.metadata["fake_session_cache_scope"] == "local"
+    assert (shared_cache_root / "raw_fake_sessions.pkl").exists()
 
 
 def test_fake_session_cache_miss_when_n_fake_requested_differs(tmp_path: Path) -> None:
@@ -776,11 +934,16 @@ def test_fake_session_cache_miss_when_generation_identity_differs(
             rounds=[[[100, 9, 1], [101, 1, 9]]]
         ),
     )
-    root = target_dir(config, 9, run_type=POISONING_SSL_SBR_RUN_TYPE)
-    metadata_path = root / "poisoning_ssl_sbr_metadata.json"
-    metadata = load_json(metadata_path)
-    metadata["generation_identity"]["target_logit_bias_after_first_step"] = 99.0
-    save_json(metadata, metadata_path)
+    changed_config = replace(
+        config,
+        attack=replace(
+            config.attack,
+            poisoning_ssl_sbr=replace(
+                config.attack.poisoning_ssl_sbr,
+                target_logit_bias_after_first_step=2.0,
+            ),
+        ),
+    )
     called = {"value": False}
 
     class FreshGenerator:
@@ -789,7 +952,7 @@ def test_fake_session_cache_miss_when_generation_identity_differs(
             return [[300, 9, 1], [301, 1, 9]]
 
     result = generate_poisoning_ssl_sbr_target(
-        config=config,
+        config=changed_config,
         shared=shared,
         target_item=9,
         run_type=POISONING_SSL_SBR_RUN_TYPE,
@@ -798,10 +961,7 @@ def test_fake_session_cache_miss_when_generation_identity_differs(
     )
     assert called["value"] is True
     assert result.metadata["fake_session_cache_hit"] is False
-    assert (
-        "target_logit_bias_after_first_step"
-        in result.metadata["fake_session_cache_mismatch_fields"]
-    )
+    assert result.metadata["generation_identity"]["target_logit_bias_after_first_step"] == 2.0
 
 
 def test_pipeline_first_step_mask_metadata_and_generation_identity(tmp_path: Path) -> None:
