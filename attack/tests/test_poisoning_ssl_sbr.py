@@ -13,6 +13,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from attack.common.config import PoisoningSSLSBRConfig, load_config
+from attack.common.artifact_io import load_fake_sessions, load_json
 from attack.common.paths import (
     POISONING_SSL_SBR_RUN_TYPE,
     attack_key_payload,
@@ -41,6 +42,10 @@ from attack.poisoning_ssl.postprocess import postprocess_fake_user_sequences
 
 CONFIG_PATH = (
     "attack/configs/diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1.yaml"
+)
+VERSION_A_CONFIG_PATH = (
+    "attack/configs/"
+    "diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_diag.yaml"
 )
 
 
@@ -90,6 +95,8 @@ def test_poisoning_ssl_sbr_config_parses_defaults_and_identity(tmp_path: Path) -
     assert poisoning.candidate_multiplier == 1
     assert poisoning.max_generation_rounds == 10
     assert poisoning.generation_backend == "real"
+    assert poisoning.candidate_save_policy == "sample"
+    assert PoisoningSSLSBRConfig().candidate_save_policy == "summary_only"
     primitive = config.to_primitive()
     assert primitive["attack"]["poisoning_ssl_sbr"]["enabled"] is True
     assert primitive["attack"]["poisoning_ssl_sbr"]["generation_backend"] == "real"
@@ -136,6 +143,23 @@ def test_poisoning_ssl_sbr_config_rejects_invalid_values() -> None:
         PoisoningSSLSBRConfig(max_train_sequences=0)
     with pytest.raises(ValueError, match="target_probability"):
         PoisoningSSLSBRConfig(target_probability=1.1)
+    with pytest.raises(ValueError, match="candidate_save_policy"):
+        PoisoningSSLSBRConfig(candidate_save_policy="bad")
+    with pytest.raises(ValueError, match="max_saved_candidates"):
+        PoisoningSSLSBRConfig(max_saved_candidates=-1)
+    with pytest.raises(ValueError, match="acceptance_eval_interval_epochs"):
+        PoisoningSSLSBRConfig(acceptance_eval_enabled=True)
+
+
+def test_poisoning_ssl_sbr_version_a_config_parses() -> None:
+    config = load_config(VERSION_A_CONFIG_PATH)
+    poisoning = config.attack.poisoning_ssl_sbr
+    assert poisoning is not None
+    assert poisoning.generation_backend == "real"
+    assert poisoning.candidate_save_policy == "summary_only"
+    assert poisoning.acceptance_eval_enabled is True
+    assert poisoning.acceptance_eval_interval_epochs == 10
+    assert poisoning.acceptance_eval_candidate_count == 200
 
 
 def test_compute_seqpoison_max_seq_len_policies() -> None:
@@ -259,6 +283,11 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
     assert result.metadata["n_generated_candidates"] == 3
     assert result.metadata["target_pos0_count"] == 1
     assert result.metadata["target_label_pair_count_added"] == 1
+    assert "total_start_time" in result.metadata
+    assert "total_end_time" in result.metadata
+    assert result.metadata["raw_candidates_generated_total"] == 3
+    assert result.metadata["valid_sessions_generated_total"] == 2
+    assert result.metadata["generation_round_durations_sec"] == [0.0]
     assert result.metadata["phase1_interface_mock_only"] is False
     assert result.metadata["real_generation_implemented"] is False
     assert (
@@ -272,6 +301,69 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
         / config.experiment.name
     )
     assert list(target_root.rglob("poisoning_ssl_sbr_metadata.json"))
+    generation_logs = list(target_root.rglob("generation_log.json"))
+    assert generation_logs
+    generation_log = load_json(generation_logs[0])
+    assert generation_log["raw_candidate_count_by_round"] == [3]
+    assert generation_log["valid_count_by_round"] == [2]
+
+
+def test_summary_only_does_not_save_rejected_raw_candidates(tmp_path: Path) -> None:
+    base = _config(tmp_path)
+    poisoning = replace(
+        base.attack.poisoning_ssl_sbr,
+        candidate_save_policy="summary_only",
+        save_generated_candidates=False,
+    )
+    config = replace(base, attack=replace(base.attack, poisoning_ssl_sbr=poisoning))
+    result = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=_toy_shared(fake_session_count=1),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=1,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 1, 2], [101, 9, 1]]]
+        ),
+    )
+    assert result.raw_fake_sessions == [[9, 1]]
+    target_root = (
+        Path(config.artifacts.root)
+        / config.artifacts.runs_dir
+        / config.data.dataset_name
+        / config.experiment.name
+    )
+    assert not list(target_root.rglob("generated_candidates.pkl"))
+    assert list(target_root.rglob("raw_fake_sessions.pkl"))
+
+
+def test_sample_candidate_save_policy_respects_max_saved_candidates(tmp_path: Path) -> None:
+    base = _config(tmp_path)
+    poisoning = replace(
+        base.attack.poisoning_ssl_sbr,
+        candidate_save_policy="sample",
+        max_saved_candidates=1,
+    )
+    config = replace(base, attack=replace(base.attack, poisoning_ssl_sbr=poisoning))
+    generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=_toy_shared(fake_session_count=1),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=1,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 1, 2], [101, 9, 1], [102, 1, 9]]]
+        ),
+    )
+    target_root = (
+        Path(config.artifacts.root)
+        / config.artifacts.runs_dir
+        / config.data.dataset_name
+        / config.experiment.name
+    )
+    saved_paths = list(target_root.rglob("generated_candidates.pkl"))
+    assert saved_paths
+    assert load_fake_sessions(saved_paths[0]) == [[100, 1, 2]]
 
 
 def test_pipeline_without_generator_selects_real_backend(

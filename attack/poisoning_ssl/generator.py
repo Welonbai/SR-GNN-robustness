@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Any, Protocol, Sequence
 
 from attack.common.artifact_io import save_json
@@ -74,6 +75,7 @@ class RealSeqPoisonCandidateGenerator:
         import torch
 
         torch.manual_seed(int(request.seed))
+        generation_start = time.perf_counter()
         samples = result.generator.sample(
             int(request.n_candidates),
             device=result.device,
@@ -111,6 +113,7 @@ class RealSeqPoisonCandidateGenerator:
             "real_generation_implemented": True,
             "round_index": int(request.round_index),
             "raw_candidate_count": int(len(candidates)),
+            "generation_round_duration_sec": float(time.perf_counter() - generation_start),
             "candidate_format": "[user_id, item1, item2, ...]",
             "synthetic_user_id_start": int(synthetic_user_start),
             "classifier_checkpoint_path": str(result.classifier_checkpoint_path),

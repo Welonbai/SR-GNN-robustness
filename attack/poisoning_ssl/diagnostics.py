@@ -21,6 +21,11 @@ def nearest_rank_percentile(values: Sequence[int], percentile: int | float) -> i
 
 def length_stats(sessions: Sequence[Sequence[int]]) -> dict[str, object]:
     lengths = [int(len(session)) for session in sessions]
+    return length_stats_from_lengths(lengths)
+
+
+def length_stats_from_lengths(lengths: Sequence[int]) -> dict[str, object]:
+    lengths = [int(length) for length in lengths]
     if not lengths:
         return {
             "count": 0,
@@ -175,6 +180,7 @@ __all__ = [
     "budget_diagnostics",
     "duplicate_diagnostics",
     "length_stats",
+    "length_stats_from_lengths",
     "merged_diagnostics",
     "nearest_rank_percentile",
     "stringify_mapping_keys",

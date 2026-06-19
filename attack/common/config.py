@@ -188,6 +188,16 @@ POISONING_SSL_SBR_GENERATION_BACKEND_REAL = "real"
 _ALLOWED_POISONING_SSL_SBR_GENERATION_BACKENDS = {
     POISONING_SSL_SBR_GENERATION_BACKEND_REAL,
 }
+POISONING_SSL_SBR_CANDIDATE_SAVE_SUMMARY_ONLY = "summary_only"
+POISONING_SSL_SBR_CANDIDATE_SAVE_VALID_ONLY = "valid_only"
+POISONING_SSL_SBR_CANDIDATE_SAVE_SAMPLE = "sample"
+POISONING_SSL_SBR_CANDIDATE_SAVE_ALL = "all"
+_ALLOWED_POISONING_SSL_SBR_CANDIDATE_SAVE_POLICIES = {
+    POISONING_SSL_SBR_CANDIDATE_SAVE_SUMMARY_ONLY,
+    POISONING_SSL_SBR_CANDIDATE_SAVE_VALID_ONLY,
+    POISONING_SSL_SBR_CANDIDATE_SAVE_SAMPLE,
+    POISONING_SSL_SBR_CANDIDATE_SAVE_ALL,
+}
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -2117,6 +2127,8 @@ class PoisoningSSLSBRConfig:
     max_generation_rounds: int = 10
     length_diagnostics: bool = True
     save_generated_candidates: bool = True
+    candidate_save_policy: str = POISONING_SSL_SBR_CANDIDATE_SAVE_SUMMARY_ONLY
+    max_saved_candidates: int = 1000
     reuse_existing_artifacts: bool = True
     generation_seed_offset: int = 0
     generation_backend: str = POISONING_SSL_SBR_GENERATION_BACKEND_REAL
@@ -2143,6 +2155,9 @@ class PoisoningSSLSBRConfig:
     reward_classifier_weight: float | None = None
     reward_discriminator_weight: float | None = None
     target_probability: float | None = None
+    acceptance_eval_enabled: bool = False
+    acceptance_eval_interval_epochs: int | None = None
+    acceptance_eval_candidate_count: int = 200
     checkpoint_dir: str | None = None
     save_checkpoints: bool = True
 
@@ -2193,6 +2208,14 @@ class PoisoningSSLSBRConfig:
         save_generated_candidates = _as_bool(
             self.save_generated_candidates,
             "attack.poisoning_ssl_sbr.save_generated_candidates",
+        )
+        candidate_save_policy = _as_str(
+            self.candidate_save_policy,
+            "attack.poisoning_ssl_sbr.candidate_save_policy",
+        ).strip().lower()
+        max_saved_candidates = _as_int(
+            self.max_saved_candidates,
+            "attack.poisoning_ssl_sbr.max_saved_candidates",
         )
         reuse_existing_artifacts = _as_bool(
             self.reuse_existing_artifacts,
@@ -2300,6 +2323,18 @@ class PoisoningSSLSBRConfig:
             self.target_probability,
             "attack.poisoning_ssl_sbr.target_probability",
         )
+        acceptance_eval_enabled = _as_bool(
+            self.acceptance_eval_enabled,
+            "attack.poisoning_ssl_sbr.acceptance_eval_enabled",
+        )
+        acceptance_eval_interval_epochs = _optional_positive_int(
+            self.acceptance_eval_interval_epochs,
+            "attack.poisoning_ssl_sbr.acceptance_eval_interval_epochs",
+        )
+        acceptance_eval_candidate_count = _as_int(
+            self.acceptance_eval_candidate_count,
+            "attack.poisoning_ssl_sbr.acceptance_eval_candidate_count",
+        )
         checkpoint_dir = (
             None
             if self.checkpoint_dir is None
@@ -2342,6 +2377,25 @@ class PoisoningSSLSBRConfig:
             raise ValueError(
                 "attack.poisoning_ssl_sbr.max_generation_rounds must be positive."
             )
+        if candidate_save_policy not in _ALLOWED_POISONING_SSL_SBR_CANDIDATE_SAVE_POLICIES:
+            allowed = ", ".join(sorted(_ALLOWED_POISONING_SSL_SBR_CANDIDATE_SAVE_POLICIES))
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.candidate_save_policy must be one of: "
+                f"{allowed}."
+            )
+        if max_saved_candidates < 0:
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.max_saved_candidates must be nonnegative."
+            )
+        if acceptance_eval_candidate_count <= 0:
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.acceptance_eval_candidate_count must be positive."
+            )
+        if acceptance_eval_enabled and acceptance_eval_interval_epochs is None:
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.acceptance_eval_interval_epochs is required "
+                "when acceptance_eval_enabled=true."
+            )
         if generation_backend not in _ALLOWED_POISONING_SSL_SBR_GENERATION_BACKENDS:
             allowed = ", ".join(sorted(_ALLOWED_POISONING_SSL_SBR_GENERATION_BACKENDS))
             raise ValueError(
@@ -2365,6 +2419,8 @@ class PoisoningSSLSBRConfig:
         object.__setattr__(self, "max_generation_rounds", max_generation_rounds)
         object.__setattr__(self, "length_diagnostics", length_diagnostics)
         object.__setattr__(self, "save_generated_candidates", save_generated_candidates)
+        object.__setattr__(self, "candidate_save_policy", candidate_save_policy)
+        object.__setattr__(self, "max_saved_candidates", max_saved_candidates)
         object.__setattr__(self, "reuse_existing_artifacts", reuse_existing_artifacts)
         object.__setattr__(self, "generation_seed_offset", generation_seed_offset)
         object.__setattr__(self, "generation_backend", generation_backend)
@@ -2391,6 +2447,17 @@ class PoisoningSSLSBRConfig:
         object.__setattr__(self, "reward_classifier_weight", reward_classifier_weight)
         object.__setattr__(self, "reward_discriminator_weight", reward_discriminator_weight)
         object.__setattr__(self, "target_probability", target_probability)
+        object.__setattr__(self, "acceptance_eval_enabled", acceptance_eval_enabled)
+        object.__setattr__(
+            self,
+            "acceptance_eval_interval_epochs",
+            acceptance_eval_interval_epochs,
+        )
+        object.__setattr__(
+            self,
+            "acceptance_eval_candidate_count",
+            acceptance_eval_candidate_count,
+        )
         object.__setattr__(self, "checkpoint_dir", checkpoint_dir)
         object.__setattr__(self, "save_checkpoints", save_checkpoints)
 
@@ -3471,7 +3538,18 @@ def _normalize_poisoning_ssl_sbr_config(value: Any, context: str) -> dict[str, A
             "Unknown Poisoning-SSL-SBR config keys: "
             + ", ".join(sorted(map(str, unknown)))
         )
-    return _primitive_from_obj(PoisoningSSLSBRConfig(**dict(mapping)))
+    payload = dict(mapping)
+    if "candidate_save_policy" not in payload and "save_generated_candidates" in payload:
+        save_generated = _as_bool(
+            payload["save_generated_candidates"],
+            f"{context}.save_generated_candidates",
+        )
+        payload["candidate_save_policy"] = (
+            POISONING_SSL_SBR_CANDIDATE_SAVE_SAMPLE
+            if save_generated
+            else POISONING_SSL_SBR_CANDIDATE_SAVE_SUMMARY_ONLY
+        )
+    return _primitive_from_obj(PoisoningSSLSBRConfig(**payload))
 
 
 def _normalize_pts_construction_config(value: Any, context: str) -> dict[str, Any]:
@@ -5010,6 +5088,10 @@ __all__ = [
     "Config",
     "CreatAdditiveSBRConfig",
     "PoisoningSSLSBRConfig",
+    "POISONING_SSL_SBR_CANDIDATE_SAVE_ALL",
+    "POISONING_SSL_SBR_CANDIDATE_SAVE_SAMPLE",
+    "POISONING_SSL_SBR_CANDIDATE_SAVE_SUMMARY_ONLY",
+    "POISONING_SSL_SBR_CANDIDATE_SAVE_VALID_ONLY",
     "POISONING_SSL_SBR_GENERATION_BACKEND_REAL",
     "POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_FIXED",
     "POISONING_SSL_SBR_MAX_SEQ_LEN_POLICY_TRAIN_SUB_P99",

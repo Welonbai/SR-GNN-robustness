@@ -87,6 +87,30 @@ parameters (`candidate_multiplier`, `max_generation_rounds`,
 `max_train_sequences`) without inserting, moving, cropping, or repairing target
 items.
 
+Candidate storage is controlled by `candidate_save_policy`:
+
+- `summary_only`: do not save rejected raw candidates; save diagnostics only.
+- `valid_only`: save final `raw_fake_sessions.pkl` only.
+- `sample`: save at most `max_saved_candidates` raw candidates for debugging.
+- `all`: save every raw candidate; debugging only, not a safe default.
+
+Older configs with `save_generated_candidates: true` and no explicit
+`candidate_save_policy` map to bounded `sample`, not `all`. `generated_candidates.pkl`
+contains raw generated candidates only when the policy is `sample` or `all`;
+otherwise only summaries and `raw_fake_sessions.pkl` are written.
+
+Version A diagnostic command:
+
+```powershell
+python -m attack.poisoning_ssl.run_generation_diagnostic --config attack/configs/diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_diag.yaml
+```
+
+Optional PowerShell timing wrapper:
+
+```powershell
+Measure-Command { python -m attack.poisoning_ssl.run_generation_diagnostic --config attack/configs/diginetica_valbest_attack_poisoning_ssl_sbr_popular_count1_versionA_diag.yaml }
+```
+
 The local Phase 2 trainer preserves the upstream structure: classifier
 pretraining, generator MLE pretraining, discriminator training, and adversarial
 generator updates with target-related, bi-classifier, and GAN discriminator
