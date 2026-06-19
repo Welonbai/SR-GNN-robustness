@@ -91,8 +91,22 @@ class BestValueBoldingSpec:
     compare_along: str
     mode: str
     partition_by_levels: list[str]
+    bold_best: bool
     underline_second_best: bool
+    best_text_color: str | None = None
+    second_best_text_color: str | None = None
     column_filters: dict[str, list[Any]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RelativeDeltaIndicatorSpec:
+    """Configuration for GT-relative directional markers drawn beside cell text."""
+
+    enabled: bool
+    positive_symbol: str
+    negative_symbol: str
+    positive_color: str
+    negative_color: str
 
 
 @dataclass(frozen=True)
@@ -100,6 +114,10 @@ class TableSpec:
     """Table formatting configuration for the renderer."""
 
     font_size: float
+    header_font_size: float | None
+    row_leaf_label_font_size: float | None
+    data_font_size: float | None
+    font_height_fraction: float
     round_digits: int
     signed_percent_round_digits: int | None
     text_color: str
@@ -112,6 +130,7 @@ class TableSpec:
     dimension_value_orders: dict[str, list[Any]]
     scope_colors: dict[str, dict[str, str]]
     best_value_bolding: BestValueBoldingSpec | None
+    relative_delta_indicator: RelativeDeltaIndicatorSpec
     top_level_group_separators: bool
     stub_column_width_weight: float
     signed_percent_heatmap_strength: float
@@ -158,12 +177,21 @@ class SignedPercentHeatmapScale:
 
 
 @dataclass(frozen=True)
+class DataCellDeltaIndicator:
+    """Resolved directional marker for one data cell."""
+
+    symbol: str
+    color: str
+
+
+@dataclass(frozen=True)
 class DataCellPresentation:
     """Per-cell display modes and GT-relative heatmap scaling for one rendered table."""
 
     display_modes: list[list[str]]
     signed_percent_scales: list[list[SignedPercentHeatmapScale | None]]
     text_colors: list[list[str | None]]
+    delta_indicators: list[list[DataCellDeltaIndicator | None]]
 
 
 @dataclass(frozen=True)
@@ -270,6 +298,22 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
     )
     table_spec = TableSpec(
         font_size=require_positive_float(table_payload.get("font_size"), label="table.font_size"),
+        header_font_size=normalize_optional_positive_float(
+            table_payload.get("header_font_size"),
+            label="table.header_font_size",
+        ),
+        row_leaf_label_font_size=normalize_optional_positive_float(
+            table_payload.get("row_leaf_label_font_size"),
+            label="table.row_leaf_label_font_size",
+        ),
+        data_font_size=normalize_optional_positive_float(
+            table_payload.get("data_font_size"),
+            label="table.data_font_size",
+        ),
+        font_height_fraction=require_unit_float(
+            table_payload.get("font_height_fraction", 0.55),
+            label="table.font_height_fraction",
+        ),
         round_digits=require_nonnegative_int(table_payload.get("round_digits"), label="table.round_digits"),
         signed_percent_round_digits=normalize_optional_nonnegative_int(
             table_payload.get("signed_percent_round_digits"),
@@ -299,6 +343,10 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
         best_value_bolding=normalize_best_value_bolding_spec(
             table_payload.get("best_value_bolding"),
             label="table.best_value_bolding",
+        ),
+        relative_delta_indicator=normalize_relative_delta_indicator_spec(
+            table_payload.get("relative_delta_indicator"),
+            label="table.relative_delta_indicator",
         ),
         top_level_group_separators=require_bool(
             table_payload.get("top_level_group_separators", False),
@@ -648,6 +696,7 @@ def draw_structured_table(
                 render_spec=render_spec,
                 total_table_width=column_boundaries[-1],
                 total_row_count=total_row_count,
+                base_font_size=render_spec.table.header_font_size or render_spec.table.font_size,
             )
 
     for level_index in range(header_row_count):
@@ -678,6 +727,7 @@ def draw_structured_table(
                 render_spec=render_spec,
                 total_table_width=column_boundaries[-1],
                 total_row_count=total_row_count,
+                base_font_size=render_spec.table.header_font_size or render_spec.table.font_size,
             )
 
     for level_index in range(stub_column_count):
@@ -709,10 +759,25 @@ def draw_structured_table(
                 render_spec=render_spec,
                 total_table_width=column_boundaries[-1],
                 total_row_count=total_row_count,
+                base_font_size=resolve_row_label_base_font_size(
+                    level_index=level_index,
+                    stub_column_count=stub_column_count,
+                    render_spec=render_spec,
+                ),
             )
 
     for row_index in range(data_row_count):
         for leaf_column_index, value_column_name in enumerate(table_structure.value_column_names):
+            is_best_value_cell = (row_index, leaf_column_index) in best_value_cells
+            is_second_best_value_cell = (row_index, leaf_column_index) in second_best_value_cells
+            data_text_color = resolve_ranked_data_text_color(
+                base_text_color=data_cell_presentation.text_colors[row_index][leaf_column_index],
+                is_best_value_cell=is_best_value_cell,
+                is_second_best_value_cell=is_second_best_value_cell,
+                best_value_bolding=render_spec.table.best_value_bolding,
+                relative_delta_indicator=render_spec.table.relative_delta_indicator,
+                delta_indicator=data_cell_presentation.delta_indicators[row_index][leaf_column_index],
+            )
             draw_cell_block(
                 ax=ax,
                 x0=column_boundaries[stub_column_count + leaf_column_index],
@@ -720,9 +785,18 @@ def draw_structured_table(
                 y0=float(header_row_count + row_index),
                 y1=float(header_row_count + row_index + 1),
                 text=str(dataframe.iloc[row_index][value_column_name]),
-                font_weight="bold" if (row_index, leaf_column_index) in best_value_cells else "normal",
-                underline_text=(row_index, leaf_column_index) in second_best_value_cells,
-                text_color=data_cell_presentation.text_colors[row_index][leaf_column_index],
+                font_weight=resolve_ranked_data_font_weight(
+                    is_best_value_cell=is_best_value_cell,
+                    best_value_bolding=render_spec.table.best_value_bolding,
+                ),
+                underline_text=is_second_best_value_cell
+                and bool(render_spec.table.best_value_bolding)
+                and render_spec.table.best_value_bolding.underline_second_best,
+                text_color=data_text_color,
+                right_marker=resolve_render_delta_indicator(
+                    data_cell_presentation.delta_indicators[row_index][leaf_column_index],
+                    render_spec.table.relative_delta_indicator,
+                ),
                 facecolor=resolve_data_cell_fill_color(
                     table_structure=table_structure,
                     row_tuple=table_structure.row_tuples[row_index],
@@ -737,6 +811,7 @@ def draw_structured_table(
                 render_spec=render_spec,
                 total_table_width=column_boundaries[-1],
                 total_row_count=total_row_count,
+                base_font_size=render_spec.table.data_font_size or render_spec.table.font_size,
             )
 
     if render_spec.table.top_level_group_separators:
@@ -765,6 +840,8 @@ def draw_cell_block(
     total_row_count: int,
     underline_text: bool = False,
     text_color: str | None = None,
+    right_marker: DataCellDeltaIndicator | None = None,
+    base_font_size: float | None = None,
 ) -> None:
     """Draw one rectangular cell or merged block and its text."""
     edge_color = "black" if render_spec.table.show_grid else render_spec.figure.background_color
@@ -783,26 +860,47 @@ def draw_cell_block(
     if not text:
         return
 
+    effective_font_size = resolve_font_size(
+        text=f"{text} {right_marker.symbol}" if right_marker is not None else text,
+        cell_width=x1 - x0,
+        cell_height=y1 - y0,
+        total_table_width=total_table_width,
+        total_row_count=total_row_count,
+        render_spec=render_spec,
+        base_font_size=base_font_size or render_spec.table.font_size,
+    )
+    text_x = resolve_text_x(x0=x0, x1=x1, align=render_spec.table.cell_align)
+    text_ha = render_spec.table.cell_align
+    marker_padding = (x1 - x0) * CELL_PADDING_FRACTION
+    if right_marker is not None:
+        text_x = x1 - (marker_padding * 2.3)
+        text_ha = "right"
     text_artist = ax.text(
-        resolve_text_x(x0=x0, x1=x1, align=render_spec.table.cell_align),
+        text_x,
         (y0 + y1) / 2.0,
         text,
-        ha=render_spec.table.cell_align,
+        ha=text_ha,
         va="center",
         color=text_color or render_spec.table.text_color,
-        fontsize=resolve_font_size(
-            text=text,
-            cell_width=x1 - x0,
-            cell_height=y1 - y0,
-            total_table_width=total_table_width,
-            total_row_count=total_row_count,
-            render_spec=render_spec,
-        ),
+        fontsize=effective_font_size,
         fontweight=font_weight,
         wrap=render_spec.table.wrap_text,
         clip_on=True,
     )
     text_artist.set_clip_path(rectangle)
+    if right_marker is not None:
+        marker_artist = ax.text(
+            x1 - marker_padding,
+            (y0 + y1) / 2.0,
+            right_marker.symbol,
+            ha="right",
+            va="center",
+            color=right_marker.color,
+            fontsize=effective_font_size,
+            fontweight="bold",
+            clip_on=True,
+        )
+        marker_artist.set_clip_path(rectangle)
     if underline_text:
         draw_cell_underline(
             ax=ax,
@@ -1105,22 +1203,23 @@ def resolve_font_size(
     total_table_width: float,
     total_row_count: int,
     render_spec: RenderSpec,
+    base_font_size: float | None = None,
 ) -> float:
     """Return either the configured font size or a conservative shrunken size."""
-    base_font_size = render_spec.table.font_size
+    effective_base_font_size = base_font_size or render_spec.table.font_size
     if not render_spec.table.auto_shrink:
-        return base_font_size
+        return effective_base_font_size
 
     table_width_inches = render_spec.figure.width * TABLE_AX_POSITION[2]
     table_height_inches = render_spec.figure.height * TABLE_AX_POSITION[3]
     cell_width_inches = table_width_inches * (cell_width / total_table_width)
     cell_height_inches = table_height_inches * (cell_height / float(total_row_count))
-    max_height_points = cell_height_inches * 72.0 * 0.55
+    max_height_points = cell_height_inches * 72.0 * render_spec.table.font_height_fraction
 
     longest_line_length = max(len(line) for line in text.splitlines()) if text else 1
     estimated_char_width = 0.56 * max(longest_line_length, 1)
     max_width_points = (cell_width_inches * 72.0 * 0.9) / estimated_char_width
-    return max(4.0, min(base_font_size, max_height_points, max_width_points))
+    return max(4.0, min(effective_base_font_size, max_height_points, max_width_points))
 
 
 def format_dataframe_for_display(
@@ -1213,6 +1312,10 @@ def validate_data_cell_presentation(
         raise AnalysisError(
             "Resolved data-cell text-color rows do not match the rendered dataframe row count."
         )
+    if len(data_cell_presentation.delta_indicators) != len(dataframe):
+        raise AnalysisError(
+            "Resolved data-cell delta-indicator rows do not match the rendered dataframe row count."
+        )
     expected_column_count = len(table_structure.value_column_names)
     for row_index, row_modes in enumerate(data_cell_presentation.display_modes):
         if len(row_modes) != expected_column_count:
@@ -1232,6 +1335,12 @@ def validate_data_cell_presentation(
         if len(row_colors) != expected_column_count:
             raise AnalysisError(
                 "Resolved data-cell text-color columns do not match the rendered value-column "
+                f"count at row {row_index}."
+            )
+    for row_index, row_delta_indicators in enumerate(data_cell_presentation.delta_indicators):
+        if len(row_delta_indicators) != expected_column_count:
+            raise AnalysisError(
+                "Resolved data-cell delta-indicator columns do not match the rendered value-column "
                 f"count at row {row_index}."
             )
  
@@ -1265,6 +1374,7 @@ def build_data_cell_presentation(
     display_modes: list[list[str]] = []
     signed_percent_scales: list[list[SignedPercentHeatmapScale | None]] = []
     text_colors: list[list[str | None]] = []
+    delta_indicators: list[list[DataCellDeltaIndicator | None]] = []
     positive_abs_max_by_group: dict[tuple[tuple[Any, ...], int], float] = {}
     negative_abs_max_by_group: dict[tuple[tuple[Any, ...], int], float] = {}
 
@@ -1307,6 +1417,7 @@ def build_data_cell_presentation(
         row_display_modes: list[str] = []
         row_signed_percent_scales: list[SignedPercentHeatmapScale | None] = []
         row_text_colors: list[str | None] = []
+        row_delta_indicators: list[DataCellDeltaIndicator | None] = []
         comparison_group_key = build_signed_percent_comparison_group_key(
             row_tuple=row_tuple,
             table_structure=table_structure,
@@ -1340,14 +1451,28 @@ def build_data_cell_presentation(
                     meta_payload=meta_payload,
                 )
             )
+            row_delta_indicators.append(
+                resolve_data_cell_delta_indicator(
+                    dataframe=dataframe,
+                    table_structure=table_structure,
+                    row_index=row_index,
+                    leaf_column_index=leaf_column_index,
+                    row_tuple=row_tuple,
+                    column_tuple=column_tuple,
+                    display_mode=display_mode,
+                    meta_payload=meta_payload,
+                )
+            )
         display_modes.append(row_display_modes)
         signed_percent_scales.append(row_signed_percent_scales)
         text_colors.append(row_text_colors)
+        delta_indicators.append(row_delta_indicators)
 
     return DataCellPresentation(
         display_modes=display_modes,
         signed_percent_scales=signed_percent_scales,
         text_colors=text_colors,
+        delta_indicators=delta_indicators,
     )
 
 
@@ -1463,6 +1588,141 @@ def resolve_data_cell_text_color(
     if current_value > baseline_value:
         return RELATIVE_TEXT_POSITIVE_COLOR
     return RELATIVE_TEXT_NEGATIVE_COLOR
+
+
+def resolve_data_cell_delta_indicator(
+    *,
+    dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    row_index: int,
+    leaf_column_index: int,
+    row_tuple: tuple[Any, ...],
+    column_tuple: tuple[Any, ...],
+    display_mode: str,
+    meta_payload: Mapping[str, Any],
+) -> DataCellDeltaIndicator | None:
+    """Resolve the GT-relative direction marker for one data cell, independent of render style."""
+    config = resolve_ground_truth_relative_to_clean_config(meta_payload)
+    if config is None:
+        return None
+
+    metric_scope = resolve_dimension_value_from_cell_or_meta(
+        dimension_name=METRIC_SCOPE_COLUMN,
+        table_structure=table_structure,
+        row_tuple=row_tuple,
+        column_tuple=column_tuple,
+        meta_payload=meta_payload,
+    )
+    if stringify_alias_lookup_value(metric_scope) != GROUND_TRUTH_SCOPE:
+        return None
+
+    attack_method = resolve_dimension_value_from_cell_or_meta(
+        dimension_name="attack_method",
+        table_structure=table_structure,
+        row_tuple=row_tuple,
+        column_tuple=column_tuple,
+        meta_payload=meta_payload,
+    )
+    if stringify_alias_lookup_value(attack_method) == config["baseline_attack_method"]:
+        return None
+
+    current_value = coerce_numeric_value(
+        dataframe.iloc[row_index][table_structure.value_column_names[leaf_column_index]]
+    )
+    if current_value is None:
+        return None
+
+    if display_mode == SIGNED_PERCENT_VALUE_DISPLAY_MODE:
+        if are_close(current_value, 0.0):
+            return None
+        return DataCellDeltaIndicator(
+            symbol="\u25b2" if current_value > 0.0 else "\u25bc",
+            color=RELATIVE_TEXT_POSITIVE_COLOR if current_value > 0.0 else RELATIVE_TEXT_NEGATIVE_COLOR,
+        )
+
+    baseline_value = find_baseline_cell_value(
+        dataframe=dataframe,
+        table_structure=table_structure,
+        row_tuple=row_tuple,
+        column_tuple=column_tuple,
+        baseline_attack_method=config["baseline_attack_method"],
+    )
+    if baseline_value is None or are_close(current_value, baseline_value):
+        return None
+    return DataCellDeltaIndicator(
+        symbol="\u25b2" if current_value > baseline_value else "\u25bc",
+        color=RELATIVE_TEXT_POSITIVE_COLOR if current_value > baseline_value else RELATIVE_TEXT_NEGATIVE_COLOR,
+    )
+
+
+def resolve_ranked_data_font_weight(
+    *,
+    is_best_value_cell: bool,
+    best_value_bolding: BestValueBoldingSpec | None,
+) -> str:
+    """Return the configured font weight for ranked value cells."""
+    if not is_best_value_cell or best_value_bolding is None or not best_value_bolding.bold_best:
+        return "normal"
+    return "bold"
+
+
+def resolve_ranked_data_text_color(
+    *,
+    base_text_color: str | None,
+    is_best_value_cell: bool,
+    is_second_best_value_cell: bool,
+    best_value_bolding: BestValueBoldingSpec | None,
+    relative_delta_indicator: RelativeDeltaIndicatorSpec,
+    delta_indicator: DataCellDeltaIndicator | None,
+) -> str | None:
+    """Return data-cell text color after GT-arrow and ranked-value style overrides."""
+    effective_text_color = base_text_color
+    if relative_delta_indicator.enabled and delta_indicator is not None:
+        effective_text_color = None
+    if best_value_bolding is None:
+        return effective_text_color
+    if is_best_value_cell and best_value_bolding.best_text_color is not None:
+        return best_value_bolding.best_text_color
+    if is_second_best_value_cell and best_value_bolding.second_best_text_color is not None:
+        return best_value_bolding.second_best_text_color
+    return effective_text_color
+
+
+def resolve_row_label_base_font_size(
+    *,
+    level_index: int,
+    stub_column_count: int,
+    render_spec: RenderSpec,
+) -> float:
+    """Return row-label font size, allowing leaf row labels to differ from group labels."""
+    if (
+        level_index == stub_column_count - 1
+        and render_spec.table.row_leaf_label_font_size is not None
+    ):
+        return render_spec.table.row_leaf_label_font_size
+    return render_spec.table.font_size
+
+
+def resolve_render_delta_indicator(
+    delta_indicator: DataCellDeltaIndicator | None,
+    relative_delta_indicator: RelativeDeltaIndicatorSpec,
+) -> DataCellDeltaIndicator | None:
+    """Apply render-config symbols and colors to a resolved GT-relative direction marker."""
+    if not relative_delta_indicator.enabled or delta_indicator is None:
+        return None
+    is_positive = delta_indicator.symbol == "\u25b2"
+    return DataCellDeltaIndicator(
+        symbol=(
+            relative_delta_indicator.positive_symbol
+            if is_positive
+            else relative_delta_indicator.negative_symbol
+        ),
+        color=(
+            relative_delta_indicator.positive_color
+            if is_positive
+            else relative_delta_indicator.negative_color
+        ),
+    )
 
 
 def find_baseline_cell_value(
@@ -1671,7 +1931,10 @@ def resolve_ranked_value_highlights(
                     best_cells.add((row_index, leaf_column_index))
                     continue
                 if (
-                    best_value_bolding.underline_second_best
+                    (
+                        best_value_bolding.underline_second_best
+                        or best_value_bolding.second_best_text_color is not None
+                    )
                     and second_best_value is not None
                     and are_close(numeric_value, second_best_value)
                 ):
@@ -2530,16 +2793,59 @@ def normalize_best_value_bolding_spec(value: Any, *, label: str) -> BestValueBol
         payload.get("partition_by_levels"),
         label=f"{label}.partition_by_levels",
     )
+    bold_best = require_bool(payload.get("bold_best", True), label=f"{label}.bold_best")
     underline_second_best = normalize_second_best_underline_flag(payload=payload, label=label)
 
     return BestValueBoldingSpec(
         compare_along=compare_along,
         mode=mode,
         partition_by_levels=partition_by_levels,
+        bold_best=bold_best,
         underline_second_best=underline_second_best,
+        best_text_color=normalize_optional_nonempty_string(
+            payload.get("best_text_color"),
+            label=f"{label}.best_text_color",
+        ),
+        second_best_text_color=normalize_optional_nonempty_string(
+            payload.get("second_best_text_color"),
+            label=f"{label}.second_best_text_color",
+        ),
         column_filters=normalize_best_value_column_filters(
             payload.get("column_filters"),
             label=f"{label}.column_filters",
+        ),
+    )
+
+
+def normalize_relative_delta_indicator_spec(value: Any, *, label: str) -> RelativeDeltaIndicatorSpec:
+    """Normalize optional GT-relative directional marker rendering configuration."""
+    if value is None:
+        return RelativeDeltaIndicatorSpec(
+            enabled=False,
+            positive_symbol="\u25b2",
+            negative_symbol="\u25bc",
+            positive_color=RELATIVE_TEXT_POSITIVE_COLOR,
+            negative_color=RELATIVE_TEXT_NEGATIVE_COLOR,
+        )
+
+    payload = require_mapping(value, label=label)
+    return RelativeDeltaIndicatorSpec(
+        enabled=require_bool(payload.get("enabled", True), label=f"{label}.enabled"),
+        positive_symbol=require_nonempty_string(
+            payload.get("positive_symbol", "\u25b2"),
+            label=f"{label}.positive_symbol",
+        ),
+        negative_symbol=require_nonempty_string(
+            payload.get("negative_symbol", "\u25bc"),
+            label=f"{label}.negative_symbol",
+        ),
+        positive_color=require_nonempty_string(
+            payload.get("positive_color", RELATIVE_TEXT_POSITIVE_COLOR),
+            label=f"{label}.positive_color",
+        ),
+        negative_color=require_nonempty_string(
+            payload.get("negative_color", RELATIVE_TEXT_NEGATIVE_COLOR),
+            label=f"{label}.negative_color",
         ),
     )
 
@@ -2664,6 +2970,13 @@ def require_nonempty_string(value: Any, *, label: str) -> str:
     return stripped
 
 
+def normalize_optional_nonempty_string(value: Any, *, label: str) -> str | None:
+    """Normalize one optional non-empty string value."""
+    if value is None:
+        return None
+    return require_nonempty_string(value, label=label)
+
+
 def require_string_list(value: Any, *, label: str) -> list[str]:
     """Require a non-empty list of non-empty strings."""
     if not isinstance(value, list) or not value:
@@ -2741,6 +3054,13 @@ def normalize_optional_nonnegative_int(value: Any, *, label: str) -> int | None:
     if value is None:
         return None
     return require_nonnegative_int(value, label=label)
+
+
+def normalize_optional_positive_float(value: Any, *, label: str) -> float | None:
+    """Normalize one optional positive float value."""
+    if value is None:
+        return None
+    return require_positive_float(value, label=label)
 
 
 def require_bool(value: Any, *, label: str) -> bool:
