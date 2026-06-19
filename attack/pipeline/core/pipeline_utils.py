@@ -1366,6 +1366,52 @@ def prepare_shared_attack_artifacts(
     )
 
 
+def prepare_lightweight_attack_artifacts(
+    config: Config,
+    *,
+    run_type: str,
+    config_path: str | Path | None = None,
+) -> SharedAttackArtifacts:
+    canonical_dataset = ensure_canonical_dataset(config)
+    shared_paths = shared_artifact_paths(
+        config,
+        run_type=run_type,
+        require_poison_runner=False,
+    )
+    shared_paths["attack_shared_dir"].mkdir(parents=True, exist_ok=True)
+    if config_path:
+        snapshot_path = shared_paths["attack_config_snapshot"]
+        if not snapshot_path.exists():
+            shutil.copyfile(config_path, snapshot_path)
+    shared_paths["target_shared_dir"].mkdir(parents=True, exist_ok=True)
+    if config_path:
+        target_snapshot_path = shared_paths["target_config_snapshot"]
+        if not target_snapshot_path.exists():
+            shutil.copyfile(config_path, target_snapshot_path)
+
+    stats = compute_session_stats(canonical_dataset.train_sub)
+    clean_prefixes, clean_labels = build_clean_pairs(canonical_dataset)
+    fake_count = fake_session_count_from_ratio(
+        float(config.attack.size),
+        int(len(clean_prefixes)),
+    )
+    export_paths = _export_srg_nn_dataset(
+        dataset=canonical_dataset,
+        export_dir=shared_paths["attack_shared_dir"] / "export",
+    )
+    return SharedAttackArtifacts(
+        stats=stats,
+        clean_sessions=clean_prefixes,
+        clean_labels=clean_labels,
+        canonical_dataset=canonical_dataset,
+        export_paths=export_paths,
+        template_sessions=[],
+        poison_runner=None,
+        fake_session_count=fake_count,
+        shared_paths=shared_paths,
+    )
+
+
 def _train_template_source_summary(
     config: Config,
     *,

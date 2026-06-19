@@ -27,6 +27,7 @@ PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE = "pts_construction_direct_actio
 PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE = "pts_construction_candidate_replay"
 CREAT_ADDITIVE_SBR_RUN_TYPE = "creat_additive_sbr"
 CREAT_ADDITIVE_SBR_GENERATE_ONLY_RUN_TYPE = "creat_additive_sbr_generate_only"
+POISONING_SSL_SBR_RUN_TYPE = "poisoning_ssl_sbr"
 PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE = "prefix_nonzero_when_possible"
 TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE = "target_aware_carrier_selection_nz"
 TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE = "target_aware_carrier_local_position"
@@ -93,6 +94,7 @@ _LEGACY_POISONED_VICTIM_RUN_TYPES = frozenset(
 _WEAREC_POISONED_VICTIM_RUN_TYPES = frozenset(
     {
         CREAT_ADDITIVE_SBR_RUN_TYPE,
+        POISONING_SSL_SBR_RUN_TYPE,
         INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
         INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
         INTERNAL_RANDOM_INSERTION_TRUNCATE_SUFFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
@@ -421,6 +423,21 @@ def attack_key_payload(
             "run_type": "clean",
             "split_key": split_key(config),
         }
+    if run_type == POISONING_SSL_SBR_RUN_TYPE:
+        if config.attack.poisoning_ssl_sbr is None:
+            raise ValueError(
+                "poisoning_ssl_sbr final attack identity requires "
+                "attack.poisoning_ssl_sbr."
+            )
+        return {
+            "run_type": run_type,
+            "split_key": split_key(config),
+            "fake_session_seed": int(config.seeds.fake_session_seed),
+            "attack": {
+                "size": float(config.attack.size),
+                "poisoning_ssl_sbr": _poisoning_ssl_sbr_identity_payload(config),
+            },
+        }
     payload = {
         "run_type": run_type,
         "split_key": split_key(config),
@@ -598,6 +615,21 @@ def shared_attack_artifact_key_payload(
             "run_type": "clean",
             "split_key": split_key(config),
         }
+    if run_type == POISONING_SSL_SBR_RUN_TYPE:
+        if config.attack.poisoning_ssl_sbr is None:
+            raise ValueError(
+                "poisoning_ssl_sbr shared artifact identity requires "
+                "attack.poisoning_ssl_sbr."
+            )
+        return {
+            "run_type": run_type,
+            "split_key": split_key(config),
+            "fake_session_seed": int(config.seeds.fake_session_seed),
+            "attack_generation": {
+                "size": float(config.attack.size),
+                "poisoning_ssl_sbr": _poisoning_ssl_sbr_identity_payload(config),
+            },
+        }
     # Shared generation cache is generation-only: fake-session templates and the
     # poison model used to generate them. It must not depend on target choice,
     # replacement policy, victim settings, or position-opt runtime overrides.
@@ -666,6 +698,58 @@ def _train_template_fake_session_source_identity_payload(config: Config) -> dict
         },
         "denominator_source": "build_clean_pairs(canonical_dataset)[0]",
         "denominator_representation": "expanded_prefix_label_pairs",
+    }
+
+
+def _poisoning_ssl_sbr_identity_payload(config: Config) -> dict[str, Any]:
+    poisoning = config.attack.poisoning_ssl_sbr
+    if poisoning is None:
+        raise ValueError("attack.poisoning_ssl_sbr is required for identity payload.")
+    return {
+        "max_seq_len_policy": poisoning.max_seq_len_policy,
+        "original_max_seq_len_cap": int(poisoning.original_max_seq_len_cap),
+        "max_seq_len_override": (
+            None
+            if poisoning.max_seq_len_override is None
+            else int(poisoning.max_seq_len_override)
+        ),
+        "enforce_single_target": bool(poisoning.enforce_single_target),
+        "enforce_nonzero_target_position": bool(
+            poisoning.enforce_nonzero_target_position
+        ),
+        "filter_no_target": bool(poisoning.filter_no_target),
+        "filter_short_sessions": bool(poisoning.filter_short_sessions),
+        "first_step_target_mask": bool(poisoning.first_step_target_mask),
+        "target_logit_bias_after_first_step": float(
+            poisoning.target_logit_bias_after_first_step
+        ),
+        "candidate_multiplier": int(poisoning.candidate_multiplier),
+        "max_generation_rounds": int(poisoning.max_generation_rounds),
+        "generation_seed_offset": int(poisoning.generation_seed_offset),
+        "generation_backend": poisoning.generation_backend,
+        "device": poisoning.device,
+        "gpu_id": poisoning.gpu_id,
+        "classifier_epochs": poisoning.classifier_epochs,
+        "mle_epochs": poisoning.mle_epochs,
+        "adversarial_epochs": poisoning.adversarial_epochs,
+        "discriminator_pretrain_steps": poisoning.discriminator_pretrain_steps,
+        "discriminator_pretrain_epochs": poisoning.discriminator_pretrain_epochs,
+        "discriminator_adversarial_steps": poisoning.discriminator_adversarial_steps,
+        "discriminator_adversarial_epochs": poisoning.discriminator_adversarial_epochs,
+        "batch_size": poisoning.batch_size,
+        "learning_rate": poisoning.learning_rate,
+        "classifier_learning_rate": poisoning.classifier_learning_rate,
+        "embedding_dim": poisoning.embedding_dim,
+        "hidden_dim": poisoning.hidden_dim,
+        "discriminator_embedding_dim": poisoning.discriminator_embedding_dim,
+        "discriminator_hidden_dim": poisoning.discriminator_hidden_dim,
+        "classifier_embedding_dim": poisoning.classifier_embedding_dim,
+        "pos_neg_samples": poisoning.pos_neg_samples,
+        "max_train_sequences": poisoning.max_train_sequences,
+        "reward_target_weight": poisoning.reward_target_weight,
+        "reward_classifier_weight": poisoning.reward_classifier_weight,
+        "reward_discriminator_weight": poisoning.reward_discriminator_weight,
+        "target_probability": poisoning.target_probability,
     }
 
 
@@ -1286,6 +1370,7 @@ __all__ = [
     "POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE",
     "POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE",
     "POSITION_OPT_SHARED_POLICY_RUN_TYPE",
+    "POISONING_SSL_SBR_RUN_TYPE",
     "PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE",
     "CREAT_ADDITIVE_SBR_RUN_TYPE",

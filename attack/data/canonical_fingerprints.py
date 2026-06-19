@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping
 
 CANONICAL_FINGERPRINT_SEMANTICS = "canonical_exported_rows_sha256_v1"
 ITEM_VOCABULARY_FINGERPRINT_SEMANTICS = "canonical_dense_item_map_sha256_v1"
+_PYTHON_RUNTIME_CACHE_SUFFIXES = (".pyc", ".pyo")
 
 
 def fingerprint_exported_jsonl(path: str | Path) -> str:
@@ -136,26 +137,143 @@ def resolve_wearec_repository_provenance(
             capture_output=True,
             check=True,
         )
-        return result.stdout.strip()
+        return result.stdout.rstrip("\r\n")
 
     parent_commit = git(parent, "rev-parse", "HEAD")
     gitlink_commit = git(parent, "rev-parse", "HEAD:third_party/wearec")
     wearec_commit = git(wearec, "rev-parse", "HEAD")
-    parent_status = git(parent, "status", "--porcelain", "--untracked-files=no")
+    parent_status = git(
+        parent,
+        "status",
+        "--porcelain",
+        "--untracked-files=no",
+        "--ignore-submodules=dirty",
+    )
     wearec_status = git(wearec, "status", "--porcelain", "--untracked-files=no")
-    if parent_status:
-        raise RuntimeError("Parent tracked worktree must be clean for cacheable WEARec execution.")
+    parent_dirty = _partition_parent_repository_status(parent_status)
+    wearec_dirty = _partition_python_runtime_cache_status(wearec_status)
+    if parent_dirty["blocking"]:
+        raise RuntimeError(
+            "Parent tracked worktree has non-runtime-cache dirty files for "
+            "cacheable WEARec execution: "
+            + _format_dirty_paths(parent_dirty["blocking"])
+        )
     if gitlink_commit != wearec_commit:
         raise RuntimeError("Committed WEARec gitlink does not match checked-out submodule HEAD.")
-    if wearec_status:
-        raise RuntimeError("WEARec tracked worktree must be clean for cacheable execution.")
+    if wearec_dirty["blocking"]:
+        raise RuntimeError(
+            "WEARec tracked worktree has non-runtime-cache dirty files for "
+            "cacheable execution: "
+            + _format_dirty_paths(wearec_dirty["blocking"])
+        )
     return {
         "parent_repository_commit": parent_commit,
         "parent_tracked_worktree_clean": True,
+        "parent_ignored_runtime_cache_dirty_paths": parent_dirty["ignored"],
         "wearec_gitlink_commit": gitlink_commit,
         "wearec_submodule_commit": wearec_commit,
         "wearec_tracked_worktree_clean": True,
+        "wearec_ignored_runtime_cache_dirty_paths": wearec_dirty["ignored"],
     }
+
+
+def _partition_python_runtime_cache_status(status: str) -> dict[str, list[str]]:
+    ignored: list[str] = []
+    blocking: list[str] = []
+    for line in status.splitlines():
+        if not line.strip():
+            continue
+        paths = _git_status_line_paths(line)
+        if paths and all(_is_python_runtime_cache_path(path) for path in paths):
+            ignored.extend(paths)
+        else:
+            blocking.extend(paths or [line.strip()])
+    return {
+        "ignored": _dedupe_preserving_order(ignored),
+        "blocking": _dedupe_preserving_order(blocking),
+    }
+
+
+def _partition_parent_repository_status(status: str) -> dict[str, list[str]]:
+    partitioned = _partition_python_runtime_cache_status(status)
+    ignored = list(partitioned["ignored"])
+    blocking: list[str] = []
+    for line in status.splitlines():
+        if _is_unrelated_submodule_dirty_status_line(line):
+            ignored.extend(_git_status_line_paths(line))
+            continue
+    ignored_set = set(ignored)
+    for path in partitioned["blocking"]:
+        if path not in ignored_set:
+            blocking.append(path)
+    return {
+        "ignored": _dedupe_preserving_order(ignored),
+        "blocking": _dedupe_preserving_order(blocking),
+    }
+
+
+def _is_unrelated_submodule_dirty_status_line(line: str) -> bool:
+    if len(line) < 3:
+        return False
+    status = line[:2]
+    paths = _git_status_line_paths(line)
+    if len(paths) != 1:
+        return False
+    path = paths[0].replace("\\", "/")
+    if not path.startswith("third_party/") or path == "third_party/wearec":
+        return False
+    # Lowercase submodule flags are dirty/untracked markers from inside the
+    # submodule worktree. Uppercase M is a gitlink change and remains blocking.
+    return status[0] in {" ", "?"} and status[1] in {"m", "?"}
+
+
+def _git_status_line_paths(line: str) -> list[str]:
+    if len(line) >= 3 and line[2] == " ":
+        payload = line[3:]
+    elif len(line) >= 2 and line[1] == " ":
+        payload = line[2:]
+    else:
+        payload = line[3:] if len(line) >= 3 else line
+    payload = payload.strip()
+    if not payload:
+        return []
+    if " -> " in payload:
+        return [_clean_git_status_path(path) for path in payload.split(" -> ", 1)]
+    return [_clean_git_status_path(payload)]
+
+
+def _clean_git_status_path(path: str) -> str:
+    cleaned = path.strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] == '"':
+        cleaned = cleaned[1:-1]
+    return cleaned
+
+
+def _is_python_runtime_cache_path(path: str) -> bool:
+    normalized = path.replace("\\", "/").strip()
+    if not normalized:
+        return False
+    parts = [part for part in normalized.split("/") if part]
+    if "__pycache__" in parts:
+        return True
+    return normalized.lower().endswith(_PYTHON_RUNTIME_CACHE_SUFFIXES)
+
+
+def _dedupe_preserving_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        unique.append(value)
+    return unique
+
+
+def _format_dirty_paths(paths: list[str], *, limit: int = 5) -> str:
+    shown = paths[:limit]
+    suffix = "" if len(paths) <= limit else f" ... (+{len(paths) - limit} more)"
+    return ", ".join(shown) + suffix
 
 
 def _canonical_row(payload: Any, *, line_number: int) -> dict[str, Any]:
