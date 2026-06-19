@@ -8,7 +8,7 @@ from pathlib import Path
 import time
 from typing import Sequence
 
-from attack.common.artifact_io import save_fake_sessions, save_json
+from attack.common.artifact_io import load_fake_sessions, load_json, save_fake_sessions, save_json
 from attack.common.config import (
     Config,
     PoisoningSSLSBRConfig,
@@ -39,6 +39,10 @@ from attack.poisoning_ssl.provenance import (
     UPSTREAM_COMMIT,
     UPSTREAM_URL,
     provenance_payload,
+)
+from attack.poisoning_ssl.trainer import (
+    EffectiveSeqPoisonTrainingConfig,
+    _checkpoint_identity,
 )
 
 
@@ -144,6 +148,88 @@ def generate_poisoning_ssl_sbr_target(
         target,
     )
     postprocess_seed = derive_seed(generation_seed, "postprocess")
+    expected_training_identity = _checkpoint_identity(
+        dataset_bundle=bridge,
+        target_item=target,
+        seed=int(generation_seed),
+        effective=EffectiveSeqPoisonTrainingConfig.from_config(poisoning_config),
+    )
+    expected_training_identity_hash = _hash_json(expected_training_identity)
+    expected_generation_identity = _generation_identity(
+        config=config,
+        target_item=target,
+        n_fake_requested=n_fake,
+        max_seq_len=max_seq_len,
+        generation_seed=int(generation_seed),
+        poisoning_config=poisoning_config,
+        training_checkpoint_identity_hash=expected_training_identity_hash,
+    )
+    cache_probe = _load_fake_session_cache(
+        target_root=target_root,
+        expected_generation_identity=expected_generation_identity,
+        n_fake_requested=n_fake,
+        max_seq_len=max_seq_len,
+        reuse_existing_artifacts=bool(poisoning_config.reuse_existing_artifacts),
+    )
+    if cache_probe["hit"]:
+        cached_sessions = cache_probe["sessions"]
+        assert isinstance(cached_sessions, list)
+        metadata = dict(cache_probe["metadata"])
+        metadata.update(
+            {
+                "fake_session_cache_enabled": True,
+                "fake_session_cache_hit": True,
+                "fake_session_cache_path": str(target_root / "raw_fake_sessions.pkl"),
+                "fake_session_cache_mismatch_fields": [],
+                "n_fake_requested": n_fake,
+                "n_final_injected": len(cached_sessions),
+                "generation_identity": expected_generation_identity,
+                "generation_identity_hash": _hash_json(expected_generation_identity),
+                "total_start_time": total_start_time,
+                "total_end_time": _now_iso(),
+                "total_duration_sec": float(time.perf_counter() - total_start_perf),
+            }
+        )
+        _progress(
+            target,
+            "fake-session cache hit: raw_fake_sessions.pkl "
+            f"identity={metadata.get('generation_identity_hash')}",
+        )
+        max_observed_length, max_seq_len_violation_count = _max_seq_len_violations(
+            cached_sessions,
+            max_seq_len=int(max_seq_len),
+        )
+        metadata["max_observed_final_length"] = int(max_observed_length)
+        metadata["max_seq_len_violation_count"] = int(max_seq_len_violation_count)
+        if len(cached_sessions) != n_fake:
+            raise RuntimeError(
+                "SeqPoison-SBR fake-session cache count mismatch after load: "
+                f"requested={n_fake}, cached={len(cached_sessions)}."
+            )
+        if max_seq_len_violation_count > 0:
+            raise RuntimeError(
+                "SeqPoison-SBR cached final sessions are longer than max_seq_len; "
+                f"max_seq_len={int(max_seq_len)}, "
+                f"max_observed_length={int(max_observed_length)}, "
+                f"violation_count={int(max_seq_len_violation_count)}."
+            )
+        _write_artifacts(
+            target_root=target_root,
+            saved_candidates=[],
+            final_sessions=cached_sessions,
+            metadata=stringify_mapping_keys(metadata),
+            candidate_save_policy=str(poisoning_config.candidate_save_policy),
+            config=config,
+        )
+        return PoisoningSSLSBRTargetResult(
+            raw_fake_sessions=[list(session) for session in cached_sessions],
+            metadata=stringify_mapping_keys(metadata),
+        )
+    if cache_probe["reason"]:
+        fields = cache_probe.get("mismatch_fields", [])
+        suffix = f" mismatch fields={fields}" if fields else f" reason={cache_probe['reason']}"
+        _progress(target, f"fake-session cache miss:{suffix}")
+    cache_mismatch_fields = list(cache_probe.get("mismatch_fields", []))
     generator = candidate_generator or _default_candidate_generator(poisoning_config)
 
     candidate_save_policy = str(poisoning_config.candidate_save_policy)
@@ -335,7 +421,13 @@ def generate_poisoning_ssl_sbr_target(
         generation_end_time=generation_end_time,
         generation_duration_sec=generation_duration_sec,
         saved_candidate_count=len(saved_candidates),
+        expected_training_checkpoint_identity=expected_training_identity,
+        expected_training_checkpoint_identity_hash=expected_training_identity_hash,
     )
+    metadata["fake_session_cache_enabled"] = bool(poisoning_config.reuse_existing_artifacts)
+    metadata["fake_session_cache_hit"] = False
+    metadata["fake_session_cache_path"] = str(target_root / "raw_fake_sessions.pkl")
+    metadata["fake_session_cache_mismatch_fields"] = cache_mismatch_fields
     max_observed_length, max_seq_len_violation_count = _max_seq_len_violations(
         final_sessions,
         max_seq_len=int(max_seq_len),
@@ -361,6 +453,7 @@ def generate_poisoning_ssl_sbr_target(
         final_sessions=final_sessions,
         metadata=metadata,
         candidate_save_policy=candidate_save_policy,
+        config=config,
     )
     metadata_path = target_root / "poisoning_ssl_sbr_metadata.json"
     _progress(
@@ -449,9 +542,12 @@ def _metadata(
     generation_end_time: str,
     generation_duration_sec: float,
     saved_candidate_count: int,
+    expected_training_checkpoint_identity: dict[str, object],
+    expected_training_checkpoint_identity_hash: str,
 ) -> dict[str, object]:
     target_stats = target_diagnostics(final_sessions, target_item=int(target_item))
     duplicate_stats = duplicate_diagnostics(final_sessions)
+    repeated_stats = _repeated_item_stats(final_sessions, target_item=int(target_item))
     budget_stats = budget_diagnostics(
         final_sessions,
         target_item=int(target_item),
@@ -472,12 +568,14 @@ def _metadata(
     )
     training_checkpoint_identity = latest_generation_metadata.get(
         "training_checkpoint_identity"
-    )
+    ) or expected_training_checkpoint_identity
     training_checkpoint_identity_hash = latest_generation_metadata.get(
         "training_checkpoint_identity_hash"
-    )
+    ) or expected_training_checkpoint_identity_hash
     generation_identity = _generation_identity(
+        config=config,
         target_item=int(target_item),
+        n_fake_requested=int(n_fake_requested),
         max_seq_len=int(max_seq_len),
         generation_seed=int(generation_seed),
         poisoning_config=poisoning_config,
@@ -623,6 +721,14 @@ def _metadata(
         "training_checkpoint_identity_hash": training_checkpoint_identity_hash,
         "generation_identity": generation_identity,
         "generation_identity_hash": _hash_json(generation_identity),
+        "fake_session_cache_enabled": (
+            False
+            if poisoning_config is None
+            else bool(poisoning_config.reuse_existing_artifacts)
+        ),
+        "fake_session_cache_hit": False,
+        "fake_session_cache_path": None,
+        "fake_session_cache_mismatch_fields": [],
         "training_epochs": training_epochs,
         "classifier_epochs": training_epochs.get("classifier_epochs"),
         "mle_epochs": training_epochs.get("mle_epochs"),
@@ -710,6 +816,7 @@ def _metadata(
         "remap_used": bool(bridge_metadata.get("remap_applied", False)),
         "item_id_mapping_path": bridge_metadata.get("item_id_mapping_path"),
         **duplicate_stats,
+        **repeated_stats,
         **budget_stats,
         "provenance": provenance_payload(),
         "phase1_interface_mock_only": False,
@@ -739,17 +846,28 @@ def _target_acceptance_failure_reason(
 
 def _generation_identity(
     *,
+    config: Config,
     target_item: int,
+    n_fake_requested: int,
     max_seq_len: int,
     generation_seed: int,
     poisoning_config: PoisoningSSLSBRConfig | None,
     training_checkpoint_identity_hash: object,
 ) -> dict[str, object]:
     return {
+        "dataset": str(config.data.dataset_name),
+        "split_identity": _split_identity_payload(config),
         "target_item": int(target_item),
+        "attack_size": float(config.attack.size),
+        "n_fake_requested": int(n_fake_requested),
         "max_seq_len": int(max_seq_len),
         "generation_seed": int(generation_seed),
         "training_checkpoint_identity_hash": training_checkpoint_identity_hash,
+        "enforce_single_target": (
+            True
+            if poisoning_config is None
+            else bool(poisoning_config.enforce_single_target)
+        ),
         "first_step_target_mask": (
             False
             if poisoning_config is None
@@ -780,6 +898,119 @@ def _generation_identity(
 def _hash_json(payload: dict[str, object]) -> str:
     data = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(data.encode("utf-8")).hexdigest()[:12]
+
+
+def _split_identity_payload(config: Config) -> dict[str, object]:
+    canonical = getattr(config.data, "canonical_split", None)
+    canonical_payload = (
+        dict(canonical.__dict__) if hasattr(canonical, "__dict__") else canonical
+    )
+    return {
+        "dataset_name": str(config.data.dataset_name),
+        "split_protocol": str(config.data.split_protocol),
+        "poison_train_only": bool(config.data.poison_train_only),
+        "canonical_split": canonical_payload,
+    }
+
+
+def _load_fake_session_cache(
+    *,
+    target_root: Path,
+    expected_generation_identity: dict[str, object],
+    n_fake_requested: int,
+    max_seq_len: int,
+    reuse_existing_artifacts: bool,
+) -> dict[str, object]:
+    raw_path = target_root / "raw_fake_sessions.pkl"
+    metadata_path = target_root / "poisoning_ssl_sbr_metadata.json"
+    if not reuse_existing_artifacts:
+        return {"hit": False, "reason": "reuse_existing_artifacts=false"}
+    if not raw_path.exists() and not metadata_path.exists():
+        return {"hit": False, "reason": ""}
+    if not raw_path.exists():
+        return {"hit": False, "reason": "raw_fake_sessions.pkl missing"}
+    if not metadata_path.exists():
+        return {"hit": False, "reason": "poisoning_ssl_sbr_metadata.json missing"}
+    metadata = load_json(metadata_path)
+    if not isinstance(metadata, dict):
+        return {"hit": False, "reason": "metadata is not a JSON object"}
+    observed_identity = metadata.get("generation_identity")
+    if not isinstance(observed_identity, dict):
+        return {
+            "hit": False,
+            "reason": "generation_identity missing",
+            "mismatch_fields": ["generation_identity"],
+        }
+    mismatch_fields = _identity_mismatch_fields(
+        observed_identity,
+        expected_generation_identity,
+    )
+    if mismatch_fields:
+        return {
+            "hit": False,
+            "reason": "generation_identity mismatch",
+            "mismatch_fields": mismatch_fields,
+        }
+    sessions = load_fake_sessions(raw_path)
+    if sessions is None:
+        return {"hit": False, "reason": "raw_fake_sessions.pkl unreadable"}
+    sessions = [[int(item) for item in session] for session in sessions]
+    if len(sessions) != int(n_fake_requested):
+        return {
+            "hit": False,
+            "reason": "n_final_injected mismatch",
+            "mismatch_fields": ["n_fake_requested"],
+        }
+    _max_observed, violation_count = _max_seq_len_violations(
+        sessions,
+        max_seq_len=int(max_seq_len),
+    )
+    if violation_count > 0:
+        return {
+            "hit": False,
+            "reason": "max_seq_len violation",
+            "mismatch_fields": ["max_seq_len"],
+        }
+    return {
+        "hit": True,
+        "reason": "",
+        "sessions": sessions,
+        "metadata": metadata,
+        "mismatch_fields": [],
+    }
+
+
+def _identity_mismatch_fields(
+    observed: dict[str, object],
+    expected: dict[str, object],
+) -> list[str]:
+    fields: list[str] = []
+    for key in sorted(set(observed) | set(expected)):
+        if observed.get(key) != expected.get(key):
+            fields.append(str(key))
+    return fields
+
+
+def _repeated_item_stats(
+    sessions: Sequence[Sequence[int]],
+    *,
+    target_item: int,
+) -> dict[str, object]:
+    count = len(sessions)
+    repeated_items = sum(1 for session in sessions if len(set(session)) < len(session))
+    repeated_target = sum(
+        1 for session in sessions if list(session).count(int(target_item)) > 1
+    )
+    return {
+        "sessions_with_repeated_items": int(repeated_items),
+        "sessions_with_repeated_items_ratio": (
+            0.0 if count <= 0 else float(repeated_items / count)
+        ),
+        "sessions_with_repeated_target": int(repeated_target),
+        "sessions_with_repeated_target_ratio": (
+            0.0 if count <= 0 else float(repeated_target / count)
+        ),
+    }
 
 
 def _merge_postprocess_counts(
@@ -823,11 +1054,16 @@ def _write_artifacts(
     final_sessions: list[list[int]],
     metadata: dict[str, object],
     candidate_save_policy: str,
+    config: Config,
 ) -> None:
-    if candidate_save_policy in {"sample", "all"}:
+    if candidate_save_policy in {"sample", "all"} and saved_candidates:
         save_fake_sessions(saved_candidates, target_root / "generated_candidates.pkl")
     save_fake_sessions(final_sessions, target_root / "raw_fake_sessions.pkl")
     save_json(metadata, target_root / "poisoning_ssl_sbr_metadata.json")
+    save_json(
+        _fake_session_sanity_summary(metadata),
+        target_root / "fake_session_sanity_summary.json",
+    )
     save_json(
         {
             "clean_train_length_stats": metadata["clean_train_length_stats"],
@@ -915,9 +1151,119 @@ def _write_artifacts(
                 "training_checkpoint_identity_hash"
             ),
             "generation_identity_hash": metadata.get("generation_identity_hash"),
+            "fake_session_cache_enabled": metadata.get("fake_session_cache_enabled"),
+            "fake_session_cache_hit": metadata.get("fake_session_cache_hit"),
+            "fake_session_cache_path": metadata.get("fake_session_cache_path"),
+            "fake_session_cache_mismatch_fields": metadata.get(
+                "fake_session_cache_mismatch_fields"
+            ),
         },
         target_root / "generation_log.json",
     )
+    save_json(
+        _target_manifest(
+            config=config,
+            target_root=target_root,
+            metadata=metadata,
+        ),
+        target_root / "seqpoison_sbr_manifest.json",
+    )
+
+
+def _fake_session_sanity_summary(metadata: dict[str, object]) -> dict[str, object]:
+    fake_stats = _stats_object(metadata.get("final_fake_length_stats"))
+    train_stats = _stats_object(metadata.get("clean_train_length_stats"))
+    return {
+        "n_fake_requested": metadata.get("n_fake_requested"),
+        "n_final_injected": metadata.get("n_final_injected"),
+        "n_generated_candidates": metadata.get("n_generated_candidates"),
+        "acceptance_rate": metadata.get("acceptance_rate"),
+        "target_position_distribution": metadata.get("target_position_distribution"),
+        "target_pos0_ratio": metadata.get("target_pos0_ratio"),
+        "target_label_pair_count_added": metadata.get("target_label_pair_count_added"),
+        "expanded_pair_count_added": metadata.get("expanded_pair_count_added"),
+        "no_target_count": metadata.get("no_target_count"),
+        "multi_target_count": metadata.get("multi_target_count"),
+        "filtered_short_session_count": metadata.get("filtered_short_session_count"),
+        "invalid_item_count": metadata.get("invalid_item_count"),
+        "max_seq_len": metadata.get("max_seq_len_value"),
+        "max_seq_len_violation_count": metadata.get("max_seq_len_violation_count"),
+        "fake_length_mean": fake_stats.get("mean"),
+        "fake_length_p50": fake_stats.get("p50"),
+        "fake_length_p75": fake_stats.get("p75"),
+        "fake_length_p90": fake_stats.get("p90"),
+        "fake_length_p95": fake_stats.get("p95"),
+        "fake_length_p99": fake_stats.get("p99"),
+        "fake_length_max": fake_stats.get("max"),
+        "train_sub_length_mean": train_stats.get("mean"),
+        "train_sub_length_p50": train_stats.get("p50"),
+        "train_sub_length_p75": train_stats.get("p75"),
+        "train_sub_length_p90": train_stats.get("p90"),
+        "train_sub_length_p95": train_stats.get("p95"),
+        "train_sub_length_p99": train_stats.get("p99"),
+        "train_sub_length_max": train_stats.get("max"),
+        "unique_fake_session_count": metadata.get("unique_fake_session_count"),
+        "unique_fake_session_ratio": metadata.get("unique_fake_session_ratio"),
+        "duplicate_fake_session_count": metadata.get("duplicate_session_count"),
+        "sessions_with_repeated_items": metadata.get("sessions_with_repeated_items"),
+        "sessions_with_repeated_items_ratio": metadata.get(
+            "sessions_with_repeated_items_ratio"
+        ),
+        "sessions_with_repeated_target": metadata.get("sessions_with_repeated_target"),
+        "sessions_with_repeated_target_ratio": metadata.get(
+            "sessions_with_repeated_target_ratio"
+        ),
+    }
+
+
+def _target_manifest(
+    *,
+    config: Config,
+    target_root: Path,
+    metadata: dict[str, object],
+) -> dict[str, object]:
+    poisoning_config = config.attack.poisoning_ssl_sbr
+    return {
+        "dataset": str(config.data.dataset_name),
+        "config_name": str(config.experiment.name),
+        "run_name": str(config.experiment.name),
+        "target_item": metadata.get("target_item"),
+        "target_group": getattr(config.targets, "bucket", None),
+        "attack_size": float(config.attack.size),
+        "n_fake_requested": metadata.get("n_fake_requested"),
+        "n_final_injected": metadata.get("n_final_injected"),
+        "seed": metadata.get("generation_seed"),
+        "max_seq_len": metadata.get("max_seq_len_value"),
+        "training_checkpoint_identity_hash": metadata.get(
+            "training_checkpoint_identity_hash"
+        ),
+        "training_checkpoint_path": metadata.get("training_checkpoint_path"),
+        "classifier_checkpoint_path": metadata.get("classifier_checkpoint_path"),
+        "generator_checkpoint_path": metadata.get("generator_checkpoint_path"),
+        "discriminator_checkpoint_path": metadata.get("discriminator_checkpoint_path"),
+        "generation_identity_hash": metadata.get("generation_identity_hash"),
+        "raw_fake_sessions_path": str(target_root / "raw_fake_sessions.pkl"),
+        "metadata_path": str(target_root / "poisoning_ssl_sbr_metadata.json"),
+        "generation_log_path": str(target_root / "generation_log.json"),
+        "length_distribution_path": str(target_root / "length_distribution.json"),
+        "fake_session_sanity_summary_path": str(
+            target_root / "fake_session_sanity_summary.json"
+        ),
+        "first_step_target_mask": metadata.get("first_step_target_mask"),
+        "target_logit_bias_after_first_step": metadata.get(
+            "target_logit_bias_after_first_step"
+        ),
+        "adversarial_epochs": metadata.get("adversarial_epochs"),
+        "candidate_multiplier": metadata.get("candidate_multiplier"),
+        "max_generation_rounds": metadata.get("max_generation_rounds"),
+        "candidate_save_policy": metadata.get("candidate_save_policy"),
+        "created_at": _now_iso(),
+        "cache_hit": metadata.get("fake_session_cache_hit"),
+    }
+
+
+def _stats_object(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _now_iso() -> str:

@@ -13,13 +13,14 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from attack.common.config import PoisoningSSLSBRConfig, load_config
-from attack.common.artifact_io import load_fake_sessions, load_json
+from attack.common.artifact_io import load_fake_sessions, load_json, save_json
 from attack.common.paths import (
     POISONING_SSL_SBR_RUN_TYPE,
     attack_key_payload,
     classify_victim_training_run_type,
     shared_attack_artifact_key_payload,
     shared_attack_identity_requires_poison_runner,
+    target_dir,
 )
 from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.poisoned_dataset_builder import PoisonedDataset
@@ -556,6 +557,41 @@ def test_training_checkpoint_identity_excludes_first_step_target_mask(tmp_path: 
     assert identity_a == identity_c
 
 
+def test_training_checkpoint_identity_excludes_fake_session_cache_and_decoding_fields(
+    tmp_path: Path,
+) -> None:
+    bundle = export_pseudo_user_sequences(
+        [[1, 9], [2, 9]],
+        target_item=9,
+        output_dir=tmp_path / "bridge_cache_identity",
+        valid_item_ids={1, 2, 9},
+        max_seq_len=3,
+    )
+    base = EffectiveSeqPoisonTrainingConfig.from_config(PoisoningSSLSBRConfig())
+    changed = EffectiveSeqPoisonTrainingConfig.from_config(
+        PoisoningSSLSBRConfig(
+            first_step_target_mask=True,
+            target_logit_bias_after_first_step=2.0,
+            candidate_multiplier=20,
+            max_generation_rounds=50,
+            candidate_save_policy="summary_only",
+            max_saved_candidates=1,
+        )
+    )
+    assert base == changed
+    assert _checkpoint_identity(
+        dataset_bundle=bundle,
+        target_item=9,
+        seed=123,
+        effective=base,
+    ) == _checkpoint_identity(
+        dataset_bundle=bundle,
+        target_item=9,
+        seed=123,
+        effective=changed,
+    )
+
+
 def test_diagnostics_budget_and_duplicates() -> None:
     sessions = [[9, 1], [1, 9, 2], [1, 9, 2]]
     stats = length_stats(sessions)
@@ -614,6 +650,12 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
     assert "estimated_candidates_needed_for_target_label_budget" in result.metadata
     assert "generation_identity" in result.metadata
     assert "generation_identity_hash" in result.metadata
+    assert result.metadata["generation_identity"]["attack_size"] == pytest.approx(
+        config.attack.size
+    )
+    assert result.metadata["generation_identity"]["n_fake_requested"] == 2
+    assert result.metadata["fake_session_cache_enabled"] is True
+    assert result.metadata["fake_session_cache_hit"] is False
     assert result.metadata["phase1_interface_mock_only"] is False
     assert result.metadata["real_generation_implemented"] is False
     assert (
@@ -632,6 +674,134 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
     generation_log = load_json(generation_logs[0])
     assert generation_log["raw_candidate_count_by_round"] == [3]
     assert generation_log["valid_count_by_round"] == [2]
+    manifests = list(target_root.rglob("seqpoison_sbr_manifest.json"))
+    assert manifests
+    manifest = load_json(manifests[0])
+    assert manifest["target_item"] == 9
+    assert manifest["n_final_injected"] == 2
+    assert manifest["generation_identity_hash"] == result.metadata["generation_identity_hash"]
+    assert manifest["raw_fake_sessions_path"].endswith("raw_fake_sessions.pkl")
+    summaries = list(target_root.rglob("fake_session_sanity_summary.json"))
+    assert summaries
+    sanity = load_json(summaries[0])
+    assert sanity["n_fake_requested"] == 2
+    assert sanity["n_final_injected"] == 2
+    assert sanity["target_position_distribution"] == {"0": 1, "1": 1}
+    assert sanity["fake_length_p50"] == 2
+    assert sanity["train_sub_length_p99"] == 4
+
+
+def test_fake_session_cache_hit_loads_sessions_and_skips_generator(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    shared = _toy_shared(fake_session_count=2)
+    first = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9]]]
+        ),
+    )
+
+    class FailingGenerator:
+        def generate(self, request):
+            raise AssertionError("cache hit should skip candidate generation")
+
+    second = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=FailingGenerator(),
+    )
+    assert second.raw_fake_sessions == first.raw_fake_sessions
+    assert second.metadata["fake_session_cache_hit"] is True
+    assert second.metadata["generation_identity_hash"] == first.metadata[
+        "generation_identity_hash"
+    ]
+    root = target_dir(config, 9, run_type=POISONING_SSL_SBR_RUN_TYPE)
+    manifest = load_json(root / "seqpoison_sbr_manifest.json")
+    assert manifest["cache_hit"] is True
+
+
+def test_fake_session_cache_miss_when_n_fake_requested_differs(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    shared = _toy_shared(fake_session_count=2)
+    generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9]]]
+        ),
+    )
+    called = {"value": False}
+
+    class OneSessionGenerator:
+        def generate(self, request):
+            called["value"] = True
+            return [[200, 9, 2]]
+
+    second = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=_toy_shared(fake_session_count=1),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=1,
+        candidate_generator=OneSessionGenerator(),
+    )
+    assert called["value"] is True
+    assert second.raw_fake_sessions == [[9, 2]]
+    assert second.metadata["fake_session_cache_hit"] is False
+    assert "n_fake_requested" in second.metadata["fake_session_cache_mismatch_fields"]
+
+
+def test_fake_session_cache_miss_when_generation_identity_differs(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    shared = _toy_shared(fake_session_count=2)
+    generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9]]]
+        ),
+    )
+    root = target_dir(config, 9, run_type=POISONING_SSL_SBR_RUN_TYPE)
+    metadata_path = root / "poisoning_ssl_sbr_metadata.json"
+    metadata = load_json(metadata_path)
+    metadata["generation_identity"]["target_logit_bias_after_first_step"] = 99.0
+    save_json(metadata, metadata_path)
+    called = {"value": False}
+
+    class FreshGenerator:
+        def generate(self, request):
+            called["value"] = True
+            return [[300, 9, 1], [301, 1, 9]]
+
+    result = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=shared,
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=FreshGenerator(),
+    )
+    assert called["value"] is True
+    assert result.metadata["fake_session_cache_hit"] is False
+    assert (
+        "target_logit_bias_after_first_step"
+        in result.metadata["fake_session_cache_mismatch_fields"]
+    )
 
 
 def test_pipeline_first_step_mask_metadata_and_generation_identity(tmp_path: Path) -> None:
