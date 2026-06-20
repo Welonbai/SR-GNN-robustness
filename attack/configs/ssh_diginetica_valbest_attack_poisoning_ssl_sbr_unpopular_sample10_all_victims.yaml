@@ -74,8 +74,9 @@ attack:
     save_checkpoints: true
     reuse_existing_artifacts: true
     generation_seed_offset: 0
+    generation_sample_batch_size: 256
     device: null
-    gpu_id: "1"
+    gpu_id: "0"
 
 targets:
   mode: sampled

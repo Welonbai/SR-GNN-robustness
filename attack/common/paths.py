@@ -727,6 +727,7 @@ def _poisoning_ssl_sbr_identity_payload(config: Config) -> dict[str, Any]:
         "max_generation_rounds": int(poisoning.max_generation_rounds),
         "generation_seed_offset": int(poisoning.generation_seed_offset),
         "generation_backend": poisoning.generation_backend,
+        "generation_sample_batch_size": int(poisoning.generation_sample_batch_size),
         "device": poisoning.device,
         "gpu_id": poisoning.gpu_id,
         "classifier_epochs": poisoning.classifier_epochs,

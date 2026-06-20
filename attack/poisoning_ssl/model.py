@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import random
+from typing import Any, Callable
 
 import torch
 import torch.nn as nn
@@ -172,6 +173,47 @@ class Generator(nn.Module):
         classifier_reward: torch.Tensor,
     ) -> torch.Tensor:
         return self.batch_pg_loss(inp, target, classifier_reward)
+
+
+def sample_sequences_in_chunks(
+    generator: Any,
+    total_count: int,
+    *,
+    batch_size: int,
+    device: torch.device,
+    stage_name: str | None = None,
+    log_fn: Callable[[str], None] | None = None,
+    output_device: torch.device | str | None = None,
+    **sample_kwargs: Any,
+) -> torch.Tensor:
+    requested = int(total_count)
+    chunk_size = int(batch_size)
+    if requested <= 0:
+        raise ValueError("total_count must be positive.")
+    if chunk_size <= 0:
+        raise ValueError("batch_size must be positive.")
+    chunk_count = (requested + chunk_size - 1) // chunk_size
+    if log_fn is not None and chunk_count > 1:
+        label = stage_name or "generator.sample"
+        log_fn(
+            f"{label} chunked sampling total_requested={requested} "
+            f"chunk_size={chunk_size} chunks={chunk_count}"
+        )
+    chunks: list[torch.Tensor] = []
+    remaining = requested
+    with torch.no_grad():
+        while remaining > 0:
+            current = min(chunk_size, remaining)
+            sampled = generator.sample(current, device=device, **sample_kwargs)
+            sampled = sampled.detach()
+            if output_device is not None:
+                sampled = sampled.to(output_device)
+            chunks.append(sampled)
+            remaining -= current
+            del sampled
+    if len(chunks) == 1:
+        return chunks[0]
+    return torch.cat(chunks, dim=0)
 
 
 class Discriminator(nn.Module):

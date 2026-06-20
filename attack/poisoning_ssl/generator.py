@@ -8,7 +8,7 @@ from typing import Any, Protocol, Sequence
 from attack.common.artifact_io import save_json
 from attack.common.config import PoisoningSSLSBRConfig
 from attack.poisoning_ssl.dataset_bridge import SeqPoisonDatasetBundle
-from attack.poisoning_ssl.model import unpad_generated_tensor
+from attack.poisoning_ssl.model import sample_sequences_in_chunks, unpad_generated_tensor
 from attack.poisoning_ssl.trainer import SeqPoisonTrainer
 
 
@@ -79,9 +79,21 @@ class RealSeqPoisonCandidateGenerator:
         first_step_target_mask = bool(request.config.first_step_target_mask)
         target_logit_bias = float(request.config.target_logit_bias_after_first_step)
         seqpoison_target_id = int(request.dataset_bundle.seqpoison_target_item)
-        samples = result.generator.sample(
+        sample_batch_size = int(request.config.generation_sample_batch_size)
+        sample_chunk_count = (
+            int(request.n_candidates) + sample_batch_size - 1
+        ) // sample_batch_size
+        samples = sample_sequences_in_chunks(
+            result.generator,
             int(request.n_candidates),
+            batch_size=sample_batch_size,
             device=result.device,
+            stage_name=f"final generation round {int(request.round_index) + 1}",
+            log_fn=lambda message: print(
+                f"[SeqPoison-SBR][target={int(request.target_item)}] {message}",
+                flush=True,
+            ),
+            output_device=torch.device("cpu"),
             first_step_target_mask=first_step_target_mask,
             first_step_mask_target_id=(
                 seqpoison_target_id
@@ -145,6 +157,8 @@ class RealSeqPoisonCandidateGenerator:
             "target_logit_bias_positions": (
                 "positions>=1" if target_logit_bias != 0.0 else "none"
             ),
+            "generation_sample_batch_size": sample_batch_size,
+            "sample_chunk_count": int(sample_chunk_count),
             "classifier_checkpoint_path": str(result.classifier_checkpoint_path),
             "generator_checkpoint_path": str(result.generator_checkpoint_path),
             "discriminator_checkpoint_path": str(result.discriminator_checkpoint_path),
@@ -168,6 +182,8 @@ class RealSeqPoisonCandidateGenerator:
                 "target_logit_bias_positions": (
                     "positions>=1" if target_logit_bias != 0.0 else "none"
                 ),
+                "generation_sample_batch_size": sample_batch_size,
+                "sample_chunk_count": int(sample_chunk_count),
             },
             result.generation_log_path,
         )

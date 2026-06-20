@@ -2134,6 +2134,7 @@ class PoisoningSSLSBRConfig:
     reuse_existing_artifacts: bool = True
     generation_seed_offset: int = 0
     generation_backend: str = POISONING_SSL_SBR_GENERATION_BACKEND_REAL
+    generation_sample_batch_size: int = 256
     device: str | None = None
     gpu_id: str | None = None
     classifier_epochs: int | None = None
@@ -2239,6 +2240,10 @@ class PoisoningSSLSBRConfig:
             self.generation_backend,
             "attack.poisoning_ssl_sbr.generation_backend",
         ).strip().lower()
+        generation_sample_batch_size = _as_int(
+            self.generation_sample_batch_size,
+            "attack.poisoning_ssl_sbr.generation_sample_batch_size",
+        )
         device = (
             None
             if self.device is None
@@ -2387,6 +2392,10 @@ class PoisoningSSLSBRConfig:
             raise ValueError(
                 "attack.poisoning_ssl_sbr.max_generation_rounds must be positive."
             )
+        if generation_sample_batch_size <= 0:
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.generation_sample_batch_size must be positive."
+            )
         if candidate_save_policy not in _ALLOWED_POISONING_SSL_SBR_CANDIDATE_SAVE_POLICIES:
             allowed = ", ".join(sorted(_ALLOWED_POISONING_SSL_SBR_CANDIDATE_SAVE_POLICIES))
             raise ValueError(
@@ -2440,6 +2449,11 @@ class PoisoningSSLSBRConfig:
         object.__setattr__(self, "reuse_existing_artifacts", reuse_existing_artifacts)
         object.__setattr__(self, "generation_seed_offset", generation_seed_offset)
         object.__setattr__(self, "generation_backend", generation_backend)
+        object.__setattr__(
+            self,
+            "generation_sample_batch_size",
+            generation_sample_batch_size,
+        )
         object.__setattr__(self, "device", device)
         object.__setattr__(self, "gpu_id", gpu_id)
         object.__setattr__(self, "classifier_epochs", classifier_epochs)

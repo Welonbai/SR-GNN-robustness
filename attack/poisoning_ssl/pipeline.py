@@ -843,6 +843,16 @@ def _metadata(
             [],
         ),
         "batch_size": latest_generation_metadata.get("batch_size"),
+        "generation_sample_batch_size": (
+            None
+            if poisoning_config is None
+            else int(poisoning_config.generation_sample_batch_size)
+        ),
+        "sample_chunk_count_by_round": [
+            int(item.get("sample_chunk_count", 1))
+            for item in generation_round_metadata
+            if isinstance(item, dict)
+        ],
         "learning_rate": latest_generation_metadata.get("learning_rate"),
         "embedding_dim": latest_generation_metadata.get("embedding_dim"),
         "hidden_dim": latest_generation_metadata.get("hidden_dim"),
@@ -945,6 +955,11 @@ def _generation_identity(
         ),
         "candidate_multiplier": (
             None if poisoning_config is None else int(poisoning_config.candidate_multiplier)
+        ),
+        "generation_sample_batch_size": (
+            None
+            if poisoning_config is None
+            else int(poisoning_config.generation_sample_batch_size)
         ),
         "max_generation_rounds": (
             None

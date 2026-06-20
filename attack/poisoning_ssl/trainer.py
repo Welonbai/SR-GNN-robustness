@@ -24,6 +24,7 @@ from attack.poisoning_ssl.model import (
     classifier_filter_config,
     padded_sequences,
     prepare_generator_batch,
+    sample_sequences_in_chunks,
     unpad_generated_tensor,
 )
 from attack.poisoning_ssl.diagnostics import (
@@ -228,6 +229,7 @@ class SeqPoisonTrainer:
         total_start_time = _now_iso()
         total_start_perf = time.perf_counter()
         effective = EffectiveSeqPoisonTrainingConfig.from_config(config)
+        sample_batch_size = int(config.generation_sample_batch_size)
         device = _resolve_device(config)
         output = Path(output_dir)
         identity = _checkpoint_identity(
@@ -327,6 +329,7 @@ class SeqPoisonTrainer:
                 "adversarial_epoch_durations_sec": [],
                 "discriminator_update_durations_sec": [],
                 "acceptance_evaluations": [],
+                "generation_sample_batch_size": sample_batch_size,
             }
         else:
             _seed_everything(seed)
@@ -388,6 +391,7 @@ class SeqPoisonTrainer:
                 "discriminator_adversarial_epochs": effective.discriminator_adversarial_epochs,
             },
             "batch_size": effective.batch_size,
+            "generation_sample_batch_size": sample_batch_size,
             "learning_rate": effective.learning_rate,
             "classifier_learning_rate": effective.classifier_learning_rate,
             "embedding_dim": effective.embedding_dim,
@@ -471,6 +475,7 @@ class SeqPoisonTrainer:
             "adversarial_epoch_durations_sec": [],
             "discriminator_update_durations_sec": [],
             "acceptance_evaluations": [],
+            "generation_sample_batch_size": int(config.generation_sample_batch_size),
         }
         stage_start = time.perf_counter()
         _progress(
@@ -508,6 +513,7 @@ class SeqPoisonTrainer:
             log=log,
             target_item=target_item,
             progress_path=progress_path,
+            sample_batch_size=int(config.generation_sample_batch_size),
         )
         log["mle_pretraining_duration_sec"] = float(time.perf_counter() - stage_start)
         _progress(
@@ -559,6 +565,7 @@ class SeqPoisonTrainer:
                 train_samples=train_samples,
                 dataset_bundle=dataset_bundle,
                 effective=effective,
+                sample_batch_size=int(config.generation_sample_batch_size),
                 seed=seed + epoch + 1000,
             )
             adv["generator_update_duration_sec"] = float(time.perf_counter() - update_start)
@@ -574,6 +581,7 @@ class SeqPoisonTrainer:
                 log=log,
                 target_item=target_item,
                 progress_path=progress_path,
+                sample_batch_size=int(config.generation_sample_batch_size),
             )
             epoch_duration = float(time.perf_counter() - epoch_start)
             log["adversarial_epoch_durations_sec"].append(epoch_duration)
@@ -771,6 +779,7 @@ class SeqPoisonTrainer:
         log: dict[str, object],
         target_item: int,
         progress_path: Path,
+        sample_batch_size: int,
     ) -> None:
         device = train_samples.device
         if log_key not in log:
@@ -780,7 +789,14 @@ class SeqPoisonTrainer:
                 int(effective.pos_neg_samples),
                 max(int(effective.batch_size), int(train_samples.size(0))),
             )
-            fake = generator.sample(sample_count, device=device)
+            fake = sample_sequences_in_chunks(
+                generator,
+                sample_count,
+                batch_size=int(sample_batch_size),
+                device=device,
+                stage_name=f"{log_key} step {step + 1}",
+                log_fn=lambda message: _progress(target_item, message),
+            )
             real_indices = torch.randint(
                 0,
                 int(train_samples.size(0)),
@@ -856,10 +872,17 @@ class SeqPoisonTrainer:
         train_samples: torch.Tensor,
         dataset_bundle: SeqPoisonDatasetBundle,
         effective: EffectiveSeqPoisonTrainingConfig,
+        sample_batch_size: int,
         seed: int,
     ) -> dict[str, float]:
         batch_count = int(effective.batch_size * 2)
-        samples = generator.sample(batch_count, device=train_samples.device)
+        samples = sample_sequences_in_chunks(
+            generator,
+            batch_count,
+            batch_size=int(sample_batch_size),
+            device=train_samples.device,
+            stage_name="adversarial generator policy-gradient",
+        )
         inp, target = prepare_generator_batch(samples, start_letter=effective.start_letter)
         rewards = discriminator.batch_classify(target).detach()
         classifier_dataset = _ClassifierRewardDataset(
@@ -1125,11 +1148,15 @@ def _acceptance_eval(
     cuda_rng_state = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
     try:
         torch.manual_seed(int(seed))
-        with torch.no_grad():
-            samples = generator.sample(
-                int(config.acceptance_eval_candidate_count),
-                device=device,
-            )
+        samples = sample_sequences_in_chunks(
+            generator,
+            int(config.acceptance_eval_candidate_count),
+            batch_size=int(config.generation_sample_batch_size),
+            device=device,
+            stage_name=f"acceptance eval epoch {int(epoch)}",
+            log_fn=lambda message: print(f"[SeqPoison-SBR] {message}", flush=True),
+            output_device=torch.device("cpu"),
+        )
     finally:
         torch.random.set_rng_state(cpu_rng_state)
         if cuda_rng_state is not None:

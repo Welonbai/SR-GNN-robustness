@@ -35,7 +35,7 @@ from attack.poisoning_ssl.diagnostics import (
 )
 from attack.poisoning_ssl.dataset_bridge import export_pseudo_user_sequences
 from attack.poisoning_ssl.generator import RealSeqPoisonCandidateGenerator, StaticCandidateGenerator
-from attack.poisoning_ssl.model import Generator
+from attack.poisoning_ssl.model import Discriminator, Generator, sample_sequences_in_chunks
 from attack.poisoning_ssl.pipeline import (
     compute_seqpoison_max_seq_len,
     generate_poisoning_ssl_sbr_target,
@@ -44,6 +44,7 @@ from attack.poisoning_ssl.pipeline import (
 from attack.poisoning_ssl.postprocess import postprocess_fake_user_sequences
 from attack.poisoning_ssl.trainer import (
     EffectiveSeqPoisonTrainingConfig,
+    SeqPoisonTrainer,
     _checkpoint_identity,
 )
 
@@ -121,8 +122,11 @@ def test_poisoning_ssl_sbr_config_parses_defaults_and_identity(tmp_path: Path) -
     assert poisoning.candidate_multiplier == 1
     assert poisoning.max_generation_rounds == 10
     assert poisoning.generation_backend == "real"
+    assert poisoning.generation_sample_batch_size == 256
     assert poisoning.candidate_save_policy == "sample"
     assert PoisoningSSLSBRConfig().candidate_save_policy == "summary_only"
+    assert PoisoningSSLSBRConfig().generation_sample_batch_size == 256
+    assert PoisoningSSLSBRConfig(generation_sample_batch_size=17).generation_sample_batch_size == 17
     primitive = config.to_primitive()
     assert primitive["attack"]["poisoning_ssl_sbr"]["enabled"] is True
     assert primitive["attack"]["poisoning_ssl_sbr"]["generation_backend"] == "real"
@@ -144,6 +148,7 @@ def test_poisoning_ssl_sbr_config_parses_defaults_and_identity(tmp_path: Path) -
     assert identity["candidate_multiplier"] == 1
     assert identity["max_generation_rounds"] == 10
     assert identity["generation_backend"] == "real"
+    assert identity["generation_sample_batch_size"] == 256
     assert identity["first_step_target_mask"] is False
     assert identity["target_logit_bias_after_first_step"] == 0.0
     assert classify_victim_training_run_type(POISONING_SSL_SBR_RUN_TYPE) == "poisoned"
@@ -161,6 +166,8 @@ def test_poisoning_ssl_sbr_config_rejects_invalid_values() -> None:
         PoisoningSSLSBRConfig(candidate_multiplier=0)
     with pytest.raises(ValueError, match="max_generation_rounds"):
         PoisoningSSLSBRConfig(max_generation_rounds=0)
+    with pytest.raises(ValueError, match="generation_sample_batch_size"):
+        PoisoningSSLSBRConfig(generation_sample_batch_size=0)
     with pytest.raises(ValueError, match="max_seq_len_override"):
         PoisoningSSLSBRConfig(max_seq_len_policy="fixed")
     with pytest.raises(ValueError, match="generation_backend"):
@@ -382,6 +389,44 @@ def test_target_logit_bias_increases_later_target_probability() -> None:
     assert biased_rate > unbiased_rate + 0.25
 
 
+def test_sample_sequences_in_chunks_preserves_count_and_splits_large_request() -> None:
+    calls: list[int] = []
+
+    class FakeGenerator:
+        def sample(self, n, *, device, **kwargs):
+            calls.append(int(n))
+            return torch.full((int(n), 3), len(calls), dtype=torch.long, device=device)
+
+    samples = sample_sequences_in_chunks(
+        FakeGenerator(),
+        5,
+        batch_size=2,
+        device=torch.device("cpu"),
+        stage_name="unit test",
+    )
+    assert calls == [2, 2, 1]
+    assert samples.shape == (5, 3)
+    assert samples[:, 0].tolist() == [1, 1, 2, 2, 3]
+
+
+def test_sample_sequences_in_chunks_single_chunk_for_small_request() -> None:
+    calls: list[int] = []
+
+    class FakeGenerator:
+        def sample(self, n, *, device, **kwargs):
+            calls.append(int(n))
+            return torch.zeros((int(n), 2), dtype=torch.long, device=device)
+
+    samples = sample_sequences_in_chunks(
+        FakeGenerator(),
+        3,
+        batch_size=5,
+        device=torch.device("cpu"),
+    )
+    assert calls == [3]
+    assert samples.shape == (3, 2)
+
+
 def test_real_generator_first_step_mask_uses_remapped_target_id(tmp_path: Path) -> None:
     bundle = export_pseudo_user_sequences(
         [[10, 40], [20, 40]],
@@ -594,6 +639,34 @@ def test_training_checkpoint_identity_excludes_fake_session_cache_and_decoding_f
     )
 
 
+def test_training_checkpoint_identity_excludes_generation_sample_batch_size(
+    tmp_path: Path,
+) -> None:
+    bundle = export_pseudo_user_sequences(
+        [[1, 9], [2, 9]],
+        target_item=9,
+        output_dir=tmp_path / "bridge_sample_batch_identity",
+        valid_item_ids={1, 2, 9},
+        max_seq_len=3,
+    )
+    base = EffectiveSeqPoisonTrainingConfig.from_config(PoisoningSSLSBRConfig())
+    changed = EffectiveSeqPoisonTrainingConfig.from_config(
+        PoisoningSSLSBRConfig(generation_sample_batch_size=17)
+    )
+    assert base == changed
+    assert _checkpoint_identity(
+        dataset_bundle=bundle,
+        target_item=9,
+        seed=123,
+        effective=base,
+    ) == _checkpoint_identity(
+        dataset_bundle=bundle,
+        target_item=9,
+        seed=123,
+        effective=changed,
+    )
+
+
 def test_diagnostics_budget_and_duplicates() -> None:
     sessions = [[9, 1], [1, 9, 2], [1, 9, 2]]
     stats = length_stats(sessions)
@@ -656,6 +729,7 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
         config.attack.size
     )
     assert result.metadata["generation_identity"]["n_fake_requested"] == 2
+    assert result.metadata["generation_identity"]["generation_sample_batch_size"] == 256
     assert result.metadata["fake_session_cache_enabled"] is True
     assert result.metadata["fake_session_cache_hit"] is False
     assert result.metadata["phase1_interface_mock_only"] is False
@@ -1211,6 +1285,111 @@ def test_real_generator_prepends_synthetic_user_id(tmp_path: Path) -> None:
     assert generator.last_metadata["real_generation_implemented"] is True
     assert generator.last_metadata["first_step_target_mask"] is False
     assert generator.last_metadata["target_logit_bias_after_first_step"] == 0.0
+
+
+def test_real_generator_chunks_large_final_generation_request(tmp_path: Path) -> None:
+    bundle = export_pseudo_user_sequences(
+        [[1, 9], [2, 9]],
+        target_item=9,
+        output_dir=tmp_path / "bridge_chunked",
+        valid_item_ids={1, 2, 9},
+        max_seq_len=3,
+    )
+    calls: list[int] = []
+
+    class FakeSampleGenerator:
+        def sample(self, n, *, device, **kwargs):
+            calls.append(int(n))
+            item_one = bundle.canonical_to_seqpoison.get(1, 1)
+            item_two = bundle.canonical_to_seqpoison.get(2, 2)
+            target = bundle.seqpoison_target_item
+            rows = []
+            for index in range(int(n)):
+                rows.append([item_one if index % 2 == 0 else item_two, target, 0])
+            return torch.tensor(rows, dtype=torch.long, device=device)
+
+    class FakeTrainer:
+        def train_or_load(self, **kwargs):
+            return SimpleNamespace(
+                classifier_checkpoint_path=tmp_path / "classifier.pt",
+                generator_checkpoint_path=tmp_path / "generator.pt",
+                discriminator_checkpoint_path=tmp_path / "discriminator.pt",
+                training_log_path=tmp_path / "training_log.json",
+                generation_log_path=tmp_path / "generation_log.json",
+                metadata={
+                    "enabled_reward_components": [],
+                    "training_epochs": {},
+                    "batch_size": 2,
+                    "learning_rate": 0.001,
+                    "embedding_dim": 4,
+                    "hidden_dim": 4,
+                    "device": "cpu",
+                },
+                generator=FakeSampleGenerator(),
+                device=torch.device("cpu"),
+            )
+
+    generator = RealSeqPoisonCandidateGenerator(trainer=FakeTrainer())
+    candidates = generator.generate(
+        SimpleNamespace(
+            target_item=9,
+            n_candidates=5,
+            max_seq_len=3,
+            seed=123,
+            output_dir=tmp_path,
+            round_index=0,
+            dataset_bundle=bundle,
+            valid_item_ids={1, 2, 9},
+            config=PoisoningSSLSBRConfig(generation_sample_batch_size=2),
+        )
+    )
+    assert calls == [2, 2, 1]
+    assert len(candidates) == 5
+    assert [candidate[0] for candidate in candidates] == [1, 2, 3, 4, 5]
+    assert generator.last_metadata["generation_sample_batch_size"] == 2
+    assert generator.last_metadata["sample_chunk_count"] == 3
+
+
+def test_discriminator_fake_sampling_path_chunks_large_sample_count(
+    tmp_path: Path,
+) -> None:
+    calls: list[int] = []
+
+    class FakeGenerator:
+        def sample(self, n, *, device, **kwargs):
+            calls.append(int(n))
+            return torch.zeros((int(n), 3), dtype=torch.long, device=device)
+
+    discriminator = Discriminator(
+        embedding_dim=4,
+        hidden_dim=4,
+        vocab_size=10,
+        max_seq_len=3,
+        dropout=0.0,
+    )
+    optimizer = torch.optim.SGD(discriminator.parameters(), lr=0.01)
+    log: dict[str, object] = {
+        "discriminator_update_durations_sec": [],
+    }
+    SeqPoisonTrainer()._train_discriminator(
+        discriminator=discriminator,
+        optimizer=optimizer,
+        train_samples=torch.ones((5, 3), dtype=torch.long),
+        generator=FakeGenerator(),
+        d_steps=1,
+        epochs=1,
+        effective=EffectiveSeqPoisonTrainingConfig(
+            batch_size=2,
+            pos_neg_samples=5,
+        ),
+        log_key="discriminator_pretrain",
+        log=log,
+        target_item=9,
+        progress_path=tmp_path / "progress.json",
+        sample_batch_size=2,
+    )
+    assert calls == [2, 2, 1]
+    assert len(log["discriminator_pretrain"]) == 1
 
 
 def test_pipeline_rejects_final_sessions_longer_than_max_seq_len(tmp_path: Path) -> None:
