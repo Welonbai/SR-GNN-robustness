@@ -63,7 +63,7 @@ attack:
     discriminator_hidden_dim: 64
     classifier_embedding_dim: 64
     candidate_multiplier: 20
-    max_generation_rounds: 50
+    max_generation_rounds: 100
     target_probability: 0.9
     acceptance_eval_enabled: true
     acceptance_eval_interval_epochs: 10
