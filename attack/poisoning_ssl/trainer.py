@@ -60,6 +60,7 @@ class EffectiveSeqPoisonTrainingConfig:
     classifier_dropout: float = 0.75
     start_letter: int = 0
     target_probability: float = 0.9
+    generation_sample_batch_size: int = 256
 
     @classmethod
     def from_config(cls, config: PoisoningSSLSBRConfig) -> "EffectiveSeqPoisonTrainingConfig":
@@ -513,7 +514,6 @@ class SeqPoisonTrainer:
             log=log,
             target_item=target_item,
             progress_path=progress_path,
-            sample_batch_size=int(config.generation_sample_batch_size),
         )
         log["mle_pretraining_duration_sec"] = float(time.perf_counter() - stage_start)
         _progress(
@@ -540,6 +540,7 @@ class SeqPoisonTrainer:
             log=log,
             target_item=target_item,
             progress_path=progress_path,
+            sample_batch_size=int(config.generation_sample_batch_size),
         )
         log["discriminator_pretraining_duration_sec"] = float(
             time.perf_counter() - stage_start

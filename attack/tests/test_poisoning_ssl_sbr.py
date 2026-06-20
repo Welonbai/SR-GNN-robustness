@@ -639,7 +639,7 @@ def test_training_checkpoint_identity_excludes_fake_session_cache_and_decoding_f
     )
 
 
-def test_training_checkpoint_identity_excludes_generation_sample_batch_size(
+def test_training_checkpoint_identity_includes_generation_sample_batch_size(
     tmp_path: Path,
 ) -> None:
     bundle = export_pseudo_user_sequences(
@@ -653,18 +653,63 @@ def test_training_checkpoint_identity_excludes_generation_sample_batch_size(
     changed = EffectiveSeqPoisonTrainingConfig.from_config(
         PoisoningSSLSBRConfig(generation_sample_batch_size=17)
     )
-    assert base == changed
+    assert base.generation_sample_batch_size == 256
+    assert changed.generation_sample_batch_size == 17
     assert _checkpoint_identity(
         dataset_bundle=bundle,
         target_item=9,
         seed=123,
         effective=base,
-    ) == _checkpoint_identity(
+    ) != _checkpoint_identity(
         dataset_bundle=bundle,
         target_item=9,
         seed=123,
         effective=changed,
     )
+
+
+def test_seqpoison_trainer_cold_training_runs_mle_without_sample_batch_arg(
+    tmp_path: Path,
+) -> None:
+    bundle = export_pseudo_user_sequences(
+        [[1, 2, 9], [2, 3, 9], [1, 3, 9], [3, 2, 9]],
+        target_item=9,
+        output_dir=tmp_path / "bridge_cold_train",
+        valid_item_ids={1, 2, 3, 9},
+        max_seq_len=4,
+    )
+    config = PoisoningSSLSBRConfig(
+        enabled=True,
+        reuse_existing_artifacts=False,
+        save_checkpoints=False,
+        device="cpu",
+        classifier_epochs=1,
+        mle_epochs=1,
+        adversarial_epochs=1,
+        discriminator_pretrain_steps=1,
+        discriminator_pretrain_epochs=1,
+        discriminator_adversarial_steps=1,
+        discriminator_adversarial_epochs=1,
+        batch_size=2,
+        embedding_dim=4,
+        hidden_dim=4,
+        discriminator_embedding_dim=4,
+        discriminator_hidden_dim=4,
+        classifier_embedding_dim=4,
+        pos_neg_samples=4,
+        generation_sample_batch_size=2,
+    )
+    result = SeqPoisonTrainer().train_or_load(
+        output_dir=tmp_path / "cold_train",
+        dataset_bundle=bundle,
+        config=config,
+        target_item=9,
+        seed=123,
+    )
+    assert result.metadata["training_checkpoint_reused"] is False
+    assert result.metadata["training_epochs"]["mle_epochs"] == 1
+    assert result.metadata["generation_sample_batch_size"] == 2
+    assert result.metadata["effective_training_config"]["generation_sample_batch_size"] == 2
 
 
 def test_diagnostics_budget_and_duplicates() -> None:
@@ -1381,6 +1426,7 @@ def test_discriminator_fake_sampling_path_chunks_large_sample_count(
         effective=EffectiveSeqPoisonTrainingConfig(
             batch_size=2,
             pos_neg_samples=5,
+            generation_sample_batch_size=2,
         ),
         log_key="discriminator_pretrain",
         log=log,
