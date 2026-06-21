@@ -51,6 +51,9 @@ attack:
     enforce_nonzero_target_position: false
     filter_no_target: true
     filter_short_sessions: true
+    fallback_fill_when_insufficient: true
+    fallback_fill_policy: non_target_generated
+    strict_generation_budget: false
     first_step_target_mask: true
     target_logit_bias_after_first_step: 2.0
     classifier_epochs: 20

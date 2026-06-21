@@ -39,6 +39,7 @@ from attack.poisoning_ssl.model import Discriminator, Generator, sample_sequence
 from attack.poisoning_ssl.pipeline import (
     compute_seqpoison_max_seq_len,
     generate_poisoning_ssl_sbr_target,
+    _load_fake_session_cache,
     _shared_fake_session_cache_root,
 )
 from attack.poisoning_ssl.postprocess import postprocess_fake_user_sequences
@@ -117,6 +118,9 @@ def test_poisoning_ssl_sbr_config_parses_defaults_and_identity(tmp_path: Path) -
     assert poisoning.original_max_seq_len_cap == 50
     assert poisoning.max_seq_len_override is None
     assert poisoning.enforce_nonzero_target_position is False
+    assert poisoning.fallback_fill_when_insufficient is True
+    assert poisoning.fallback_fill_policy == "non_target_generated"
+    assert poisoning.strict_generation_budget is False
     assert poisoning.first_step_target_mask is False
     assert poisoning.target_logit_bias_after_first_step == 0.0
     assert poisoning.candidate_multiplier == 1
@@ -145,6 +149,9 @@ def test_poisoning_ssl_sbr_config_parses_defaults_and_identity(tmp_path: Path) -
     assert "save_generated_candidates" not in identity
     assert "length_diagnostics" not in identity
     assert "reuse_existing_artifacts" not in identity
+    assert "fallback_fill_when_insufficient" not in identity
+    assert "fallback_fill_policy" not in identity
+    assert "strict_generation_budget" not in identity
     assert identity["candidate_multiplier"] == 1
     assert identity["max_generation_rounds"] == 10
     assert identity["generation_backend"] == "real"
@@ -168,6 +175,12 @@ def test_poisoning_ssl_sbr_config_rejects_invalid_values() -> None:
         PoisoningSSLSBRConfig(max_generation_rounds=0)
     with pytest.raises(ValueError, match="generation_sample_batch_size"):
         PoisoningSSLSBRConfig(generation_sample_batch_size=0)
+    with pytest.raises(ValueError, match="fallback_fill_policy"):
+        PoisoningSSLSBRConfig(fallback_fill_policy="bad")
+    with pytest.raises(TypeError, match="fallback_fill_when_insufficient"):
+        PoisoningSSLSBRConfig(fallback_fill_when_insufficient="true")
+    with pytest.raises(TypeError, match="strict_generation_budget"):
+        PoisoningSSLSBRConfig(strict_generation_budget="false")
     with pytest.raises(ValueError, match="max_seq_len_override"):
         PoisoningSSLSBRConfig(max_seq_len_policy="fixed")
     with pytest.raises(ValueError, match="generation_backend"):
@@ -294,6 +307,39 @@ def test_postprocess_auto_user_id_keeps_plain_sessions() -> None:
         n_fake=2,
     )
     assert result.final_sessions == [[9, 1], [1, 9]]
+
+
+def test_postprocess_collects_bounded_non_target_fallback() -> None:
+    result = postprocess_fake_user_sequences(
+        [
+            [100, 9, 1],
+            [101, 1, 2],
+            [102, 2, 1],
+            [103, 1, 99],
+            [104, 9],
+            [105, 9, 1, 9],
+            [106, 2, 3],
+        ],
+        target_item=9,
+        valid_item_ids={1, 2, 3, 9},
+        n_fake=3,
+        enforce_single_target=True,
+        filter_no_target=True,
+        filter_short_sessions=True,
+        remove_user_id=True,
+        collect_fallback_sessions=True,
+        fallback_limit=2,
+        max_seq_len=3,
+    )
+    assert result.valid_sessions == [[9, 1]]
+    assert result.final_sessions == [[9, 1]]
+    assert result.fallback_sessions == [[1, 2], [2, 1]]
+    assert all(9 not in session for session in result.fallback_sessions)
+    assert result.counts["fallback_candidate_count"] == 3
+    assert result.counts["fallback_sessions_collected"] == 2
+    assert result.counts["invalid_item_count"] == 1
+    assert result.counts["filtered_short_session_count"] == 1
+    assert result.counts["multi_target_count"] == 1
 
 
 def test_dataset_bridge_filters_too_long_sessions_and_records_metadata(tmp_path: Path) -> None:
@@ -623,6 +669,8 @@ def test_training_checkpoint_identity_excludes_fake_session_cache_and_decoding_f
             max_generation_rounds=50,
             candidate_save_policy="summary_only",
             max_saved_candidates=1,
+            fallback_fill_when_insufficient=False,
+            strict_generation_budget=True,
         )
     )
     assert base == changed
@@ -812,6 +860,82 @@ def test_pipeline_with_explicit_mock_generator_writes_contract(tmp_path: Path) -
     assert sanity["train_sub_length_p99"] == 4
 
 
+def test_seqpoison_fallback_fill_when_target_valid_insufficient(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    result = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=_toy_shared(fake_session_count=3),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=3,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 2], [102, 2, 1], [103, 1, 99]]]
+        ),
+    )
+    assert result.raw_fake_sessions == [[9, 1], [1, 2], [2, 1]]
+    assert len(result.raw_fake_sessions) == 3
+    assert result.metadata["n_target_valid_generated"] == 1
+    assert result.metadata["n_target_valid_generated"] < 3
+    assert result.metadata["n_fallback_available"] == 2
+    assert result.metadata["n_fallback_injected"] == 2
+    assert result.metadata["n_fallback_injected"] == (
+        3 - result.metadata["n_target_valid_generated"]
+    )
+    assert result.metadata["generation_budget_satisfied_by_fallback"] is True
+    assert result.metadata["fallback_shortfall_remaining"] == 0
+    assert result.metadata["target_coverage_rate"] == pytest.approx(1 / 3)
+    assert result.metadata["target_occurrence_stats"]["count_by_occurrence"]["0"] == 2
+
+
+def test_seqpoison_target_coverage_caps_when_target_valid_overgenerated(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    result = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=_toy_shared(fake_session_count=2),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9], [102, 2, 9]]]
+        ),
+    )
+    assert result.raw_fake_sessions == [[9, 1], [1, 9]]
+    assert result.metadata["n_target_valid_generated"] == 2
+    assert result.metadata["n_fake_requested"] == 2
+    assert result.metadata["target_coverage_rate"] == pytest.approx(1.0)
+    assert result.metadata["target_coverage_rate"] <= 1.0
+    assert result.metadata["n_target_valid_available"] == 3
+    assert result.metadata["n_target_valid_available"] > result.metadata["n_fake_requested"]
+    assert result.metadata["n_fallback_injected"] == 0
+
+
+def test_seqpoison_strict_generation_budget_preserves_old_failure(
+    tmp_path: Path,
+) -> None:
+    base = _config(tmp_path)
+    poisoning = replace(
+        base.attack.poisoning_ssl_sbr,
+        strict_generation_budget=True,
+    )
+    config = replace(base, attack=replace(base.attack, poisoning_ssl_sbr=poisoning))
+    with pytest.raises(
+        RuntimeError,
+        match=r"requested=3, final=1, candidates=.*target_valid=1, fallback_available=2",
+    ):
+        generate_poisoning_ssl_sbr_target(
+            config=config,
+            shared=_toy_shared(fake_session_count=3),
+            target_item=9,
+            run_type=POISONING_SSL_SBR_RUN_TYPE,
+            n_fake_requested=3,
+            candidate_generator=StaticCandidateGenerator(
+                rounds=[[[100, 9, 1], [101, 1, 2], [102, 2, 1]]]
+            ),
+        )
+
+
 def test_fake_session_cache_hit_loads_sessions_and_skips_generator(tmp_path: Path) -> None:
     config = _config(tmp_path)
     shared = _toy_shared(fake_session_count=2)
@@ -847,6 +971,121 @@ def test_fake_session_cache_hit_loads_sessions_and_skips_generator(tmp_path: Pat
     manifest = load_json(root / "seqpoison_sbr_manifest.json")
     assert manifest["cache_hit"] is True
     assert manifest["fake_session_cache_scope"] == "shared"
+
+
+def test_completed_artifact_still_reused_after_fallback_fields_added(
+    tmp_path: Path,
+) -> None:
+    base = _config(tmp_path)
+    first_poisoning = replace(
+        base.attack.poisoning_ssl_sbr,
+        fallback_fill_when_insufficient=False,
+        strict_generation_budget=True,
+    )
+    first_config = replace(
+        base,
+        attack=replace(base.attack, poisoning_ssl_sbr=first_poisoning),
+    )
+    first = generate_poisoning_ssl_sbr_target(
+        config=first_config,
+        shared=_toy_shared(fake_session_count=2),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9]]]
+        ),
+    )
+    shared_cache_root = _shared_fake_session_cache_root(
+        config=first_config,
+        target_item=9,
+        generation_identity_hash=first.metadata["generation_identity_hash"],
+    )
+    shared_metadata_path = shared_cache_root / "poisoning_ssl_sbr_metadata.json"
+    shared_metadata = load_json(shared_metadata_path)
+    for key in (
+        "fallback_fill_when_insufficient",
+        "fallback_fill_policy",
+        "strict_generation_budget",
+        "n_target_valid_generated",
+        "n_target_valid_available",
+        "n_fallback_available",
+        "n_fallback_injected",
+        "target_coverage_rate",
+        "generation_budget_satisfied_by_fallback",
+        "fallback_shortfall_remaining",
+    ):
+        shared_metadata.pop(key, None)
+    save_json(shared_metadata, shared_metadata_path)
+    second_poisoning = replace(
+        base.attack.poisoning_ssl_sbr,
+        fallback_fill_when_insufficient=True,
+        fallback_fill_policy="non_target_generated",
+        strict_generation_budget=False,
+    )
+    second_config = replace(
+        base,
+        attack=replace(base.attack, poisoning_ssl_sbr=second_poisoning),
+    )
+
+    class FailingGenerator:
+        def generate(self, request):
+            raise AssertionError("completed cache should be reused")
+
+    second = generate_poisoning_ssl_sbr_target(
+        config=second_config,
+        shared=_toy_shared(fake_session_count=2),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=FailingGenerator(),
+    )
+    assert second.raw_fake_sessions == first.raw_fake_sessions
+    assert second.metadata["fake_session_cache_hit"] is True
+    assert second.metadata["generation_identity_hash"] == first.metadata[
+        "generation_identity_hash"
+    ]
+    assert second.metadata["fallback_fill_when_insufficient"] is True
+    assert second.metadata["fallback_fill_policy"] == "non_target_generated"
+    assert second.metadata["strict_generation_budget"] is False
+    assert second.metadata["n_target_valid_generated"] == 2
+    assert second.metadata["n_target_valid_available"] == 2
+    assert second.metadata["n_fallback_injected"] == 0
+    assert "fallback_fill_when_insufficient" not in second.metadata["generation_identity"]
+    assert "fallback_fill_policy" not in second.metadata["generation_identity"]
+    assert "strict_generation_budget" not in second.metadata["generation_identity"]
+
+
+def test_incomplete_artifact_not_reused(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    first = generate_poisoning_ssl_sbr_target(
+        config=config,
+        shared=_toy_shared(fake_session_count=2),
+        target_item=9,
+        run_type=POISONING_SSL_SBR_RUN_TYPE,
+        n_fake_requested=2,
+        candidate_generator=StaticCandidateGenerator(
+            rounds=[[[100, 9, 1], [101, 1, 9]]]
+        ),
+    )
+    cache_root = tmp_path / "incomplete_cache"
+    cache_root.mkdir()
+    save_fake_sessions([[9, 1]], cache_root / "raw_fake_sessions.pkl")
+    save_json(
+        {"generation_identity": first.metadata["generation_identity"]},
+        cache_root / "poisoning_ssl_sbr_metadata.json",
+    )
+    probe = _load_fake_session_cache(
+        cache_root=cache_root,
+        expected_generation_identity=first.metadata["generation_identity"],
+        n_fake_requested=2,
+        max_seq_len=int(first.metadata["max_seq_len_value"]),
+        reuse_existing_artifacts=True,
+        scope="local",
+        strict_identity_collision=False,
+    )
+    assert probe["hit"] is False
+    assert probe["reason"] == "n_final_injected mismatch"
 
 
 def test_shared_cache_path_is_independent_of_experiment_name(tmp_path: Path) -> None:

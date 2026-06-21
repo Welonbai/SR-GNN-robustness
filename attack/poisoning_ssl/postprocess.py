@@ -9,6 +9,7 @@ from typing import Sequence
 class PostprocessResult:
     final_sessions: list[list[int]]
     valid_sessions: list[list[int]]
+    fallback_sessions: list[list[int]]
     counts: dict[str, int | float]
 
 
@@ -22,9 +23,19 @@ def postprocess_fake_user_sequences(
     filter_no_target: bool = True,
     filter_short_sessions: bool = True,
     remove_user_id: bool | None = None,
+    collect_fallback_sessions: bool = False,
+    fallback_requires_no_target: bool = True,
+    fallback_limit: int | None = None,
+    max_seq_len: int | None = None,
 ) -> PostprocessResult:
     target = int(target_item)
     valid_items = {int(item) for item in valid_item_ids}
+    fallback_cap = (
+        None
+        if fallback_limit is None
+        else max(0, int(fallback_limit))
+    )
+    fallback_max_seq_len = None if max_seq_len is None else int(max_seq_len)
     counts = {
         "n_generated_candidates": int(len(candidates)),
         "invalid_item_count": 0,
@@ -32,8 +43,11 @@ def postprocess_fake_user_sequences(
         "no_target_count": 0,
         "multi_target_count": 0,
         "target_containing_candidate_count_before_single_target_filter": 0,
+        "fallback_candidate_count": 0,
+        "fallback_sessions_collected": 0,
     }
     valid_sessions: list[list[int]] = []
+    fallback_sessions: list[list[int]] = []
     for candidate in candidates:
         if not isinstance(candidate, Sequence) or isinstance(candidate, (str, bytes)):
             counts["invalid_item_count"] += 1
@@ -74,17 +88,49 @@ def postprocess_fake_user_sequences(
         target_count = sum(1 for item in session if item == target)
         if filter_no_target and target_count == 0:
             counts["no_target_count"] += 1
+            fallback_eligible = (
+                collect_fallback_sessions
+                and (not fallback_requires_no_target or target_count == 0)
+                and (
+                    fallback_max_seq_len is None
+                    or len(session) <= fallback_max_seq_len
+                )
+            )
+            if fallback_eligible:
+                counts["fallback_candidate_count"] += 1
+            if (
+                fallback_eligible
+                and (fallback_cap is None or len(fallback_sessions) < fallback_cap)
+            ):
+                fallback_sessions.append(list(session))
             continue
         if target_count > 0:
             counts["target_containing_candidate_count_before_single_target_filter"] += 1
         if enforce_single_target and target_count > 1:
             counts["multi_target_count"] += 1
             continue
+        fallback_eligible = (
+            collect_fallback_sessions
+            and not fallback_requires_no_target
+            and target_count <= 1
+            and (
+                fallback_max_seq_len is None
+                or len(session) <= fallback_max_seq_len
+            )
+        )
+        if fallback_eligible:
+            counts["fallback_candidate_count"] += 1
+        if (
+            fallback_eligible
+            and (fallback_cap is None or len(fallback_sessions) < fallback_cap)
+        ):
+            fallback_sessions.append(list(session))
         valid_sessions.append(session)
 
     final_sessions = [list(session) for session in valid_sessions[: int(n_fake)]]
     counts["n_after_filtering"] = int(len(valid_sessions))
     counts["n_final_injected"] = int(len(final_sessions))
+    counts["fallback_sessions_collected"] = int(len(fallback_sessions))
     counts["target_containing_candidate_ratio_before_single_target_filter"] = (
         0.0
         if int(len(candidates)) <= 0
@@ -96,6 +142,7 @@ def postprocess_fake_user_sequences(
     return PostprocessResult(
         final_sessions=final_sessions,
         valid_sessions=valid_sessions,
+        fallback_sessions=fallback_sessions,
         counts=counts,
     )
 

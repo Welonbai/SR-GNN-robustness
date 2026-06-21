@@ -218,6 +218,13 @@ def generate_poisoning_ssl_sbr_target(
                 total_duration_sec=float(time.perf_counter() - total_start_perf),
             )
         )
+        _ensure_fallback_metadata_defaults(
+            metadata=metadata,
+            poisoning_config=poisoning_config,
+            final_sessions=cached_sessions,
+            target_item=target,
+            n_fake_requested=n_fake,
+        )
         _progress(
             target,
             f"{cache_scope} fake-session cache hit: {cache_path} "
@@ -290,6 +297,7 @@ def generate_poisoning_ssl_sbr_target(
     saved_candidates: list[list[int]] = []
     candidate_lengths: list[int] = []
     valid_sessions: list[list[int]] = []
+    fallback_sessions: list[list[int]] = []
     cumulative_counts: dict[str, int | float] = {
         "n_generated_candidates": 0,
         "invalid_item_count": 0,
@@ -297,6 +305,8 @@ def generate_poisoning_ssl_sbr_target(
         "no_target_count": 0,
         "multi_target_count": 0,
         "target_containing_candidate_count_before_single_target_filter": 0,
+        "fallback_candidate_count": 0,
+        "fallback_sessions_collected": 0,
     }
     generation_round_metadata: list[dict[str, object]] = []
     raw_candidate_count_by_round: list[int] = []
@@ -348,13 +358,29 @@ def generate_poisoning_ssl_sbr_target(
             filter_no_target=bool(poisoning_config.filter_no_target),
             filter_short_sessions=bool(poisoning_config.filter_short_sessions),
             remove_user_id=True,
+            collect_fallback_sessions=bool(
+                poisoning_config.fallback_fill_when_insufficient
+            ),
+            fallback_requires_no_target=(
+                str(poisoning_config.fallback_fill_policy) == "non_target_generated"
+            ),
+            fallback_limit=max(0, n_fake - len(fallback_sessions)),
+            max_seq_len=max_seq_len,
         )
         postprocess_duration = time.perf_counter() - postprocess_start
         _merge_postprocess_counts(cumulative_counts, round_postprocess.counts)
         valid_sessions.extend([list(session) for session in round_postprocess.valid_sessions])
+        if round_postprocess.fallback_sessions:
+            remaining_fallback_slots = max(0, n_fake - len(fallback_sessions))
+            fallback_sessions.extend(
+                [list(session) for session in round_postprocess.fallback_sessions][
+                    :remaining_fallback_slots
+                ]
+            )
         final_sessions = [list(session) for session in valid_sessions[:n_fake]]
         cumulative_counts["n_after_filtering"] = int(len(valid_sessions))
         cumulative_counts["n_final_injected"] = int(len(final_sessions))
+        cumulative_counts["fallback_sessions_collected"] = int(len(fallback_sessions))
         total_generated_so_far = int(cumulative_counts["n_generated_candidates"])
         target_containing = int(
             cumulative_counts[
@@ -423,6 +449,7 @@ def generate_poisoning_ssl_sbr_target(
                 "filter_count_by_round": list(filter_count_by_round),
                 "n_generated_candidates": int(cumulative_counts["n_generated_candidates"]),
                 "n_after_filtering": int(cumulative_counts.get("n_after_filtering", 0)),
+                "fallback_sessions_collected": int(len(fallback_sessions)),
                 "target_containing_candidate_count_before_single_target_filter": int(
                     cumulative_counts[
                         "target_containing_candidate_count_before_single_target_filter"
@@ -448,7 +475,35 @@ def generate_poisoning_ssl_sbr_target(
     )
     if not raw_candidate_count_by_round:
         raise RuntimeError("SeqPoison-SBR generation did not execute any rounds.")
-    final_sessions = [list(session) for session in valid_sessions[:n_fake]]
+    target_valid_sessions = [list(session) for session in valid_sessions[:n_fake]]
+    target_valid_shortfall = max(0, n_fake - len(target_valid_sessions))
+    fallback_fill_enabled = bool(poisoning_config.fallback_fill_when_insufficient)
+    strict_generation_budget = bool(poisoning_config.strict_generation_budget)
+    fallback_sessions_for_fill: list[list[int]] = []
+    if (
+        target_valid_shortfall > 0
+        and fallback_fill_enabled
+        and not strict_generation_budget
+    ):
+        fallback_sessions_for_fill = [
+            list(session) for session in fallback_sessions[:target_valid_shortfall]
+        ]
+        if fallback_sessions_for_fill:
+            _progress(
+                target,
+                "Insufficient target-valid fake sessions; filling shortfall with "
+                "fallback generated sessions "
+                f"requested={n_fake} "
+                f"target_valid={len(target_valid_sessions)} "
+                f"fallback_available={len(fallback_sessions)} "
+                f"fallback_used={len(fallback_sessions_for_fill)} "
+                f"final_injected="
+                f"{len(target_valid_sessions) + len(fallback_sessions_for_fill)}",
+            )
+    final_sessions = target_valid_sessions + fallback_sessions_for_fill
+    cumulative_counts["n_after_filtering"] = int(len(valid_sessions))
+    cumulative_counts["n_final_injected"] = int(len(final_sessions))
+    cumulative_counts["fallback_sessions_collected"] = int(len(fallback_sessions))
 
     metadata = _metadata(
         config=config,
@@ -476,6 +531,10 @@ def generate_poisoning_ssl_sbr_target(
         saved_candidate_count=len(saved_candidates),
         expected_training_checkpoint_identity=expected_training_identity,
         expected_training_checkpoint_identity_hash=expected_training_identity_hash,
+        n_target_valid_generated=len(target_valid_sessions),
+        n_target_valid_available=len(valid_sessions),
+        n_fallback_available=len(fallback_sessions),
+        n_fallback_injected=len(fallback_sessions_for_fill),
     )
     metadata["fake_session_cache_enabled"] = bool(poisoning_config.reuse_existing_artifacts)
     metadata["fake_session_cache_hit"] = False
@@ -524,12 +583,16 @@ def generate_poisoning_ssl_sbr_target(
             "Failed: insufficient valid fake sessions "
             f"generated={int(cumulative_counts['n_generated_candidates'])} "
             f"valid={int(cumulative_counts.get('n_after_filtering', 0))} "
+            f"target_valid={len(target_valid_sessions)} "
+            f"fallback_available={len(fallback_sessions)} "
             f"injected={len(final_sessions)} metadata={metadata_path}",
         )
         raise RuntimeError(
             "SeqPoison-SBR could not generate enough valid fake sessions: "
             f"requested={n_fake}, final={len(final_sessions)}, "
-            f"candidates={int(cumulative_counts['n_generated_candidates'])}. "
+            f"candidates={int(cumulative_counts['n_generated_candidates'])}, "
+            f"target_valid={len(target_valid_sessions)}, "
+            f"fallback_available={len(fallback_sessions)}. "
             "See poisoning_ssl_sbr_metadata.json."
         )
     if max_seq_len_violation_count > 0:
@@ -609,6 +672,10 @@ def _metadata(
     saved_candidate_count: int,
     expected_training_checkpoint_identity: dict[str, object],
     expected_training_checkpoint_identity_hash: str,
+    n_target_valid_generated: int,
+    n_target_valid_available: int,
+    n_fallback_available: int,
+    n_fallback_injected: int,
 ) -> dict[str, object]:
     target_stats = target_diagnostics(final_sessions, target_item=int(target_item))
     duplicate_stats = duplicate_diagnostics(final_sessions)
@@ -621,6 +688,11 @@ def _metadata(
     n_generated = int(postprocess_counts.get("n_generated_candidates", 0))
     n_after_filtering = int(postprocess_counts.get("n_after_filtering", 0))
     n_final = int(len(final_sessions))
+    target_valid_generated = int(n_target_valid_generated)
+    target_valid_available = int(n_target_valid_available)
+    fallback_available = int(n_fallback_available)
+    fallback_injected = int(n_fallback_injected)
+    fallback_shortfall_remaining = max(0, int(n_fake_requested) - n_final)
     poisoning_config = config.attack.poisoning_ssl_sbr
     latest_generation_metadata = (
         generation_round_metadata[-1] if generation_round_metadata else {}
@@ -676,6 +748,36 @@ def _metadata(
         "n_generated_candidates": n_generated,
         "n_after_filtering": n_after_filtering,
         "n_final_injected": n_final,
+        "fallback_fill_when_insufficient": (
+            True
+            if poisoning_config is None
+            else bool(poisoning_config.fallback_fill_when_insufficient)
+        ),
+        "fallback_fill_policy": (
+            "non_target_generated"
+            if poisoning_config is None
+            else str(poisoning_config.fallback_fill_policy)
+        ),
+        "strict_generation_budget": (
+            False
+            if poisoning_config is None
+            else bool(poisoning_config.strict_generation_budget)
+        ),
+        "n_target_valid_generated": target_valid_generated,
+        "n_target_valid_available": target_valid_available,
+        "n_fallback_available": fallback_available,
+        "n_fallback_injected": fallback_injected,
+        "target_coverage_rate": (
+            0.0
+            if int(n_fake_requested) <= 0
+            else float(target_valid_generated / int(n_fake_requested))
+        ),
+        "generation_budget_satisfied_by_fallback": bool(
+            target_valid_generated < int(n_fake_requested)
+            and fallback_injected > 0
+            and n_final == int(n_fake_requested)
+        ),
+        "fallback_shortfall_remaining": int(fallback_shortfall_remaining),
         "acceptance_rate": 0.0 if n_generated <= 0 else float(n_after_filtering / n_generated),
         "total_start_time": total_start_time,
         "total_end_time": total_end_time,
@@ -701,6 +803,12 @@ def _metadata(
         ),
         "no_target_count": int(postprocess_counts.get("no_target_count", 0)),
         "multi_target_count": int(postprocess_counts.get("multi_target_count", 0)),
+        "fallback_candidate_count": int(
+            postprocess_counts.get("fallback_candidate_count", 0)
+        ),
+        "fallback_sessions_collected": int(
+            postprocess_counts.get("fallback_sessions_collected", 0)
+        ),
         "target_containing_candidate_count_before_single_target_filter": int(
             postprocess_counts.get(
                 "target_containing_candidate_count_before_single_target_filter",
@@ -1038,6 +1146,38 @@ def _cache_metadata_updates(
     }
 
 
+def _ensure_fallback_metadata_defaults(
+    *,
+    metadata: dict[str, object],
+    poisoning_config: PoisoningSSLSBRConfig,
+    final_sessions: list[list[int]],
+    target_item: int,
+    n_fake_requested: int,
+) -> None:
+    target = int(target_item)
+    n_fake = int(n_fake_requested)
+    target_valid_count = sum(1 for session in final_sessions if target in session)
+    metadata.setdefault(
+        "fallback_fill_when_insufficient",
+        bool(poisoning_config.fallback_fill_when_insufficient),
+    )
+    metadata.setdefault("fallback_fill_policy", str(poisoning_config.fallback_fill_policy))
+    metadata.setdefault(
+        "strict_generation_budget",
+        bool(poisoning_config.strict_generation_budget),
+    )
+    metadata.setdefault("n_target_valid_generated", int(target_valid_count))
+    metadata.setdefault("n_target_valid_available", int(target_valid_count))
+    metadata.setdefault("n_fallback_available", 0)
+    metadata.setdefault("n_fallback_injected", 0)
+    metadata.setdefault(
+        "target_coverage_rate",
+        0.0 if n_fake <= 0 else float(int(target_valid_count) / n_fake),
+    )
+    metadata.setdefault("generation_budget_satisfied_by_fallback", False)
+    metadata.setdefault("fallback_shortfall_remaining", max(0, n_fake - len(final_sessions)))
+
+
 def _load_fake_session_cache(
     *,
     cache_root: Path,
@@ -1198,6 +1338,8 @@ def _merge_postprocess_counts(
         "no_target_count",
         "multi_target_count",
         "target_containing_candidate_count_before_single_target_filter",
+        "fallback_candidate_count",
+        "fallback_sessions_collected",
     )
     for key in additive_keys:
         cumulative[key] = int(cumulative.get(key, 0)) + int(current.get(key, 0))
@@ -1258,8 +1400,28 @@ def _write_artifacts(
             "n_generated_candidates": metadata.get("n_generated_candidates"),
             "n_after_filtering": metadata.get("n_after_filtering"),
             "n_final_injected": metadata.get("n_final_injected"),
+            "fallback_fill_when_insufficient": metadata.get(
+                "fallback_fill_when_insufficient"
+            ),
+            "fallback_fill_policy": metadata.get("fallback_fill_policy"),
+            "strict_generation_budget": metadata.get("strict_generation_budget"),
+            "n_target_valid_generated": metadata.get("n_target_valid_generated"),
+            "n_target_valid_available": metadata.get("n_target_valid_available"),
+            "n_fallback_available": metadata.get("n_fallback_available"),
+            "n_fallback_injected": metadata.get("n_fallback_injected"),
+            "target_coverage_rate": metadata.get("target_coverage_rate"),
+            "generation_budget_satisfied_by_fallback": metadata.get(
+                "generation_budget_satisfied_by_fallback"
+            ),
+            "fallback_shortfall_remaining": metadata.get(
+                "fallback_shortfall_remaining"
+            ),
             "no_target_count": metadata.get("no_target_count"),
             "multi_target_count": metadata.get("multi_target_count"),
+            "fallback_candidate_count": metadata.get("fallback_candidate_count"),
+            "fallback_sessions_collected": metadata.get(
+                "fallback_sessions_collected"
+            ),
             "invalid_item_count": metadata.get("invalid_item_count"),
             "filtered_short_session_count": metadata.get("filtered_short_session_count"),
             "target_containing_candidate_count_before_single_target_filter": metadata.get(
@@ -1396,6 +1558,14 @@ def _fake_session_sanity_summary(metadata: dict[str, object]) -> dict[str, objec
         "n_final_injected": metadata.get("n_final_injected"),
         "n_generated_candidates": metadata.get("n_generated_candidates"),
         "acceptance_rate": metadata.get("acceptance_rate"),
+        "n_target_valid_generated": metadata.get("n_target_valid_generated"),
+        "n_target_valid_available": metadata.get("n_target_valid_available"),
+        "n_fallback_available": metadata.get("n_fallback_available"),
+        "n_fallback_injected": metadata.get("n_fallback_injected"),
+        "generation_budget_satisfied_by_fallback": metadata.get(
+            "generation_budget_satisfied_by_fallback"
+        ),
+        "fallback_shortfall_remaining": metadata.get("fallback_shortfall_remaining"),
         "target_position_distribution": metadata.get("target_position_distribution"),
         "target_pos0_ratio": metadata.get("target_pos0_ratio"),
         "target_label_pair_count_added": metadata.get("target_label_pair_count_added"),

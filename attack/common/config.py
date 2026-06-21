@@ -198,6 +198,10 @@ _ALLOWED_POISONING_SSL_SBR_CANDIDATE_SAVE_POLICIES = {
     POISONING_SSL_SBR_CANDIDATE_SAVE_SAMPLE,
     POISONING_SSL_SBR_CANDIDATE_SAVE_ALL,
 }
+POISONING_SSL_SBR_FALLBACK_FILL_POLICY_NON_TARGET_GENERATED = "non_target_generated"
+_ALLOWED_POISONING_SSL_SBR_FALLBACK_FILL_POLICIES = {
+    POISONING_SSL_SBR_FALLBACK_FILL_POLICY_NON_TARGET_GENERATED,
+}
 _REQUIRED_SRGNN_TRAIN_KEYS = (
     "epochs",
     "batch_size",
@@ -2123,6 +2127,9 @@ class PoisoningSSLSBRConfig:
     enforce_nonzero_target_position: bool = False
     filter_no_target: bool = True
     filter_short_sessions: bool = True
+    fallback_fill_when_insufficient: bool = True
+    fallback_fill_policy: str = POISONING_SSL_SBR_FALLBACK_FILL_POLICY_NON_TARGET_GENERATED
+    strict_generation_budget: bool = False
     first_step_target_mask: bool = False
     target_logit_bias_after_first_step: float = 0.0
     candidate_multiplier: int = 1
@@ -2195,6 +2202,18 @@ class PoisoningSSLSBRConfig:
         filter_short_sessions = _as_bool(
             self.filter_short_sessions,
             "attack.poisoning_ssl_sbr.filter_short_sessions",
+        )
+        fallback_fill_when_insufficient = _as_bool(
+            self.fallback_fill_when_insufficient,
+            "attack.poisoning_ssl_sbr.fallback_fill_when_insufficient",
+        )
+        fallback_fill_policy = _as_str(
+            self.fallback_fill_policy,
+            "attack.poisoning_ssl_sbr.fallback_fill_policy",
+        ).strip().lower()
+        strict_generation_budget = _as_bool(
+            self.strict_generation_budget,
+            "attack.poisoning_ssl_sbr.strict_generation_budget",
         )
         first_step_target_mask = _as_bool(
             self.first_step_target_mask,
@@ -2396,6 +2415,12 @@ class PoisoningSSLSBRConfig:
             raise ValueError(
                 "attack.poisoning_ssl_sbr.generation_sample_batch_size must be positive."
             )
+        if fallback_fill_policy not in _ALLOWED_POISONING_SSL_SBR_FALLBACK_FILL_POLICIES:
+            allowed = ", ".join(sorted(_ALLOWED_POISONING_SSL_SBR_FALLBACK_FILL_POLICIES))
+            raise ValueError(
+                "attack.poisoning_ssl_sbr.fallback_fill_policy must be one of: "
+                f"{allowed}."
+            )
         if candidate_save_policy not in _ALLOWED_POISONING_SSL_SBR_CANDIDATE_SAVE_POLICIES:
             allowed = ", ".join(sorted(_ALLOWED_POISONING_SSL_SBR_CANDIDATE_SAVE_POLICIES))
             raise ValueError(
@@ -2434,6 +2459,13 @@ class PoisoningSSLSBRConfig:
         )
         object.__setattr__(self, "filter_no_target", filter_no_target)
         object.__setattr__(self, "filter_short_sessions", filter_short_sessions)
+        object.__setattr__(
+            self,
+            "fallback_fill_when_insufficient",
+            fallback_fill_when_insufficient,
+        )
+        object.__setattr__(self, "fallback_fill_policy", fallback_fill_policy)
+        object.__setattr__(self, "strict_generation_budget", strict_generation_budget)
         object.__setattr__(self, "first_step_target_mask", first_step_target_mask)
         object.__setattr__(
             self,
