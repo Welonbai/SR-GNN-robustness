@@ -46,6 +46,7 @@ from attack.poisoning_ssl.postprocess import postprocess_fake_user_sequences
 from attack.poisoning_ssl.trainer import (
     EffectiveSeqPoisonTrainingConfig,
     SeqPoisonTrainer,
+    _ClassifierRewardDataset,
     _checkpoint_identity,
 )
 
@@ -471,6 +472,107 @@ def test_sample_sequences_in_chunks_single_chunk_for_small_request() -> None:
     )
     assert calls == [3]
     assert samples.shape == (3, 2)
+
+
+def test_classifier_reward_dataset_preserves_empty_generated_rows() -> None:
+    fake_samples = torch.tensor(
+        [
+            [1, 2, 0],
+            [0, 0, 0],
+            [2, 3, 0],
+        ],
+        dtype=torch.long,
+    )
+    dataset = _ClassifierRewardDataset(
+        real_sequences=[[1, 2, 3], [2, 3, 1]],
+        fake_samples=fake_samples,
+        max_seq_len=3,
+        mask_id=4,
+        seed=123,
+    )
+    assert len(dataset) == 3
+    loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=False)
+    batches = list(loader)
+    assert sum(int(data.size(0)) for data, _label in batches) == 3
+    empty_data, empty_label = dataset[1]
+    assert empty_data.tolist() == [0, 0, 0, 0, 0, 0]
+    assert int(empty_label.item()) == 0
+
+
+def test_generator_pg_classifier_reward_keeps_all_zero_sample(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import attack.poisoning_ssl.trainer as trainer_module
+
+    generated = torch.tensor(
+        [
+            [1, 2, 0],
+            [0, 0, 0],
+            [2, 3, 0],
+            [3, 1, 0],
+        ],
+        dtype=torch.long,
+    )
+
+    def fake_sample_sequences_in_chunks(generator, total_count, *, batch_size, device, **kwargs):
+        assert int(total_count) == 4
+        return generated.to(device)
+
+    monkeypatch.setattr(
+        trainer_module,
+        "sample_sequences_in_chunks",
+        fake_sample_sequences_in_chunks,
+    )
+
+    captured = {"classifier_examples": 0, "discriminator_rewards": 0}
+
+    class FakeClassifier:
+        def __call__(self, data):
+            captured["classifier_examples"] += int(data.size(0))
+            output = torch.zeros((int(data.size(0)), 2), device=data.device)
+            output[:, 1] = 0.25
+            return output
+
+    class FakeDiscriminator:
+        def batch_classify(self, target):
+            captured["discriminator_rewards"] = int(target.size(0))
+            return torch.full((int(target.size(0)),), 0.5, device=target.device)
+
+    generator = Generator(embedding_dim=4, hidden_dim=4, vocab_size=6, max_seq_len=3)
+    optimizer = torch.optim.SGD(generator.parameters(), lr=0.0)
+    result = SeqPoisonTrainer()._train_generator_pg(
+        generator=generator,
+        optimizer=optimizer,
+        classifier=FakeClassifier(),
+        discriminator=FakeDiscriminator(),
+        train_samples=torch.ones((4, 3), dtype=torch.long),
+        dataset_bundle=SimpleNamespace(
+            train_sequences=[[1, 2, 3], [2, 3, 1]],
+            max_seq_len=3,
+            mask_id=4,
+            seqpoison_target_item=3,
+        ),
+        effective=EffectiveSeqPoisonTrainingConfig(batch_size=2),
+        sample_batch_size=4,
+        seed=123,
+    )
+    assert captured["classifier_examples"] == 4
+    assert captured["discriminator_rewards"] == 4
+    assert set(result) == {
+        "loss",
+        "loss_target",
+        "loss_classifier",
+        "loss_discriminator",
+    }
+
+
+def test_generator_batch_pg_loss_reward_batch_mismatch_diagnostic() -> None:
+    generator = Generator(embedding_dim=4, hidden_dim=4, vocab_size=6, max_seq_len=3)
+    inp = torch.zeros((4, 3), dtype=torch.long)
+    target = torch.zeros((4, 3), dtype=torch.long)
+    reward = torch.ones(3)
+    with pytest.raises(RuntimeError, match="reward batch mismatch"):
+        generator.batch_pg_loss(inp, target, reward)
 
 
 def test_real_generator_first_step_mask_uses_remapped_target_id(tmp_path: Path) -> None:

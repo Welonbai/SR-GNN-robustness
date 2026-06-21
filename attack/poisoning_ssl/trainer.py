@@ -178,7 +178,10 @@ class _ClassifierRewardDataset(Dataset):
     ) -> None:
         rng = random.Random(int(seed))
         real = _unpad_rows(fake_or_real=real_sequences)
-        fake = _unpad_rows(fake_or_real=fake_samples.detach().cpu().tolist())
+        fake = _unpad_rows(
+            fake_or_real=fake_samples.detach().cpu().tolist(),
+            keep_empty=True,
+        )
         pairs: list[tuple[list[int], list[int], int]] = []
         for fake_data in fake:
             if len(fake_data) < 2:
@@ -904,10 +907,23 @@ class SeqPoisonTrainer:
                 data = data.to(train_samples.device)
                 reward_batches.append(classifier(data)[:, 1])
         classifier_reward = (
-            torch.cat(reward_batches, dim=0)[: target.size(0)].detach()
+            torch.cat(reward_batches, dim=0).detach()
             if reward_batches
             else torch.zeros(target.size(0), device=train_samples.device)
         )
+        expected = int(target.size(0))
+        if int(classifier_reward.numel()) != expected:
+            raise RuntimeError(
+                "SeqPoison-SBR classifier reward batch mismatch: "
+                f"samples={int(samples.size(0))} input_batch={int(inp.size(0))} "
+                f"target_batch={expected} "
+                f"classifier_reward={int(classifier_reward.numel())}"
+            )
+        if int(rewards.numel()) != expected:
+            raise RuntimeError(
+                "SeqPoison-SBR discriminator reward batch mismatch: "
+                f"target_batch={expected} discriminator_reward={int(rewards.numel())}"
+            )
         loss_a = generator.batch_target_loss(
             inp,
             target,
@@ -951,7 +967,11 @@ def _pad(sequence: list[int], max_seq_len: int) -> list[int]:
     return (list(sequence) + [0] * max(0, int(max_seq_len) - len(sequence)))[: int(max_seq_len)]
 
 
-def _unpad_rows(fake_or_real: list[list[int]]) -> list[list[int]]:
+def _unpad_rows(
+    fake_or_real: list[list[int]],
+    *,
+    keep_empty: bool = False,
+) -> list[list[int]]:
     result: list[list[int]] = []
     for row in fake_or_real:
         sequence: list[int] = []
@@ -962,7 +982,7 @@ def _unpad_rows(fake_or_real: list[list[int]]) -> list[list[int]]:
                 continue
             if index == len(row) - 1 or int(row[index + 1]) == 0:
                 break
-        if sequence:
+        if sequence or keep_empty:
             result.append(sequence)
     return result or [[1]]
 

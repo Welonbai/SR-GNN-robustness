@@ -130,6 +130,14 @@ class Generator(nn.Module):
         reward: torch.Tensor,
     ) -> torch.Tensor:
         batch_size, seq_len = inp.size()
+        if reward.dim() != 1:
+            reward = reward.view(-1)
+        if int(reward.numel()) != int(batch_size):
+            raise RuntimeError(
+                "Generator.batch_pg_loss reward batch mismatch: "
+                f"input_batch={int(inp.size(0))} target_batch={int(target.size(0))} "
+                f"reward_batch={int(reward.numel())}"
+            )
         inp_t = inp.permute(1, 0)
         target_t = target.permute(1, 0)
         hidden = self.init_hidden(batch_size, inp.device)
