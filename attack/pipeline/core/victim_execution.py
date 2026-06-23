@@ -308,9 +308,13 @@ def execute_single_victim(
         )
         runner = get_victim_runner(victim_name)(config)
         raw_predictions_path = run_dir / "mdhg_topk_raw.json"
-        epoch_pipeline_metrics_path = run_dir / "mdhg_epoch_pipeline_metrics.jsonl"
+        diagnostics_dir = run_dir / "diagnostics"
+        epoch_diagnostic_json_path = diagnostics_dir / "mdhg_epoch_diagnostic.json"
+        epoch_diagnostic_csv_path = diagnostics_dir / "mdhg_epoch_diagnostic.csv"
         victim_train_config = _require_victim_train_config(config, victim_name)
         pipeline_injected = {
+            "dataset_name": config.data.dataset_name,
+            "run_type": run_type,
             "data_dir": export_result.data_dir,
             "n_node": int(export_result.n_node),
             "expected_test_count": int(export_result.test_example_count),
@@ -325,7 +329,8 @@ def execute_single_victim(
             "targeted_metrics": list(config.evaluation.targeted_metrics),
             "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
             "mdhg_test_data_path": export_result.files["test"].resolve(),
-            "epoch_pipeline_metrics_output_path": epoch_pipeline_metrics_path.resolve(),
+            "epoch_diagnostic_json_path": epoch_diagnostic_json_path.resolve(),
+            "epoch_diagnostic_csv_path": epoch_diagnostic_csv_path.resolve(),
         }
         _write_victim_resolved_config(
             config,
@@ -349,6 +354,8 @@ def execute_single_victim(
         if per_epoch_prediction_dir is not None:
             summarize_mdhg_epoch_diagnostics(
                 run_dir,
+                dataset_name=config.data.dataset_name,
+                run_type=run_type,
                 target_item=int(target_item),
                 evaluation_topk=eval_topk,
                 targeted_metrics=config.evaluation.targeted_metrics,
@@ -358,11 +365,16 @@ def execute_single_victim(
                 n_node=export_result.n_node,
                 requested_topk=max_topk,
                 per_epoch_prediction_dir=Path(per_epoch_prediction_dir),
-                output_path=epoch_pipeline_metrics_path,
+                epoch_metrics_path=Path(run_info["epoch_metrics_output_path"])
+                if run_info.get("epoch_metrics_output_path") is not None
+                else None,
+                json_output_path=epoch_diagnostic_json_path,
+                csv_output_path=epoch_diagnostic_csv_path,
+                seed=int(victim_stage_seed),
+                gpu_id=str(run_info.get("gpu_id", "")),
             )
-            run_info["epoch_pipeline_metrics_output_path"] = str(
-                epoch_pipeline_metrics_path
-            )
+            run_info["epoch_diagnostic_json_path"] = str(epoch_diagnostic_json_path)
+            run_info["epoch_diagnostic_csv_path"] = str(epoch_diagnostic_csv_path)
         _write_victim_resolved_config(
             config,
             victim_name,

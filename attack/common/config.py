@@ -4352,9 +4352,14 @@ def _validate_mdhg_runtime(runtime: dict[str, Any], context: str) -> None:
     diagnostics_value = runtime.get("diagnostics")
     if diagnostics_value is not None:
         diagnostics = _as_mapping(diagnostics_value, f"{context}.diagnostics")
-        for key in ("epoch_metrics", "per_epoch_predictions"):
-            if key in diagnostics:
-                _as_bool(diagnostics[key], f"{context}.diagnostics.{key}")
+        unknown = set(diagnostics) - {"epoch_metrics", "per_epoch_predictions"}
+        if unknown:
+            raise ValueError(
+                f"Unknown {context}.diagnostics keys: "
+                + ", ".join(sorted(map(str, unknown)))
+            )
+        for key in diagnostics:
+            _as_bool(diagnostics[key], f"{context}.diagnostics.{key}")
 
 
 def _validate_freqrec_runtime(runtime: dict[str, Any], context: str) -> None:

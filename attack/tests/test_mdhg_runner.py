@@ -175,8 +175,8 @@ def test_runner_includes_diagnostic_args_and_run_info(monkeypatch, tmp_path) -> 
         topk=2,
     )
 
-    metrics_path = run_dir / "mdhg_epoch_metrics.jsonl"
-    prediction_dir = run_dir / "mdhg_per_epoch_predictions"
+    metrics_path = run_dir / "diagnostics" / "mdhg_epoch_metrics.jsonl"
+    prediction_dir = run_dir / "diagnostics" / "per_epoch_predictions"
     assert captured["cmd"][captured["cmd"].index("--epoch_metrics_output_path") + 1] == str(
         metrics_path.resolve()
     )

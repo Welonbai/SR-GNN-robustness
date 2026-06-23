@@ -214,6 +214,8 @@ def test_indexed_ranking_writer_preserves_order_and_epoch_metadata(tmp_path) -> 
         "topk": 2,
         "requested_topk": 2,
         "n_node": 3,
+        "test_count": 3,
+        "prediction_count": 3,
         "rankings": [[1, 2], [2, 1], [3, 2]],
     }
 

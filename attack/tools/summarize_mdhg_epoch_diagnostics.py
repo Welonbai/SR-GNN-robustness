@@ -24,8 +24,12 @@ def main() -> None:
     )
     args = parser.parse_args()
     rows = summarize_mdhg_epoch_diagnostics_from_run_dir(args.victim_run_dir)
-    output_path = Path(args.victim_run_dir) / "mdhg_epoch_pipeline_metrics.jsonl"
-    print(f"Wrote {len(rows)} epoch rows to {output_path}")
+    output_dir = Path(args.victim_run_dir) / "diagnostics"
+    print(
+        f"Wrote {len(rows)} epoch rows to "
+        f"{output_dir / 'mdhg_epoch_diagnostic.json'} and "
+        f"{output_dir / 'mdhg_epoch_diagnostic.csv'}"
+    )
 
 
 if __name__ == "__main__":

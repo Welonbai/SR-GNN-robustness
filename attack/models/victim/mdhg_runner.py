@@ -79,8 +79,9 @@ class MDHGRunner(VictimRunnerBase):
         gpu_id = str(self.device_config["gpu_id"]).strip()
         run_dir.mkdir(parents=True, exist_ok=True)
         log_path = run_dir / "mdhg_stdout.log"
-        epoch_metrics_path = run_dir / "mdhg_epoch_metrics.jsonl"
-        per_epoch_prediction_dir = run_dir / "mdhg_per_epoch_predictions"
+        diagnostics_dir = run_dir / "diagnostics"
+        epoch_metrics_path = diagnostics_dir / "mdhg_epoch_metrics.jsonl"
+        per_epoch_prediction_dir = diagnostics_dir / "per_epoch_predictions"
         epoch_metrics_enabled = bool(self.diagnostics_config.get("epoch_metrics", False))
         per_epoch_predictions_enabled = bool(
             self.diagnostics_config.get("per_epoch_predictions", False)

@@ -206,9 +206,9 @@ def test_execution_records_and_summarizes_epoch_diagnostic_context(
                 "rankings": [[4], [3], [3]],
             }
             prediction_path.write_text(json.dumps(payload), encoding="utf-8")
-            per_epoch_dir = Path(kwargs["run_dir"]) / "mdhg_per_epoch_predictions"
-            per_epoch_dir.mkdir()
-            (per_epoch_dir / "epoch_001_topk.json").write_text(
+            per_epoch_dir = Path(kwargs["run_dir"]) / "diagnostics" / "per_epoch_predictions"
+            per_epoch_dir.mkdir(parents=True)
+            (per_epoch_dir / "epoch_001_predictions.json").write_text(
                 json.dumps({"epoch": 1, **payload}),
                 encoding="utf-8",
             )
@@ -247,12 +247,11 @@ def test_execution_records_and_summarizes_epoch_diagnostic_context(
     assert injected["targeted_metrics"] == list(config.evaluation.targeted_metrics)
     assert injected["ground_truth_metrics"] == list(config.evaluation.ground_truth_metrics)
     assert Path(injected["mdhg_test_data_path"]).name == "test.txt"
-    assert Path(injected["per_epoch_prediction_dir"]).name == "mdhg_per_epoch_predictions"
-    rows = [
-        json.loads(line)
-        for line in (run_dir / "mdhg_epoch_pipeline_metrics.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    ]
+    assert Path(injected["per_epoch_prediction_dir"]).name == "per_epoch_predictions"
+    rows = json.loads(
+        (run_dir / "diagnostics" / "mdhg_epoch_diagnostic.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert rows[0]["epoch"] == 1
     assert rows[0]["metrics"]["ground_truth_recall@1"] == 1.0
