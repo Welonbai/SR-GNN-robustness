@@ -1,0 +1,66 @@
+style_name: formal_6method6victim_gt
+output_format: png
+
+title:
+  template: "Ground-truth Recall@20 for different attacks against different victim RS models."
+  align: center
+  font_size: 20
+  color: "#111111"
+  y: 0.955
+
+figure:
+  width: 18
+  height: 13.6
+  dpi: 180
+  background_color: "#FFFFFF"
+
+table:
+  font_size: 14
+  header_font_size: 13
+  row_leaf_label_font_size: 14
+  data_font_size: 16
+  font_height_fraction: 0.82
+  round_digits: 3
+  signed_percent_round_digits: 1
+  text_color: "#111111"
+  relative_positive_text_color: "#008000"
+  relative_negative_text_color: "#C00000"
+  show_grid: true
+  auto_shrink: true
+  wrap_text: false
+  cell_align: center
+  top_level_group_separators: true
+  stub_column_width_weight: 1.0
+  stub_column_width_weights:
+    dataset: 1.35
+    attack_method: 1.45
+  leaf_column_width_weight: 1.35
+  ax_position: [0.01, 0.025, 0.98, 0.90]
+  signed_percent_heatmap_strength: 0.5
+  display_alias:
+    labels:
+      dataset: DATASET
+      attack_method: METHOD
+      target_type: COHORT
+      victim_group: Victim RS
+      victim_model: victim
+    values:
+      dataset: {diginetica: DIGINETICA, yoochoose1_64: YOOCHOOSE 1/64}
+      target_type: {popular: POPULAR, unpopular: UNPOPULAR}
+      victim_group: {victim: Victim RS}
+      victim_model: {srgnn: SRGNN, miasrec: MiaSRec, tron: TRON, mdhg: MDHG, freqrec: FreqRec, wearec: WEARec}
+      attack_method:
+        clean: CLEAN
+        random_nz: RANDOM-NZ
+        generated_direct_cem: CEM-GENERATE
+        copy_direct_cem: CEM-COPY
+        creat: CREAT-NZ
+        poisoning_ssl_sbr: Poisoning-SSL-NZ
+  value_alias: {}
+  dimension_value_orders:
+    dataset: [diginetica, yoochoose1_64]
+    attack_method: [clean, random_nz, creat, poisoning_ssl_sbr, generated_direct_cem, copy_direct_cem]
+    target_type: [popular, unpopular]
+    victim_group: [victim]
+    victim_model: [srgnn, miasrec, tron, mdhg, freqrec, wearec]
+  scope_colors: {}

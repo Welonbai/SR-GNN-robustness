@@ -35,13 +35,17 @@ COLUMN_LABEL_SEPARATOR = " | "
 METRIC_COLUMN = "metric"
 METRIC_NAME_COLUMN = "metric_name"
 METRIC_SCOPE_COLUMN = "metric_scope"
+VICTIM_GROUP_COLUMN = "victim_group"
 GROUND_TRUTH_SCOPE = "ground_truth"
 TARGETED_SCOPE = "targeted"
 METRIC_SCOPE_PREFIXES = (
     ("ground_truth_", GROUND_TRUTH_SCOPE),
     ("targeted_", TARGETED_SCOPE),
 )
-DERIVED_VIEW_COLUMNS = {METRIC_NAME_COLUMN, METRIC_SCOPE_COLUMN}
+CONSTANT_DERIVED_COLUMNS = {
+    VICTIM_GROUP_COLUMN: "victim",
+}
+DERIVED_VIEW_COLUMNS = {METRIC_NAME_COLUMN, METRIC_SCOPE_COLUMN, *CONSTANT_DERIVED_COLUMNS}
 UNSAFE_COMPONENT_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 REPEATED_UNDERSCORE_PATTERN = re.compile(r"_+")
 
@@ -300,16 +304,26 @@ def prepare_view_dataframe(dataframe: pd.DataFrame, spec: ViewSpec) -> pd.DataFr
     if not missing_derived_columns:
         return dataframe.copy()
 
-    if METRIC_COLUMN not in dataframe.columns:
+    metric_derived_columns = [
+        column_name
+        for column_name in missing_derived_columns
+        if column_name not in CONSTANT_DERIVED_COLUMNS
+    ]
+    if metric_derived_columns and METRIC_COLUMN not in dataframe.columns:
         raise AnalysisError(
             "The view spec references derived metric columns "
-            f"{missing_derived_columns}, but the input CSV does not contain '{METRIC_COLUMN}'."
+            f"{metric_derived_columns}, but the input CSV does not contain '{METRIC_COLUMN}'."
         )
 
     prepared = dataframe.copy()
-    derived_metric_columns = derive_metric_identity_columns(prepared[METRIC_COLUMN])
-    for column_name in missing_derived_columns:
+    derived_metric_columns = (
+        derive_metric_identity_columns(prepared[METRIC_COLUMN]) if metric_derived_columns else {}
+    )
+    for column_name in metric_derived_columns:
         prepared[column_name] = derived_metric_columns[column_name]
+    for column_name in missing_derived_columns:
+        if column_name in CONSTANT_DERIVED_COLUMNS:
+            prepared[column_name] = CONSTANT_DERIVED_COLUMNS[column_name]
     return prepared
 
 

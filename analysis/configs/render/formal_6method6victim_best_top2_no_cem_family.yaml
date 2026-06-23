@@ -1,0 +1,65 @@
+style_name: formal_6method6victim_best_top2_no_cem_family
+output_format: png
+
+title:
+  template: "Best/top-2 counts for different attacks against different victim RS models."
+  align: center
+  font_size: 18
+  color: "#111111"
+
+figure:
+  width: 24
+  height: 7
+  dpi: 180
+  background_color: "#FFFFFF"
+
+table:
+  font_size: 13
+  header_font_size: 12
+  row_leaf_label_font_size: 13
+  data_font_size: 15
+  font_height_fraction: 0.82
+  round_digits: 0
+  signed_percent_round_digits: 1
+  text_color: "#111111"
+  count_percentage_denominator: 24
+  count_percentage_round_digits: 1
+  show_grid: true
+  auto_shrink: true
+  wrap_text: false
+  cell_align: center
+  top_level_group_separators: true
+  stub_column_width_weight: 1.4
+  signed_percent_heatmap_strength: 0.5
+  display_alias:
+    labels:
+      metric_name: metric
+      k: k
+      rank_subject: method
+      rank_threshold: rank
+    values:
+      metric_name: {recall: Recall, mrr: MRR}
+      rank_subject:
+        random_nz: RANDOM-NZ
+        creat: CREAT-NZ
+        poisoning_ssl_sbr: Poisoning-SSL-NZ
+        generated_direct_cem: cem-generate
+        copy_direct_cem: cem-copy
+      rank_threshold:
+        best: best
+        top2: top-2
+  value_alias: {}
+  dimension_value_orders:
+    metric_name: [recall, mrr]
+    k: [10, 20, 30, 40, 50]
+    rank_subject: [random_nz, creat, poisoning_ssl_sbr, generated_direct_cem, copy_direct_cem]
+    rank_threshold: [best, top2]
+  scope_colors: {}
+  best_value_bolding:
+    compare_along: rows
+    mode: max
+    partition_by_levels: []
+    bold_best: true
+    underline_second_best: true
+    best_text_color: "#C00000"
+    second_best_text_color: "#0066CC"

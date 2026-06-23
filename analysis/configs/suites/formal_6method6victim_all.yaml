@@ -1,0 +1,57 @@
+suite_name: formal_6method6victim_all
+steps:
+  - name: build_main_recall20
+    type: view
+    config: analysis/configs/views/formal_6method6victim_main_recall20.yaml
+  - name: render_main_recall20
+    type: render
+    bundle_dir: results/comparisons/formal_6method6victim_all/main_recall20
+    config: analysis/configs/render/formal_6method6victim_main_recall20.yaml
+
+  - name: build_main_recall50
+    type: view
+    config: analysis/configs/views/formal_6method6victim_main_recall50.yaml
+  - name: render_main_recall50
+    type: render
+    bundle_dir: results/comparisons/formal_6method6victim_all/main_recall50
+    config: analysis/configs/render/formal_6method6victim_main_recall50.yaml
+
+  - name: build_k_compare
+    type: view
+    config: analysis/configs/views/formal_6method6victim_k_compare.yaml
+  - name: render_k_compare
+    type: render
+    bundle_dir: results/comparisons/formal_6method6victim_all/k_compare
+    config: analysis/configs/render/formal_6method6victim_k_compare.yaml
+
+  - name: build_gt
+    type: view
+    config: analysis/configs/views/formal_6method6victim_gt.yaml
+  - name: render_gt
+    type: render
+    bundle_dir: results/comparisons/formal_6method6victim_all/gt
+    config: analysis/configs/render/formal_6method6victim_gt.yaml
+
+  - name: build_best_top2
+    type: rank_summary
+    config: analysis/configs/rank_summary/formal_6method6victim_best_top2.yaml
+  - name: render_best_top2
+    type: render
+    bundle_dir: results/comparisons/formal_6method6victim_all/best_top2
+    config: analysis/configs/render/formal_6method6victim_best_top2.yaml
+
+  - name: build_best_top2_no_cem_family
+    type: rank_summary
+    config: analysis/configs/rank_summary/formal_6method6victim_best_top2_no_cem_family.yaml
+  - name: render_best_top2_no_cem_family
+    type: render
+    bundle_dir: results/comparisons/formal_6method6victim_all/best_top2_no_cem_family
+    config: analysis/configs/render/formal_6method6victim_best_top2_no_cem_family.yaml
+
+  - name: build_best_top2_k50_methods_columns_no_cem_family
+    type: rank_summary
+    config: analysis/configs/rank_summary/formal_6method6victim_best_top2_k50_methods_columns_no_cem_family.yaml
+  - name: render_best_top2_k50_methods_columns_no_cem_family
+    type: render
+    bundle_dir: results/comparisons/formal_6method6victim_all/best_top2_k50_methods_columns_no_cem_family
+    config: analysis/configs/render/formal_6method6victim_best_top2_k50_methods_columns_no_cem_family.yaml

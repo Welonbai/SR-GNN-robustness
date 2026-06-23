@@ -1,0 +1,68 @@
+style_name: formal_6method6victim_multi_metric
+output_format: png
+
+title:
+  template: "Target Recall/MRR@10,@20 | mean of target items"
+  align: center
+  font_size: 18
+  color: "#111111"
+
+figure:
+  width: 30
+  height: 11
+  dpi: 180
+  background_color: "#FFFFFF"
+
+table:
+  font_size: 11
+  header_font_size: 10
+  row_leaf_label_font_size: 12
+  data_font_size: 12
+  font_height_fraction: 0.82
+  round_digits: 3
+  signed_percent_round_digits: 1
+  text_color: "#111111"
+  show_grid: true
+  auto_shrink: true
+  wrap_text: false
+  cell_align: center
+  top_level_group_separators: true
+  stub_column_width_weight: 1.35
+  signed_percent_heatmap_strength: 0.5
+  display_alias:
+    labels:
+      dataset: dataset
+      attack_method: method
+      metric_name: metric
+      k: k
+      target_type: cohort
+      victim_model: victim
+    values:
+      dataset: {diginetica: Diginetica, yoochoose1_64: YooChoose 1/64}
+      metric_name: {recall: Recall, mrr: MRR}
+      target_type: {popular: popular, unpopular: unpopular}
+      victim_model: {srgnn: SRGNN, miasrec: MiaSRec, tron: TRON, mdhg: MDHG, freqrec: FreqRec, wearec: WEARec}
+      attack_method:
+        clean: clean
+        random_nz: random-nz
+        generated_direct_cem: cem-generate
+        copy_direct_cem: cem-copy
+        creat: creat
+        poisoning_ssl_sbr: poisoning-ssl
+  value_alias: {}
+  dimension_value_orders:
+    dataset: [diginetica, yoochoose1_64]
+    attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem, creat, poisoning_ssl_sbr]
+    metric_name: [recall, mrr]
+    k: [10, 20]
+    target_type: [popular, unpopular]
+    victim_model: [srgnn, miasrec, tron, mdhg, freqrec, wearec]
+  scope_colors: {}
+  best_value_bolding:
+    compare_along: rows
+    mode: max
+    partition_by_levels: [dataset]
+    bold_best: true
+    underline_second_best: true
+    best_text_color: "#C00000"
+    second_best_text_color: "#0066CC"

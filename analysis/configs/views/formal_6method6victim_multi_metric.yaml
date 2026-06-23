@@ -1,0 +1,25 @@
+name: multi_metric
+input: results/comparisons/formal_6method6victim_all/merged_long_table.csv
+output: results/comparisons/formal_6method6victim_all/multi_metric
+
+filters:
+  victim_model: [srgnn, miasrec, tron, mdhg, freqrec, wearec]
+  attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem, creat, poisoning_ssl_sbr]
+  poison_model: srgnn
+  attack_size: 0.01
+  metric_name: [recall, mrr]
+  metric_scope: targeted
+  k: [10, 20]
+
+split_by: []
+rows: [dataset, attack_method]
+cols: [metric_name, k, target_type, victim_model]
+value_col: value
+agg: mean
+auto_context: true
+require_unique_cells: false
+
+mean_std:
+  enabled: true
+  ddof: 1
+  std_round_digits: 3

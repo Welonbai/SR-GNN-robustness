@@ -27,7 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS_ROOT = REPO_ROOT / "results"
 SUPPORTED_OUTPUT_FORMATS = {"png"}
 ALLOWED_ALIGNMENTS = {"left", "center", "right"}
-ALLOWED_COMPARE_ALONG = {"rows"}
+ALLOWED_COMPARE_ALONG = {"columns", "rows"}
 ALLOWED_BEST_VALUE_MODES = {"max"}
 COLUMN_LABEL_SEPARATOR = " | "
 TABLE_AX_POSITION = [0.01, 0.04, 0.98, 0.76]
@@ -64,6 +64,7 @@ class TitleSpec:
     align: str
     font_size: float
     color: str
+    y: float
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,10 @@ class TableSpec:
     round_digits: int
     signed_percent_round_digits: int | None
     text_color: str
+    relative_positive_text_color: str
+    relative_negative_text_color: str
+    count_percentage_denominator: float | None
+    count_percentage_round_digits: int
     show_grid: bool
     auto_shrink: bool
     wrap_text: bool
@@ -133,6 +138,9 @@ class TableSpec:
     relative_delta_indicator: RelativeDeltaIndicatorSpec
     top_level_group_separators: bool
     stub_column_width_weight: float
+    stub_column_width_weights: dict[str, float]
+    leaf_column_width_weight: float
+    ax_position: list[float]
     signed_percent_heatmap_strength: float
 
 
@@ -286,6 +294,7 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
         align=require_alignment(title_payload.get("align"), label="title.align"),
         font_size=require_positive_float(title_payload.get("font_size"), label="title.font_size"),
         color=require_nonempty_string(title_payload.get("color"), label="title.color"),
+        y=require_unit_float(title_payload.get("y", 0.95), label="title.y"),
     )
     figure_spec = FigureSpec(
         width=require_positive_float(figure_payload.get("width"), label="figure.width"),
@@ -320,6 +329,22 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
             label="table.signed_percent_round_digits",
         ),
         text_color=require_nonempty_string(table_payload.get("text_color"), label="table.text_color"),
+        relative_positive_text_color=require_nonempty_string(
+            table_payload.get("relative_positive_text_color", RELATIVE_TEXT_POSITIVE_COLOR),
+            label="table.relative_positive_text_color",
+        ),
+        relative_negative_text_color=require_nonempty_string(
+            table_payload.get("relative_negative_text_color", RELATIVE_TEXT_NEGATIVE_COLOR),
+            label="table.relative_negative_text_color",
+        ),
+        count_percentage_denominator=normalize_optional_positive_float(
+            table_payload.get("count_percentage_denominator"),
+            label="table.count_percentage_denominator",
+        ),
+        count_percentage_round_digits=require_nonnegative_int(
+            table_payload.get("count_percentage_round_digits", 1),
+            label="table.count_percentage_round_digits",
+        ),
         show_grid=require_bool(table_payload.get("show_grid"), label="table.show_grid"),
         auto_shrink=require_bool(table_payload.get("auto_shrink"), label="table.auto_shrink"),
         wrap_text=require_bool(table_payload.get("wrap_text"), label="table.wrap_text"),
@@ -355,6 +380,18 @@ def parse_render_spec(payload: Mapping[str, Any]) -> RenderSpec:
         stub_column_width_weight=require_positive_float(
             table_payload.get("stub_column_width_weight", STUB_COLUMN_WIDTH_WEIGHT),
             label="table.stub_column_width_weight",
+        ),
+        stub_column_width_weights=normalize_positive_float_mapping(
+            table_payload.get("stub_column_width_weights", {}),
+            label="table.stub_column_width_weights",
+        ),
+        leaf_column_width_weight=require_positive_float(
+            table_payload.get("leaf_column_width_weight", LEAF_COLUMN_WIDTH_WEIGHT),
+            label="table.leaf_column_width_weight",
+        ),
+        ax_position=normalize_ax_position(
+            table_payload.get("ax_position", TABLE_AX_POSITION),
+            label="table.ax_position",
         ),
         signed_percent_heatmap_strength=require_unit_float(
             table_payload.get("signed_percent_heatmap_strength", RELATIVE_HEATMAP_STRENGTH),
@@ -402,6 +439,8 @@ def render_png(
         data_cell_presentation=data_cell_presentation,
         std_dataframe=std_dataframe,
         mean_std_display=mean_std_display,
+        count_percentage_denominator=render_spec.table.count_percentage_denominator,
+        count_percentage_round_digits=render_spec.table.count_percentage_round_digits,
     )
     ranked_value_highlights = resolve_ranked_value_highlights(
         dataframe=dataframe,
@@ -416,7 +455,7 @@ def render_png(
     fig.patch.set_facecolor(render_spec.figure.background_color)
     ax.set_facecolor(render_spec.figure.background_color)
     ax.axis("off")
-    ax.set_position(TABLE_AX_POSITION)
+    ax.set_position(render_spec.table.ax_position)
 
     draw_structured_table(
         ax=ax,
@@ -432,7 +471,7 @@ def render_png(
     fig.suptitle(
         title_text,
         x=title_alignment_x(render_spec.title.align),
-        y=0.95,
+        y=render_spec.title.y,
         ha=render_spec.title.align,
         va="center",
         fontsize=render_spec.title.font_size,
@@ -619,6 +658,8 @@ def render_bundle(*, bundle_dir: Path, render_spec: RenderSpec) -> Path:
             dataframe=table_dataframe,
             table_structure=table_structure,
             meta_payload=meta_payload,
+            relative_positive_text_color=render_spec.table.relative_positive_text_color,
+            relative_negative_text_color=render_spec.table.relative_negative_text_color,
         )
         title_text = resolve_title(template=render_spec.title.template, meta_payload=meta_payload)
 
@@ -659,8 +700,18 @@ def draw_structured_table(
     if total_row_count <= 0:
         raise AnalysisError("Cannot render an empty table structure.")
 
-    column_width_weights = ([render_spec.table.stub_column_width_weight] * stub_column_count) + (
-        [LEAF_COLUMN_WIDTH_WEIGHT] * leaf_column_count
+    validate_stub_column_width_targets(
+        table_structure=table_structure,
+        stub_column_width_weights=render_spec.table.stub_column_width_weights,
+    )
+    column_width_weights = [
+        render_spec.table.stub_column_width_weights.get(
+            row_level_name,
+            render_spec.table.stub_column_width_weight,
+        )
+        for row_level_name in table_structure.row_levels
+    ] + (
+        [render_spec.table.leaf_column_width_weight] * leaf_column_count
     )
     column_boundaries = build_boundaries(column_width_weights)
     leaf_column_fill_colors = [
@@ -675,29 +726,26 @@ def draw_structured_table(
     ax.set_xlim(0.0, column_boundaries[-1])
     ax.set_ylim(float(total_row_count), 0.0)
 
-    header_label_row_index = header_row_count - 1
-    for header_row_index in range(header_row_count):
-        for stub_column_index, row_level_name in enumerate(table_structure.row_levels):
-            header_text = ""
-            if header_row_index == header_label_row_index:
-                header_text = resolve_label_alias(
-                    label=row_level_name,
-                    display_alias=render_spec.table.display_alias,
-                )
-            draw_cell_block(
-                ax=ax,
-                x0=column_boundaries[stub_column_index],
-                x1=column_boundaries[stub_column_index + 1],
-                y0=float(header_row_index),
-                y1=float(header_row_index + 1),
-                text=header_text,
-                font_weight="bold",
-                facecolor=None,
-                render_spec=render_spec,
-                total_table_width=column_boundaries[-1],
-                total_row_count=total_row_count,
-                base_font_size=render_spec.table.header_font_size or render_spec.table.font_size,
+    for stub_column_index, row_level_name in enumerate(table_structure.row_levels):
+        draw_cell_block(
+            ax=ax,
+            x0=column_boundaries[stub_column_index],
+            x1=column_boundaries[stub_column_index + 1],
+            y0=0.0,
+            y1=float(header_row_count),
+            text=resolve_label_alias(
+                label=row_level_name,
+                display_alias=render_spec.table.display_alias,
             )
+            if header_row_count > 0
+            else "",
+            font_weight="bold",
+            facecolor=None,
+            render_spec=render_spec,
+            total_table_width=column_boundaries[-1],
+            total_row_count=total_row_count,
+            base_font_size=render_spec.table.header_font_size or render_spec.table.font_size,
+        )
 
     for level_index in range(header_row_count):
         for start_index, end_index in iterate_hierarchy_spans(
@@ -822,6 +870,32 @@ def draw_structured_table(
             header_row_count=header_row_count,
             total_row_count=total_row_count,
             render_spec=render_spec,
+        )
+
+    if render_spec.table.show_grid:
+        outer_border = Rectangle(
+            (0.0, 0.0),
+            column_boundaries[-1],
+            float(total_row_count),
+            fill=False,
+            edgecolor="black",
+            linewidth=0.5,
+            clip_on=False,
+        )
+        ax.add_patch(outer_border)
+
+
+def validate_stub_column_width_targets(
+    *,
+    table_structure: TableStructure,
+    stub_column_width_weights: Mapping[str, float],
+) -> None:
+    """Require per-stub width overrides to target row-level names."""
+    unknown_levels = sorted(set(stub_column_width_weights) - set(table_structure.row_levels))
+    if unknown_levels:
+        raise AnalysisError(
+            "table.stub_column_width_weights contains unknown row-level names: "
+            f"{unknown_levels}. Available row levels: {table_structure.row_levels}."
         )
 
 
@@ -1210,8 +1284,8 @@ def resolve_font_size(
     if not render_spec.table.auto_shrink:
         return effective_base_font_size
 
-    table_width_inches = render_spec.figure.width * TABLE_AX_POSITION[2]
-    table_height_inches = render_spec.figure.height * TABLE_AX_POSITION[3]
+    table_width_inches = render_spec.figure.width * render_spec.table.ax_position[2]
+    table_height_inches = render_spec.figure.height * render_spec.table.ax_position[3]
     cell_width_inches = table_width_inches * (cell_width / total_table_width)
     cell_height_inches = table_height_inches * (cell_height / float(total_row_count))
     max_height_points = cell_height_inches * 72.0 * render_spec.table.font_height_fraction
@@ -1233,6 +1307,8 @@ def format_dataframe_for_display(
     signed_percent_round_digits: int | None = None,
     std_dataframe: pd.DataFrame | None = None,
     mean_std_display: MeanStdDisplaySpec | None = None,
+    count_percentage_denominator: float | None = None,
+    count_percentage_round_digits: int = 1,
 ) -> pd.DataFrame:
     """Convert a dataframe into display strings for slide rendering."""
     validate_value_alias_columns(dataframe=dataframe, value_alias=value_alias)
@@ -1272,7 +1348,8 @@ def format_dataframe_for_display(
         leaf_column_index = value_column_indexes[normalized_column_name]
         formatted_columns[normalized_column_name] = pd.Series(
             [
-                format_cell_value(
+                append_count_percentage(
+                    format_cell_value(
                     dataframe.iloc[row_index][normalized_column_name],
                     std_value=(
                         None
@@ -1285,12 +1362,33 @@ def format_dataframe_for_display(
                     value_alias=column_value_alias,
                     display_mode=data_cell_presentation.display_modes[row_index][leaf_column_index],
                     mean_std_display=mean_std_display,
+                    ),
+                    raw_value=dataframe.iloc[row_index][normalized_column_name],
+                    denominator=count_percentage_denominator,
+                    round_digits=count_percentage_round_digits,
                 )
                 for row_index in range(len(dataframe))
             ],
             index=dataframe.index,
         )
     return pd.DataFrame(formatted_columns)
+
+
+def append_count_percentage(
+    formatted_value: str,
+    *,
+    raw_value: Any,
+    denominator: float | None,
+    round_digits: int,
+) -> str:
+    """Append a percentage to an absolute count when configured."""
+    if denominator is None:
+        return formatted_value
+    numeric_value = coerce_numeric_value(raw_value)
+    if numeric_value is None:
+        return formatted_value
+    percentage = numeric_value / denominator * 100.0
+    return f"{formatted_value} ({percentage:.{round_digits}f}%)"
 
 
 def validate_data_cell_presentation(
@@ -1369,6 +1467,8 @@ def build_data_cell_presentation(
     dataframe: pd.DataFrame,
     table_structure: TableStructure,
     meta_payload: Mapping[str, Any],
+    relative_positive_text_color: str = RELATIVE_TEXT_POSITIVE_COLOR,
+    relative_negative_text_color: str = RELATIVE_TEXT_NEGATIVE_COLOR,
 ) -> DataCellPresentation:
     """Resolve one per-cell display-mode matrix plus GT-relative heatmap scaling."""
     display_modes: list[list[str]] = []
@@ -1449,6 +1549,8 @@ def build_data_cell_presentation(
                     row_tuple=row_tuple,
                     column_tuple=column_tuple,
                     meta_payload=meta_payload,
+                    positive_text_color=relative_positive_text_color,
+                    negative_text_color=relative_negative_text_color,
                 )
             )
             row_delta_indicators.append(
@@ -1547,6 +1649,8 @@ def resolve_data_cell_text_color(
     row_tuple: tuple[Any, ...],
     column_tuple: tuple[Any, ...],
     meta_payload: Mapping[str, Any],
+    positive_text_color: str = RELATIVE_TEXT_POSITIVE_COLOR,
+    negative_text_color: str = RELATIVE_TEXT_NEGATIVE_COLOR,
 ) -> str | None:
     """Color absolute GT values by their direction relative to the clean baseline."""
     config = resolve_ground_truth_relative_to_clean_config(meta_payload)
@@ -1586,8 +1690,8 @@ def resolve_data_cell_text_color(
     if current_value is None or baseline_value is None or are_close(current_value, baseline_value):
         return None
     if current_value > baseline_value:
-        return RELATIVE_TEXT_POSITIVE_COLOR
-    return RELATIVE_TEXT_NEGATIVE_COLOR
+        return positive_text_color
+    return negative_text_color
 
 
 def resolve_data_cell_delta_indicator(
@@ -1889,12 +1993,19 @@ def resolve_ranked_value_highlights(
     if best_value_bolding is None:
         return RankedValueCellHighlights(best_value_cells=set(), second_best_value_cells=set())
 
-    if best_value_bolding.compare_along != "rows":
+    if best_value_bolding.compare_along not in {"columns", "rows"}:
         raise AnalysisError(
             f"Unsupported best_value_bolding.compare_along '{best_value_bolding.compare_along}'."
         )
     if best_value_bolding.mode != "max":
         raise AnalysisError(f"Unsupported best_value_bolding.mode '{best_value_bolding.mode}'.")
+
+    if best_value_bolding.compare_along == "columns":
+        return resolve_column_ranked_value_highlights(
+            dataframe=dataframe,
+            table_structure=table_structure,
+            best_value_bolding=best_value_bolding,
+        )
 
     row_groups = resolve_partition_row_groups(
         table_structure=table_structure,
@@ -1927,6 +2038,59 @@ def resolve_ranked_value_highlights(
             second_best_value = distinct_ranked_values[1] if len(distinct_ranked_values) > 1 else None
 
             for row_index, numeric_value in valid_group_entries:
+                if are_close(numeric_value, best_value):
+                    best_cells.add((row_index, leaf_column_index))
+                    continue
+                if (
+                    (
+                        best_value_bolding.underline_second_best
+                        or best_value_bolding.second_best_text_color is not None
+                    )
+                    and second_best_value is not None
+                    and are_close(numeric_value, second_best_value)
+                ):
+                    second_best_cells.add((row_index, leaf_column_index))
+    return RankedValueCellHighlights(
+        best_value_cells=best_cells,
+        second_best_value_cells=second_best_cells,
+    )
+
+
+def resolve_column_ranked_value_highlights(
+    *,
+    dataframe: pd.DataFrame,
+    table_structure: TableStructure,
+    best_value_bolding: BestValueBoldingSpec,
+) -> RankedValueCellHighlights:
+    """Return ranked highlights when comparing values across columns within each row."""
+    column_groups = resolve_partition_column_groups(
+        table_structure=table_structure,
+        partition_by_levels=best_value_bolding.partition_by_levels,
+        column_filters=best_value_bolding.column_filters,
+    )
+    best_cells: set[tuple[int, int]] = set()
+    second_best_cells: set[tuple[int, int]] = set()
+    value_columns = [
+        pd.to_numeric(dataframe[value_column_name], errors="coerce").tolist()
+        for value_column_name in table_structure.value_column_names
+    ]
+    for row_index in range(len(dataframe)):
+        for column_group in column_groups:
+            valid_group_entries = [
+                (leaf_column_index, float(value_columns[leaf_column_index][row_index]))
+                for leaf_column_index in column_group
+                if not pd.isna(value_columns[leaf_column_index][row_index])
+            ]
+            if not valid_group_entries:
+                continue
+
+            distinct_ranked_values = resolve_distinct_ranked_values(
+                [numeric_value for _, numeric_value in valid_group_entries]
+            )
+            best_value = distinct_ranked_values[0]
+            second_best_value = distinct_ranked_values[1] if len(distinct_ranked_values) > 1 else None
+
+            for leaf_column_index, numeric_value in valid_group_entries:
                 if are_close(numeric_value, best_value):
                     best_cells.add((row_index, leaf_column_index))
                     continue
@@ -2017,6 +2181,40 @@ def resolve_partition_row_groups(
         group_key = tuple(row_tuple[level_index] for level_index in level_indexes)
         grouped_row_indexes.setdefault(group_key, []).append(row_index)
     return list(grouped_row_indexes.values())
+
+
+def resolve_partition_column_groups(
+    *,
+    table_structure: TableStructure,
+    partition_by_levels: list[str],
+    column_filters: Mapping[str, list[Any]],
+) -> list[list[int]]:
+    """Partition value-column indices by one or more column hierarchy levels."""
+    candidate_column_indexes = [
+        leaf_column_index
+        for leaf_column_index in range(len(table_structure.column_tuples))
+        if column_matches_filters(
+            table_structure=table_structure,
+            leaf_column_index=leaf_column_index,
+            column_filters=column_filters,
+        )
+    ]
+    if not partition_by_levels:
+        return [candidate_column_indexes]
+
+    validate_partition_levels(
+        partition_by_levels=partition_by_levels,
+        available_levels=table_structure.col_levels,
+        label="best_value_bolding.partition_by_levels",
+    )
+    level_indexes = [table_structure.col_levels.index(level_name) for level_name in partition_by_levels]
+
+    grouped_column_indexes: dict[tuple[Any, ...], list[int]] = {}
+    for leaf_column_index in candidate_column_indexes:
+        column_tuple = table_structure.column_tuples[leaf_column_index]
+        group_key = tuple(column_tuple[level_index] for level_index in level_indexes)
+        grouped_column_indexes.setdefault(group_key, []).append(leaf_column_index)
+    return list(grouped_column_indexes.values())
 
 
 def validate_partition_levels(
@@ -2705,6 +2903,19 @@ def normalize_string_mapping(value: Any, *, label: str) -> dict[str, str]:
     return normalized
 
 
+def normalize_positive_float_mapping(value: Any, *, label: str) -> dict[str, float]:
+    """Normalize an optional mapping of strings to positive floats."""
+    if value is None:
+        return {}
+
+    mapping = require_mapping(value, label=label)
+    normalized: dict[str, float] = {}
+    for raw_key, raw_value in mapping.items():
+        key = require_nonempty_string(raw_key, label=f"{label} key")
+        normalized[key] = require_positive_float(raw_value, label=f"{label}[{key}]")
+    return normalized
+
+
 def normalize_display_alias_spec(value: Any, *, label: str) -> DisplayAliasSpec:
     """Normalize display aliases for structural labels and values."""
     if value is None:
@@ -2902,6 +3113,22 @@ def normalize_dimension_value_orders(value: Any, *, label: str) -> dict[str, lis
             raw_values,
             label=f"{label}[{dimension_name}]",
         )
+    return normalized
+
+
+def normalize_ax_position(value: Any, *, label: str) -> list[float]:
+    """Normalize a Matplotlib axes position [left, bottom, width, height]."""
+    if not isinstance(value, list) or len(value) != 4:
+        raise AnalysisError(f"Expected '{label}' to be a list of four numbers.")
+
+    normalized = [
+        require_unit_float(item, label=f"{label}[{index}]")
+        for index, item in enumerate(value)
+    ]
+    if normalized[0] + normalized[2] > 1.0:
+        raise AnalysisError(f"Expected '{label}' left + width to be <= 1.")
+    if normalized[1] + normalized[3] > 1.0:
+        raise AnalysisError(f"Expected '{label}' bottom + height to be <= 1.")
     return normalized
 
 

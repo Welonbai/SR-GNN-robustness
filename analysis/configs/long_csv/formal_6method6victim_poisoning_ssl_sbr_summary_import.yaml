@@ -1,0 +1,44 @@
+defaults:
+  attack_method: poisoning_ssl_sbr
+  attack_size: 0.01
+  poison_model: srgnn
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 1.0
+  requested_victims: [srgnn, miasrec, tron, mdhg, freqrec, wearec]
+
+jobs:
+  - output_name: formal_6method6victim_diginetica_poisoning_ssl_sbr_popular_sample10
+    dataset: diginetica
+    target_type: popular
+    selected_targets: [11103, 39588, 5334, 5418, 14514, 32614, 1440, 4092, 3316, 9496]
+    summaries:
+      - D:/code_SBR_robustness/server_results/diginetica_seqpoison_94_metrics/outputs/runs/diginetica/ssh_diginetica_valbest_attack_poisoning_ssl_sbr_popular_sample10_all_victims/run_group_811891f9e4/summary_current.json
+
+  - output_name: formal_6method6victim_diginetica_poisoning_ssl_sbr_unpopular_sample10
+    dataset: diginetica
+    target_type: unpopular
+    selected_targets: [3660, 8829, 21325, 17290, 20222, 29122, 28865, 32561, 23414, 33995]
+    summaries:
+      - D:/code_SBR_robustness/server_results/diginetica_seqpoison_94_metrics/outputs/runs/diginetica/ssh_diginetica_valbest_attack_poisoning_ssl_sbr_unpopular_sample10_all_victims/run_group_e3a1f7c5cf/summary_current.json
+
+  - output_name: formal_6method6victim_yoochoose1_64_poisoning_ssl_sbr_popular_sample10
+    dataset: yoochoose1_64
+    target_type: popular
+    selected_targets: [3660, 6200, 33497, 3916, 33916, 3528, 10195, 33407, 7759, 6996]
+    summaries:
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_attack_poisoning_ssl_sbr_popular_sample10_all_victims/run_group_72c28b2142/summary_current.json
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/isolated_yoochoose_popular_seqpoison_target_33497/run_group_52231c8600/summary_current.json
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/isolated_yoochoose_popular_seqpoison_target_3916/run_group_0cfa1c2ec7/summary_current.json
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/isolated_yoochoose_popular_seqpoison_target_33916/run_group_d2871f5c4f/summary_current.json
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/isolated_yoochoose_popular_seqpoison_target_3528/run_group_e445fb8a91/summary_current.json
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/isolated_yoochoose_popular_seqpoison_target_10195/run_group_9e0e79f230/summary_current.json
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/isolated_yoochoose_popular_seqpoison_target_33407/run_group_661b35a125/summary_current.json
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/isolated_yoochoose_popular_seqpoison_target_7759/run_group_edd878c8f4/summary_current.json
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/isolated_yoochoose_popular_seqpoison_target_6996/run_group_3cea2f6288/summary_current.json
+
+  - output_name: formal_6method6victim_yoochoose1_64_poisoning_ssl_sbr_unpopular_sample10
+    dataset: yoochoose1_64
+    target_type: unpopular
+    selected_targets: [8829, 17290, 14514, 1440, 4092, 32070, 33739, 16571, 8637, 35833]
+    summaries:
+      - D:/code_SBR_robustness/server_results/yoochoose_seqpoison_95_metrics_20260622_213119/outputs/runs/yoochoose1_64/ssh_yoochoose1_64_valbest_attack_poisoning_ssl_sbr_unpopular_sample10_all_victims/run_group_bf6f1bcf7d/summary_current.json

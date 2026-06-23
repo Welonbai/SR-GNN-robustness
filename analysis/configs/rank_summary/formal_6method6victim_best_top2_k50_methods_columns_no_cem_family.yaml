@@ -1,0 +1,35 @@
+analysis_type: method_rank_counts
+input: results/comparisons/formal_6method6victim_all/merged_long_table.csv
+output: results/comparisons/formal_6method6victim_all/best_top2_k50_methods_columns_no_cem_family
+
+filters:
+  victim_model: [srgnn, miasrec, tron, mdhg, freqrec, wearec]
+  attack_method: [clean, random_nz, generated_direct_cem, copy_direct_cem, creat, poisoning_ssl_sbr]
+  poison_model: srgnn
+  attack_size: 0.01
+  metric_name: [recall, mrr]
+  metric_scope: targeted
+  k: [50]
+
+method_column: attack_method
+value_column: value
+auto_context: true
+
+method_rank_counts:
+  higher_is_better: true
+  tie_tolerance: 0.0
+  require_complete_methods: true
+  rank_unit_columns: [dataset, target_type, victim_model, metric_name, metric_scope, k]
+  row_columns: [metric_name]
+  counted_methods:
+    - random_nz
+    - creat
+    - poisoning_ssl_sbr
+    - generated_direct_cem
+    - copy_direct_cem
+  layout: methods_as_rows
+  thresholds:
+    - rank: 1
+      label: best
+    - rank: 2
+      label: top2
