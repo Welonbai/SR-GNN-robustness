@@ -42,6 +42,7 @@ def _runner_config(tmp_path: Path):
             "layer": 1,
             "beta": 0.005,
             "topk": 3,
+            "per_epoch_diagnostics": False,
             "checkpoint_protocol": "fixed_epoch",
             "validation_enabled": False,
             "export_model": "last",
@@ -71,6 +72,7 @@ def test_dtgat_is_registered_and_config_validates(tmp_path: Path) -> None:
     assert "dtgat" in available_victims()
     assert normalized["victims"]["enabled"] == ["dtgat"]
     assert normalized["victims"]["params"]["dtgat"]["train"]["topk"] == 3
+    assert normalized["victims"]["params"]["dtgat"]["train"]["per_epoch_diagnostics"] is False
     assert normalized["victims"]["params"]["dtgat"]["train"]["checkpoint_protocol"] == "fixed_epoch"
 
 
@@ -87,6 +89,21 @@ def test_dtgat_local_smoke_config_validates() -> None:
     assert config.targets.count == 1
     assert config.victims.params["dtgat"]["train"]["topk"] == 50
     assert "not a formal full-result" in smoke_path.read_text(encoding="utf-8")
+
+
+def test_dtgat_local_epoch_diagnostic_configs_validate() -> None:
+    config_root = Path(__file__).resolve().parents[2] / "attack" / "configs"
+    for name in (
+        "local_diginetica_dtgat_epoch3_diagnostic_one_target.yaml",
+        "local_yoochoose1_64_dtgat_epoch3_diagnostic_one_target.yaml",
+    ):
+        config = load_config(config_root / name)
+        train = config.victims.params["dtgat"]["train"]
+        assert config.victims.enabled == ("dtgat",)
+        assert config.targets.count == 1
+        assert train["epochs"] == 3
+        assert train["topk"] == 50
+        assert train["per_epoch_diagnostics"] is True
 
 
 def test_runner_builds_expected_dtgat_command_and_env(tmp_path: Path) -> None:
@@ -106,6 +123,7 @@ def test_runner_builds_expected_dtgat_command_and_env(tmp_path: Path) -> None:
         resolved_config_output_path=tmp_path
         / "run"
         / "dtgat_third_party_resolved_config.json",
+        per_epoch_prediction_dir=None,
         requested_topk=3,
         epochs=2,
         seed=7,
@@ -134,8 +152,37 @@ def test_runner_builds_expected_dtgat_command_and_env(tmp_path: Path) -> None:
     assert "--prediction_output_path" in cmd
     assert "--metrics_output_path" in cmd
     assert "--resolved_config_output_path" in cmd
+    assert "--per_epoch_prediction_dir" not in cmd
     assert env["PYTHONHASHSEED"] == "7"
     assert env["CUDA_VISIBLE_DEVICES"] == "3"
+
+
+def test_runner_builds_per_epoch_prediction_arg_only_when_enabled(tmp_path: Path) -> None:
+    config = _runner_config(tmp_path)
+    repo = Path(config.victims.runtime["dtgat"]["repo_root"])
+    repo.mkdir()
+    (repo / "main.py").write_text("", encoding="utf-8")
+    data_dir = tmp_path / "export" / "toy"
+    data_dir.mkdir(parents=True)
+    per_epoch_dir = tmp_path / "run" / "dtgat_per_epoch_predictions"
+
+    cmd, _ = DTGATRunner(config).build_command(
+        data_dir=data_dir,
+        dataset_name="toy",
+        n_node=5,
+        prediction_output_path=tmp_path / "run" / "dtgat_topk_raw.json",
+        metrics_output_path=tmp_path / "run" / "dtgat_third_party_metrics.json",
+        resolved_config_output_path=tmp_path
+        / "run"
+        / "dtgat_third_party_resolved_config.json",
+        per_epoch_prediction_dir=per_epoch_dir,
+        requested_topk=3,
+        epochs=2,
+        seed=7,
+    )
+
+    assert "--per_epoch_prediction_dir" in cmd
+    assert cmd[cmd.index("--per_epoch_prediction_dir") + 1] == str(per_epoch_dir.resolve())
 
 
 def _write_prediction(path: Path, payload: dict[str, object]) -> None:
@@ -230,6 +277,78 @@ def test_runner_accepts_valid_predictions_and_slices(tmp_path: Path) -> None:
     )
 
     assert rankings == [[1, 2], [5, 4]]
+
+
+def test_per_epoch_prediction_metrics_require_every_epoch(tmp_path: Path) -> None:
+    prediction_dir = tmp_path / "run" / "dtgat_per_epoch_predictions"
+    prediction_dir.mkdir(parents=True)
+    _write_prediction(
+        prediction_dir / "epoch_001.json",
+        {
+            "topk": 2,
+            "requested_topk": 2,
+            "n_node": 5,
+            "num_examples": 1,
+            "epoch": 1,
+            "rankings": [[1, 2]],
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Missing"):
+        DTGATRunner(_runner_config(tmp_path)).evaluate_per_epoch_predictions(
+            prediction_dir=prediction_dir,
+            metrics_output_path=tmp_path / "run" / "per_epoch_metrics.json",
+            expected_epochs=2,
+            expected_test_count=1,
+            n_node=5,
+            requested_topk=2,
+            target_item=2,
+            ground_truth_labels=[2],
+            evaluation_topk=[1, 2],
+            targeted_metrics=["recall"],
+            ground_truth_metrics=["recall"],
+            run_dir=tmp_path / "run",
+        )
+
+
+def test_per_epoch_prediction_metrics_are_written(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    prediction_dir = run_dir / "dtgat_per_epoch_predictions"
+    prediction_dir.mkdir(parents=True)
+    for epoch in (1, 2):
+        _write_prediction(
+            prediction_dir / f"epoch_{epoch:03d}.json",
+            {
+                "topk": 2,
+                "requested_topk": 2,
+                "n_node": 5,
+                "num_examples": 1,
+                "epoch": epoch,
+                "rankings": [[2, 1]],
+            },
+        )
+
+    summary = DTGATRunner(_runner_config(tmp_path)).evaluate_per_epoch_predictions(
+        prediction_dir=prediction_dir,
+        metrics_output_path=run_dir / "per_epoch_metrics.json",
+        expected_epochs=2,
+        expected_test_count=1,
+        n_node=5,
+        requested_topk=2,
+        target_item=2,
+        ground_truth_labels=[2],
+        evaluation_topk=[1, 2],
+        targeted_metrics=["recall"],
+        ground_truth_metrics=["recall"],
+        run_dir=run_dir,
+    )
+
+    payload = json.loads((run_dir / "per_epoch_metrics.json").read_text(encoding="utf-8"))
+    assert payload == summary
+    assert payload["enabled"] is True
+    assert [row["epoch"] for row in payload["epochs"]] == [1, 2]
+    assert payload["epochs"][0]["prediction_path"] == "dtgat_per_epoch_predictions/epoch_001.json"
+    assert payload["epochs"][0]["metrics"]["targeted_recall@1"] == 1.0
 
 
 def test_execution_branch_uses_export_result_data_dir_and_poisoned_prefixes(

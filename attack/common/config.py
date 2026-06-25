@@ -4895,6 +4895,7 @@ def _normalize_dtgat_train(train: Mapping[str, Any], context: str) -> dict[str, 
         "layer": 1,
         "beta": 0.005,
         "topk": 50,
+        "per_epoch_diagnostics": False,
         "checkpoint_protocol": VICTIM_FIXED_EPOCH_PROTOCOL,
         "validation_enabled": False,
         "export_model": VICTIM_EXPORT_LAST,
@@ -4907,6 +4908,10 @@ def _normalize_dtgat_train(train: Mapping[str, Any], context: str) -> dict[str, 
             raise ValueError(f"{context}.{key} must be positive.")
     for key in ("lr", "dropout", "l2", "lr_dc", "beta"):
         normalized[key] = _as_float(normalized[key], f"{context}.{key}")
+    normalized["per_epoch_diagnostics"] = _as_bool(
+        normalized["per_epoch_diagnostics"],
+        f"{context}.per_epoch_diagnostics",
+    )
     if normalized["lr"] <= 0:
         raise ValueError(f"{context}.lr must be positive.")
     if not 0.0 <= normalized["dropout"] < 1.0:

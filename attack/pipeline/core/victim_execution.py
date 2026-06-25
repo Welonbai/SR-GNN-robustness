@@ -11,7 +11,7 @@ from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.mdhg_exporter import MDHGExporter
 from attack.data.exporters.freqrec_exporter import FreqRecExporter
-from attack.data.exporters.dtgat_exporter import DTGATExporter
+from attack.data.exporters.dtgat_exporter import DTGATExporter, sequences_to_pairs
 from attack.data.exporters.wearec_exporter import WEARecExporter, WEARecExportResult
 from attack.data.canonical_fingerprints import (
     CANONICAL_FINGERPRINT_SEMANTICS,
@@ -514,6 +514,10 @@ def execute_single_victim(
         runner = get_victim_runner(victim_name)(config)
         raw_predictions_path = run_dir / "dtgat_topk_raw.json"
         requested_topk = max(int(max_topk), int(victim_train_config.get("topk", 50)))
+        _, ground_truth_labels = sequences_to_pairs(canonical_dataset.test)
+        per_epoch_diagnostics_enabled = bool(
+            victim_train_config.get("per_epoch_diagnostics", False)
+        )
         pipeline_injected = {
             "dataset_name": config.data.dataset_name,
             "run_type": run_type,
@@ -527,6 +531,17 @@ def execute_single_victim(
             "metrics_output_path": run_dir / "dtgat_third_party_metrics.json",
             "third_party_resolved_config_output_path": (
                 run_dir / "dtgat_third_party_resolved_config.json"
+            ),
+            "per_epoch_diagnostics_enabled": per_epoch_diagnostics_enabled,
+            "per_epoch_prediction_dir": (
+                run_dir / "dtgat_per_epoch_predictions"
+                if per_epoch_diagnostics_enabled
+                else None
+            ),
+            "per_epoch_metrics_path": (
+                run_dir / "per_epoch_metrics.json"
+                if per_epoch_diagnostics_enabled
+                else None
             ),
             "victim_train_seed": int(victim_stage_seed),
             "target_item": int(target_item),
@@ -557,6 +572,10 @@ def execute_single_victim(
             epochs=int(victim_train_config["epochs"]),
             victim_train_seed=int(victim_stage_seed),
             target_item=int(target_item),
+            ground_truth_labels=ground_truth_labels,
+            evaluation_topk=eval_topk,
+            targeted_metrics=config.evaluation.targeted_metrics,
+            ground_truth_metrics=config.evaluation.ground_truth_metrics,
         )
         _write_victim_resolved_config(
             config,
