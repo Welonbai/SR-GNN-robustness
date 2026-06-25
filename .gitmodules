@@ -13,3 +13,7 @@
 [submodule "third_party/wearec"]
 	path = third_party/wearec
 	url = https://github.com/Welonbai/WEARec.git
+[submodule "third_party/dtgat"]
+	path = third_party/dtgat
+	url = https://github.com/Welonbai/DT-GAT.git
+	branch = sbr-victim-integration
