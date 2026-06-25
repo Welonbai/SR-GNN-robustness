@@ -19,7 +19,6 @@ from attack.models.freqrec_core import (
     _resolve_freqrec_device,
     build_freqrec_train_rows,
 )
-from attack.models.poison.freqrec_poison_runner import FreqRecPoisonRunner
 from attack.pipeline.core.pipeline_utils import SharedAttackArtifacts
 from attack.pipeline.runs.run_pts_construction_cem import (
     PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST,
@@ -340,31 +339,35 @@ def test_freqrec_candidate_evaluation_smoke_uses_candidate_training_data() -> No
     assert trainer.last_train_rows_fingerprint.count(((1, 2), 3)) >= 2
 
 
-def test_freqrec_cache_identity_distinguishes_surrogate_and_omits_copy_source_poison_model(tmp_path) -> None:
+def test_freqrec_cache_identity_includes_copy_source_suffix_generator(tmp_path) -> None:
     copy_config = load_config(COPY_CONFIG)
     generated_config = load_config(GENERATED_CONFIG)
     fake_sessions = tmp_path / "fake_sessions.pkl"
+    poison_checkpoint = tmp_path / "poison.pt"
     import pickle
 
     with fake_sessions.open("wb") as handle:
         pickle.dump([[1, 2, 3]], handle)
+    poison_checkpoint.write_bytes(b"freqrec poison checkpoint")
 
     copy_identity = build_pts_cem_shared_cache_identity(
         copy_config,
         target_item=123,
         fake_sessions_path=fake_sessions,
-        poison_model_path=None,
+        poison_model_path=poison_checkpoint,
     )
     generated_identity = build_pts_cem_shared_cache_identity(
         generated_config,
         target_item=123,
         fake_sessions_path=fake_sessions,
-        poison_model_path=tmp_path / "missing.pt",
+        poison_model_path=poison_checkpoint,
     )
 
     assert copy_identity["surrogate_reward"]["surrogate_model"] == "freqrec"
     assert copy_identity["fake_session_source"]["generator_model"] is None
-    assert "poison_model" not in copy_identity
+    assert copy_identity["direct_action_suffix_generator_model"] == "freqrec"
+    assert copy_identity["poison_model"]["role"] == "direct_action_suffix_generator"
+    assert copy_identity["poison_model"]["freqrec_adapter_version"] == FREQREC_ADAPTER_VERSION
     assert "final_victim_model" not in copy_identity
     assert "final_victim_seed" not in copy_identity
     assert copy_identity["surrogate_reward"]["freqrec_adapter_version"] == FREQREC_ADAPTER_VERSION
@@ -374,17 +377,46 @@ def test_freqrec_cache_identity_distinguishes_surrogate_and_omits_copy_source_po
     )
 
     assert generated_identity["fake_session_source"]["generator_model"] == "freqrec"
+    assert generated_identity["direct_action_suffix_generator_model"] == "freqrec"
+    assert (
+        generated_identity["poison_model"]["role"]
+        == "base_fake_session_and_direct_action_suffix_generator"
+    )
     assert generated_identity["poison_model"]["freqrec_adapter_version"] == FREQREC_ADAPTER_VERSION
     assert (
         generated_identity["poison_model"]["seed_source"]
         == "configured_victim_train_seed_shared_poison_model"
     )
 
+    changed_poison_config = replace(
+        copy_config,
+        attack=replace(
+            copy_config.attack,
+            poison_model=replace(
+                copy_config.attack.poison_model,
+                params={
+                    **copy_config.attack.poison_model.params,
+                    "train": {
+                        **copy_config.attack.poison_model.params["train"],
+                        "epochs": int(copy_config.attack.poison_model.params["train"]["epochs"]) + 1,
+                    },
+                },
+            ),
+        ),
+    )
+    changed_poison_identity = build_pts_cem_shared_cache_identity(
+        changed_poison_config,
+        target_item=123,
+        fake_sessions_path=fake_sessions,
+        poison_model_path=poison_checkpoint,
+    )
+    assert copy_identity != changed_poison_identity
+
     other_target_identity = build_pts_cem_shared_cache_identity(
         copy_config,
         target_item=124,
         fake_sessions_path=fake_sessions,
-        poison_model_path=None,
+        poison_model_path=poison_checkpoint,
     )
     assert copy_identity != other_target_identity
 
@@ -397,10 +429,14 @@ def test_direct_cem_model_metadata_distinguishes_source_generator_and_surrogate(
     generated_metadata = _direct_cem_model_metadata(generated_config, target_item=123)
 
     assert copy_metadata["fake_session_generator_model"] is None
+    assert copy_metadata["direct_action_suffix_generator_model"] == "freqrec"
+    assert copy_metadata["direct_action_suffix_generator_seed"] == copy_config.seeds.victim_train_seed
     assert copy_metadata["cem_surrogate_model"] == "freqrec"
     assert "fake_session_generator_seed" not in copy_metadata
 
     assert generated_metadata["fake_session_generator_model"] == "freqrec"
+    assert generated_metadata["direct_action_suffix_generator_model"] == "freqrec"
+    assert generated_metadata["direct_action_suffix_generator_seed"] == generated_config.seeds.victim_train_seed
     assert generated_metadata["fake_session_generator_seed"] == generated_config.seeds.victim_train_seed
     assert (
         generated_metadata["fake_session_generator_seed_source"]
@@ -409,31 +445,16 @@ def test_direct_cem_model_metadata_distinguishes_source_generator_and_surrogate(
     assert generated_metadata["cem_surrogate_model"] == "freqrec"
 
 
-def test_copy_source_grouped_cem_does_not_request_freqrec_poison_runner(monkeypatch) -> None:
+def test_copy_source_direct_action_cem_requests_freqrec_suffix_poison_runner(monkeypatch) -> None:
     config = load_config(COPY_CONFIG)
-    calls = {"prepare": 0, "train_pairs": 0, "load_model": 0, "score_session": 0}
-
-    def fail_train_pairs(self, *args, **kwargs):
-        calls["train_pairs"] += 1
-        raise AssertionError("copy-source Direct CEM must not train a FreqRec poison runner")
-
-    def fail_load_model(self, *args, **kwargs):
-        calls["load_model"] += 1
-        raise AssertionError("copy-source Direct CEM must not load a FreqRec poison runner")
-
-    def fail_score_session(self, *args, **kwargs):
-        calls["score_session"] += 1
-        raise AssertionError("copy-source Direct CEM must not score a FreqRec poison runner")
+    calls = {"prepare": 0}
 
     def fake_prepare_shared_attack_artifacts(config_arg, *, run_type, require_poison_runner, config_path=None):
         del config_arg, run_type, config_path
         calls["prepare"] += 1
-        assert require_poison_runner is False
+        assert require_poison_runner is True
         raise RuntimeError("stop after Direct CEM poison-runner requirement check")
 
-    monkeypatch.setattr(FreqRecPoisonRunner, "train_pairs", fail_train_pairs)
-    monkeypatch.setattr(FreqRecPoisonRunner, "load_model", fail_load_model)
-    monkeypatch.setattr(FreqRecPoisonRunner, "score_session", fail_score_session)
     monkeypatch.setattr(
         "attack.pipeline.runs.run_pts_construction_cem.prepare_shared_attack_artifacts",
         fake_prepare_shared_attack_artifacts,
@@ -442,4 +463,4 @@ def test_copy_source_grouped_cem_does_not_request_freqrec_poison_runner(monkeypa
     with pytest.raises(RuntimeError, match="stop after Direct CEM poison-runner requirement check"):
         run_pts_construction_grouped_cem(config, config_path=Path(COPY_CONFIG))
 
-    assert calls == {"prepare": 1, "train_pairs": 0, "load_model": 0, "score_session": 0}
+    assert calls == {"prepare": 1}

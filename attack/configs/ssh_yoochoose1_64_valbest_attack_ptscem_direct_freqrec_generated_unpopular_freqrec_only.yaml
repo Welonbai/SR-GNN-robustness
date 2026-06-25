@@ -129,7 +129,7 @@ victims:
       working_dir: /data2/welon/SR-GNN-robustness/third_party/freqrec
       device:
         use_gpu: true
-        gpu_id: "1"
+        gpu_id: "0"
       dataloader:
         num_workers: 0
 

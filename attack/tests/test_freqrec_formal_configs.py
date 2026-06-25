@@ -20,6 +20,7 @@ from attack.pipeline.runs.run_pts_construction_cem import (
 
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
+DIAGNOSTICS_CONFIG_DIR = CONFIG_DIR / "diagnostics"
 FORMAL_CONFIG_PAIRS = (
     ("ssh_diginetica_valbest_clean_sample10", "ssh_diginetica_valbest_clean_sample10_mdhg_only.yaml"),
     (
@@ -109,6 +110,12 @@ FREQREC_DIRECT_CEM_CONFIG_NAMES = {
     "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_freqrec_only.yaml",
     "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_generated_popular_freqrec_only.yaml",
     "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_generated_unpopular_freqrec_only.yaml",
+}
+FREQREC_DIRECT_CEM_SMOKE_CONFIG_NAMES = {
+    "diginetica_smoke_ptscem_direct_freqrec_surrogate_copy_source.yaml",
+    "diginetica_smoke_ptscem_direct_freqrec_generated.yaml",
+    "yoochoose1_64_smoke_ptscem_direct_freqrec_surrogate_copy_source.yaml",
+    "yoochoose1_64_smoke_ptscem_direct_freqrec_generated.yaml",
 }
 
 
@@ -208,6 +215,102 @@ def test_freqrec_formal_config_uses_fixed_epoch_ssh_profile(
     expected_gpu = "1" if "unpopular" in stem else "0"
     assert runtime["device"]["gpu_id"] == expected_gpu
     assert runtime["dataloader"]["num_workers"] == 0
+
+
+@pytest.mark.parametrize("config_name", sorted(FREQREC_DIRECT_CEM_CONFIG_NAMES))
+def test_freqrec_direct_cem_formal_configs_use_tmux_visible_gpu_zero(
+    config_name: str,
+) -> None:
+    config = load_config(CONFIG_DIR / config_name)
+    assert config.victims.runtime["freqrec"]["device"]["gpu_id"] == "0"
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    sorted(
+        name
+        for name in FREQREC_DIRECT_CEM_CONFIG_NAMES
+        if "surrogate_copy_source" in name
+    ),
+)
+def test_freqrec_direct_cem_copy_source_configs_use_freqrec_suffix_generator(
+    config_name: str,
+) -> None:
+    config = load_config(CONFIG_DIR / config_name)
+    assert (
+        config.attack.fake_session_source.type
+        == "train_template_clean_exact_length_matched"
+    )
+    assert config.attack.poison_model.name == "freqrec"
+    assert config.attack.poison_model.params["train"]["epochs"] == 18
+    assert (
+        config.attack.pts_construction.cem.surrogate_model.name
+        == "freqrec"
+    )
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    sorted(name for name in FREQREC_DIRECT_CEM_CONFIG_NAMES if "generated" in name),
+)
+def test_freqrec_direct_cem_generated_configs_use_freqrec_generator_and_surrogate(
+    config_name: str,
+) -> None:
+    config = load_config(CONFIG_DIR / config_name)
+    assert config.attack.fake_session_source.type == "poison_model_generated"
+    assert config.attack.poison_model.name == "freqrec"
+    assert (
+        config.attack.pts_construction.cem.surrogate_model.name
+        == "freqrec"
+    )
+
+
+@pytest.mark.parametrize("config_name", sorted(FREQREC_DIRECT_CEM_SMOKE_CONFIG_NAMES))
+def test_freqrec_direct_cem_smoke_configs_use_tmux_visible_gpu_zero(
+    config_name: str,
+) -> None:
+    config = load_config(DIAGNOSTICS_CONFIG_DIR / config_name)
+    assert config.victims.runtime["freqrec"]["device"]["gpu_id"] == "0"
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    sorted(
+        name
+        for name in FREQREC_DIRECT_CEM_SMOKE_CONFIG_NAMES
+        if "surrogate_copy_source" in name
+    ),
+)
+def test_freqrec_direct_cem_smoke_copy_source_uses_freqrec_suffix_generator(
+    config_name: str,
+) -> None:
+    config = load_config(DIAGNOSTICS_CONFIG_DIR / config_name)
+    assert (
+        config.attack.fake_session_source.type
+        == "train_template_clean_exact_length_matched"
+    )
+    assert config.attack.poison_model.name == "freqrec"
+    assert config.attack.poison_model.params["train"]["epochs"] == 1
+    assert (
+        config.attack.pts_construction.cem.surrogate_model.name
+        == "freqrec"
+    )
+
+
+@pytest.mark.parametrize(
+    "config_name",
+    sorted(name for name in FREQREC_DIRECT_CEM_SMOKE_CONFIG_NAMES if "generated" in name),
+)
+def test_freqrec_direct_cem_smoke_generated_uses_freqrec_generator_and_surrogate(
+    config_name: str,
+) -> None:
+    config = load_config(DIAGNOSTICS_CONFIG_DIR / config_name)
+    assert config.attack.fake_session_source.type == "poison_model_generated"
+    assert config.attack.poison_model.name == "freqrec"
+    assert (
+        config.attack.pts_construction.cem.surrogate_model.name
+        == "freqrec"
+    )
 
 
 @pytest.mark.parametrize("dataset", ("diginetica", "yoochoose1_64"))

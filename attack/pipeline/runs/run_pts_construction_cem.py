@@ -106,7 +106,9 @@ from attack.pts.direct_action_executor import (
 )
 from attack.pts.grouping import SuffixLengthBucket
 from attack.pts.specs import (
+    CONSUME_ONE_GENERATE_ACTION_NAME,
     PTSConstructionSpec,
+    REGENERATE_RESIDUAL_SUFFIX_ACTION_NAME,
     get_default_pts_v1_specs,
     lookup_spec_by_name,
 )
@@ -181,9 +183,7 @@ def run_pts_construction_grouped_cem(
     _validate_pts_construction_run_config(config)
 
     run_type = _pts_construction_run_type(config)
-    require_poison_runner = (
-        config.attack.fake_session_source.type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
-    )
+    require_poison_runner = _pts_construction_requires_poison_runner(config)
     shared = prepare_shared_attack_artifacts(
         config,
         run_type=run_type,
@@ -1274,9 +1274,11 @@ def build_pts_cem_shared_cache_identity(
     split_config = config.data.canonical_split
     fake_source_type = config.attack.fake_session_source.type
     uses_generator_model = fake_source_type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
+    uses_suffix_generator_model = _pts_construction_requires_suffix_generator(config)
+    uses_poison_runner = bool(uses_generator_model or uses_suffix_generator_model)
     poison_checkpoint_identity = (
         _file_sha1_identity(poison_model_path)
-        if uses_generator_model and poison_model_path is not None and Path(poison_model_path).exists()
+        if uses_poison_runner and poison_model_path is not None and Path(poison_model_path).exists()
         else None
     )
     identity: dict[str, object] = {
@@ -1300,6 +1302,7 @@ def build_pts_cem_shared_cache_identity(
             "generation_identity": shared_attack_artifact_key_payload(
                 config,
                 run_type=_pts_construction_run_type(config),
+                require_poison_runner=uses_poison_runner,
             ),
         },
         "fake_session_source": {
@@ -1308,6 +1311,9 @@ def build_pts_cem_shared_cache_identity(
                 config.attack.poison_model.name if uses_generator_model else None
             ),
         },
+        "direct_action_suffix_generator_model": (
+            config.attack.poison_model.name if uses_suffix_generator_model else None
+        ),
         "pts_construction": _pts_construction_shared_identity_payload(
             config,
             target_item=int(target_item),
@@ -1347,10 +1353,19 @@ def build_pts_cem_shared_cache_identity(
             target_item=int(target_item),
         ),
     }
-    if uses_generator_model:
+    if uses_poison_runner:
         identity["poison_model"] = {
             "key_payload": poison_model_key_payload(config),
             "checkpoint_identity": poison_checkpoint_identity,
+            "role": (
+                "base_fake_session_and_direct_action_suffix_generator"
+                if uses_generator_model and uses_suffix_generator_model
+                else (
+                    "base_fake_session_generator"
+                    if uses_generator_model
+                    else "direct_action_suffix_generator"
+                )
+            ),
         }
         if config.attack.poison_model.name == "freqrec":
             identity["poison_model"].update(freqrec_surrogate_identity_extra())
@@ -1361,6 +1376,26 @@ def build_pts_cem_shared_cache_identity(
                 "configured_victim_train_seed_shared_poison_model"
             )
     return identity
+
+
+def _pts_construction_requires_poison_runner(config: Config) -> bool:
+    return bool(
+        config.attack.fake_session_source.type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
+        or _pts_construction_requires_suffix_generator(config)
+    )
+
+
+def _pts_construction_requires_suffix_generator(config: Config) -> bool:
+    pts_config = _require_pts_config(config)
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM:
+        return True
+    if pts_config.method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1:
+        enabled = set(pts_config.actions.enabled)
+        return bool(
+            REGENERATE_RESIDUAL_SUFFIX_ACTION_NAME in enabled
+            or CONSUME_ONE_GENERATE_ACTION_NAME in enabled
+        )
+    return False
 
 
 def _pts_construction_shared_identity_payload(
@@ -3376,10 +3411,16 @@ def _direct_cem_model_metadata(config: Config, *, target_item: int) -> dict[str,
         if source_type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
         else None
     )
+    suffix_generator_model = (
+        config.attack.poison_model.name
+        if _pts_construction_requires_suffix_generator(config)
+        else None
+    )
     surrogate_model = _cem_surrogate_model_name(config)
     payload: dict[str, object] = {
         "fake_session_source": source_type,
         "fake_session_generator_model": generator_model,
+        "direct_action_suffix_generator_model": suffix_generator_model,
         "cem_surrogate_model": surrogate_model,
         "cem_surrogate_seed": int(
             resolve_pts_cem_surrogate_effective_seed(
@@ -3398,7 +3439,22 @@ def _direct_cem_model_metadata(config: Config, *, target_item: int) -> dict[str,
                 ),
             }
         )
-    if generator_model == "freqrec" or surrogate_model == "freqrec":
+    if suffix_generator_model == "freqrec":
+        payload.update(
+            {
+                "direct_action_suffix_generator_seed": int(
+                    config.seeds.victim_train_seed
+                ),
+                "direct_action_suffix_generator_seed_source": (
+                    "configured_victim_train_seed_shared_poison_model"
+                ),
+            }
+        )
+    if (
+        generator_model == "freqrec"
+        or suffix_generator_model == "freqrec"
+        or surrogate_model == "freqrec"
+    ):
         payload.update(freqrec_surrogate_identity_extra())
     return payload
 
