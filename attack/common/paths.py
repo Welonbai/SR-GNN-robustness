@@ -459,6 +459,11 @@ def attack_key_payload(
         payload["attack"][
             "fake_session_source"
         ] = _train_template_fake_session_source_identity_payload(config)
+        if run_type in {
+            PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+        }:
+            payload["attack"].pop("poison_model", None)
     if run_type in _TARGET_AWARE_CANDIDATE_POOL_RUN_TYPES:
         payload["attack"]["carrier_selection"] = carrier_selection_identity_payload(config)
     if run_type in _POSITION_OPT_RUNTIME_RUN_TYPES:

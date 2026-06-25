@@ -1385,6 +1385,43 @@ class PTSCEMSurrogateRetrainRuntimeConfig:
 
 
 @dataclass(frozen=True)
+class PTSCEMSurrogateModelRuntimeConfig:
+    name: str = "srgnn"
+    params: Mapping[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        context = "attack.pts_construction.cem.surrogate_model"
+        name = _as_str(self.name, f"{context}.name").strip().lower()
+        if name not in {"srgnn", "freqrec"}:
+            raise ValueError(f"{context}.name must be 'srgnn' or 'freqrec'.")
+        params = self.params
+        if params is None:
+            normalized_params: dict[str, Any] | None = None
+        else:
+            params_mapping = _as_mapping(params, f"{context}.params")
+            train = _as_mapping(
+                _require(params_mapping, "train", f"{context}.params"),
+                f"{context}.params.train",
+            )
+            if name == "srgnn":
+                normalized_train = _normalize_srgnn_train(
+                    train,
+                    f"{context}.params.train",
+                )
+            else:
+                normalized_train = _normalize_freqrec_train(
+                    train,
+                    f"{context}.params.train",
+                )
+            normalized_params = {
+                **_normalize_primitive(params_mapping, f"{context}.params"),
+                "train": normalized_train,
+            }
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "params", normalized_params)
+
+
+@dataclass(frozen=True)
 class PTSCEMRuntimeConfig:
     iterations: int = 3
     population_schedule: tuple[int, ...] | None = (16, 8, 8)
@@ -1404,6 +1441,9 @@ class PTSCEMRuntimeConfig:
     )
     surrogate_retrain: PTSCEMSurrogateRetrainRuntimeConfig = field(
         default_factory=PTSCEMSurrogateRetrainRuntimeConfig
+    )
+    surrogate_model: PTSCEMSurrogateModelRuntimeConfig = field(
+        default_factory=PTSCEMSurrogateModelRuntimeConfig
     )
 
     def __post_init__(self) -> None:
@@ -1472,6 +1512,11 @@ class PTSCEMRuntimeConfig:
             PTSCEMSurrogateRetrainRuntimeConfig,
             "attack.pts_construction.cem.surrogate_retrain",
         )
+        surrogate_model = _coerce_pts_dataclass(
+            self.surrogate_model,
+            PTSCEMSurrogateModelRuntimeConfig,
+            "attack.pts_construction.cem.surrogate_model",
+        )
         seed_source = _as_str(
             self.seed_source,
             "attack.pts_construction.cem.seed_source",
@@ -1511,6 +1556,7 @@ class PTSCEMRuntimeConfig:
             epoch_reward_diagnostics,
         )
         object.__setattr__(self, "surrogate_retrain", surrogate_retrain)
+        object.__setattr__(self, "surrogate_model", surrogate_model)
         object.__setattr__(self, "seed_source", seed_source)
         object.__setattr__(self, "candidate_seed_stride", candidate_seed_stride)
         object.__setattr__(self, "save_top_k_candidates", save_top_k_candidates)
@@ -3483,8 +3529,8 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
         _require(poison_model, "name", "attack.poison_model"),
         "attack.poison_model.name",
     ).lower()
-    if poison_model_name != "srgnn":
-        raise ValueError("attack.poison_model.name must be 'srgnn' for Batch 1.")
+    if poison_model_name not in {"srgnn", "freqrec"}:
+        raise ValueError("attack.poison_model.name must be 'srgnn' or 'freqrec'.")
 
     normalized = {
         "size": _as_float(_require(attack, "size", "attack"), "attack.size"),
@@ -4151,6 +4197,12 @@ def _normalize_poison_model_params(
         return {
             **normalized,
             "train": _normalize_srgnn_train(train, f"{context}.train"),
+        }
+    if model_name == "freqrec":
+        train = _as_mapping(_require(normalized, "train", context), f"{context}.train")
+        return {
+            **normalized,
+            "train": _normalize_freqrec_train(train, f"{context}.train"),
         }
     raise ValueError(f"Unsupported poison model: {model_name}")
 
@@ -5180,6 +5232,7 @@ __all__ = [
     "PTSCEMEpochRewardDiagnosticsRuntimeConfig",
     "PTSCEMInitRuntimeConfig",
     "PTSCEMRuntimeConfig",
+    "PTSCEMSurrogateModelRuntimeConfig",
     "PTSCEMResamplingRuntimeConfig",
     "PTSCEMSamplerRuntimeConfig",
     "PTSCEMSurrogateRetrainRuntimeConfig",

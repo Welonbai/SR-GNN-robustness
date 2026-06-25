@@ -58,6 +58,7 @@ from attack.data.target_selector import (
 )
 from attack.generation.fake_session_generator import FakeSessionGenerator
 from attack.generation.fake_session_parameter_sampler import FakeSessionParameterSampler
+from attack.models.poison.freqrec_poison_runner import FreqRecPoisonRunner
 from attack.models.poison.srgnn_poison_runner import SRGNNPoisonRunner
 from attack.models.srgnn_validation_training import (
     srgnn_validation_train_history_extra,
@@ -1088,7 +1089,44 @@ def _load_or_train_poison_runner(
     *,
     shared_paths: dict[str, Path],
     export_paths: dict[str, Path],
-) -> SRGNNPoisonRunner:
+    clean_sessions: list[list[int]] | None = None,
+    clean_labels: list[int] | None = None,
+    item_count: int | None = None,
+    seed: int | None = None,
+) -> Any:
+    if config.attack.poison_model.name == "freqrec":
+        if clean_sessions is None or clean_labels is None or item_count is None or seed is None:
+            raise ValueError("FreqRec poison runner requires clean pairs, item_count, and seed.")
+        runner = FreqRecPoisonRunner(config, item_count=int(item_count), seed=int(seed))
+        runner.build_model()
+        if load_poison_model(runner, shared_paths["poison_model"]):
+            print(f"Loaded FreqRec poison model checkpoint from {shared_paths['poison_model']}")
+            _write_poison_model_identity(config, shared_paths=shared_paths)
+            return runner
+        train_config = config.attack.poison_model.params["train"]
+        print(
+            "No FreqRec poison model checkpoint found. "
+            f"Training new poison model for {int(train_config['epochs'])} epochs."
+        )
+        runner.train_pairs(
+            clean_sessions,
+            clean_labels,
+            epochs=int(train_config["epochs"]),
+        )
+        save_poison_model(runner, shared_paths["poison_model"])
+        _write_poison_model_identity(config, shared_paths=shared_paths)
+        if runner.train_loss_history:
+            save_train_history(
+                shared_paths["poison_train_history"],
+                role="poison",
+                model="freqrec",
+                epochs=len(runner.train_loss_history),
+                train_loss=runner.train_loss_history,
+                valid_loss=[None] * len(runner.train_loss_history),
+                notes="FreqRec poison model trained in-process on canonical prefix-label pairs.",
+            )
+        return runner
+
     poison_train_config = _poison_train_config(config)
     configured_poison_epochs = int(poison_train_config["epochs"])
     runner = SRGNNPoisonRunner(config)
@@ -1216,6 +1254,7 @@ def prepare_shared_attack_artifacts(
     stats = compute_session_stats(canonical_dataset.train_sub)
     clean_prefixes, clean_labels = build_clean_pairs(canonical_dataset)
     denominator_count = int(len(clean_prefixes))
+    item_count = _canonical_item_count(canonical_dataset)
 
     export_dir = shared_paths["attack_shared_dir"] / "export"
     export_paths = _export_srg_nn_dataset(
@@ -1240,6 +1279,10 @@ def prepare_shared_attack_artifacts(
                 config,
                 shared_paths=shared_paths,
                 export_paths=export_paths,
+                clean_sessions=clean_prefixes,
+                clean_labels=clean_labels,
+                item_count=item_count,
+                seed=int(config.seeds.victim_train_seed),
             )
             poison_runner_reason = "poison_model_generated_base_source"
             sampler = FakeSessionParameterSampler(stats)
@@ -1333,6 +1376,10 @@ def prepare_shared_attack_artifacts(
             config,
             shared_paths=shared_paths,
             export_paths=export_paths,
+            clean_sessions=clean_prefixes,
+            clean_labels=clean_labels,
+            item_count=item_count,
+            seed=int(config.seeds.victim_train_seed),
         )
         if source_type == FAKE_SESSION_SOURCE_TRAIN_TEMPLATE_CLEAN_EXACT_LENGTH_MATCHED:
             poison_runner_reason = "required_by_downstream_generated_suffix"
@@ -1410,6 +1457,34 @@ def prepare_lightweight_attack_artifacts(
         fake_session_count=fake_count,
         shared_paths=shared_paths,
     )
+
+
+def _canonical_item_count(canonical_dataset: CanonicalDataset) -> int:
+    candidates: list[int] = []
+    if canonical_dataset.item_map:
+        candidates.append(len(canonical_dataset.item_map))
+    counts = canonical_dataset.metadata.get("counts")
+    if isinstance(counts, Mapping) and counts.get("items") is not None:
+        candidates.append(int(counts["items"]))
+    if canonical_dataset.metadata.get("item_count") is not None:
+        candidates.append(int(canonical_dataset.metadata["item_count"]))
+    if not candidates:
+        max_item = 0
+        for split in (
+            canonical_dataset.train_sub,
+            canonical_dataset.valid,
+            canonical_dataset.test,
+        ):
+            for session in split:
+                if session:
+                    max_item = max(max_item, max(int(item) for item in session))
+        if max_item > 0:
+            candidates.append(max_item)
+    if not candidates or any(value <= 0 for value in candidates):
+        raise ValueError("Unable to resolve positive canonical item_count.")
+    if len(set(candidates)) != 1:
+        raise ValueError(f"Canonical item_count sources disagree: {candidates}.")
+    return int(candidates[0])
 
 
 def _train_template_source_summary(

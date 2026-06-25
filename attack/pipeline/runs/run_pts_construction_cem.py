@@ -16,6 +16,7 @@ if __package__ is None or __package__ == "":
 
 from attack.common.config import (
     Config,
+    FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED,
     PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
     PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM,
     PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
@@ -47,6 +48,9 @@ from attack.common.paths import (
 from attack.data.poisoned_dataset_builder import build_poisoned_dataset
 from attack.inner_train.srgnn_full_retrain_fixed_last import (
     SRGNNFullRetrainFixedLastInnerTrainer,
+)
+from attack.inner_train.freqrec_full_retrain_fixed_last import (
+    FreqRecFullRetrainFixedLastInnerTrainer,
 )
 from attack.inner_train.srgnn_full_retrain_validation_best import (
     SRGNNFullRetrainValidationBestInnerTrainer,
@@ -107,6 +111,10 @@ from attack.pts.specs import (
     lookup_spec_by_name,
 )
 from attack.surrogate.srgnn_backend import SRGNNBackend
+from attack.surrogate.freqrec_backend import (
+    FreqRecBackend,
+    freqrec_surrogate_identity_extra,
+)
 from pytorch_code.utils import Data
 
 
@@ -173,10 +181,13 @@ def run_pts_construction_grouped_cem(
     _validate_pts_construction_run_config(config)
 
     run_type = _pts_construction_run_type(config)
+    require_poison_runner = (
+        config.attack.fake_session_source.type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
+    )
     shared = prepare_shared_attack_artifacts(
         config,
         run_type=run_type,
-        require_poison_runner=True,
+        require_poison_runner=require_poison_runner,
         config_path=config_path,
     )
     context = RunContext.from_shared(shared)
@@ -319,7 +330,11 @@ def run_pts_construction_grouped_cem(
                 f"{_LOG_PREFIX} target={int(target_item)} run CEM"
             )
 
-        evaluator_context = _build_candidate_evaluator_context(config, shared)
+        evaluator_context = _build_candidate_evaluator_context(
+            config,
+            shared,
+            target_item=int(target_item),
+        )
         if pts_config.method == PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1:
             trainer = PTSGroupedCEMTrainer(
                 cem_config=cem_config,
@@ -574,8 +589,37 @@ def _validate_pts_construction_run_config(config: Config) -> None:
             "because victim append reuse depends on top_candidates/rank_1/sessions.json."
         )
     _resolve_pts_cem_base_seed(config)
-    _srgnn_candidate_train_config(config)
+    _cem_surrogate_train_config(config)
+    _validate_freqrec_direct_cem_setup(config)
     _validate_pts_epoch_reward_diagnostics_config(config)
+
+
+def _validate_freqrec_direct_cem_setup(config: Config) -> None:
+    pts_config = _require_pts_config(config)
+    if pts_config.cem.surrogate_model.name != "freqrec":
+        return
+    retrain = pts_config.cem.surrogate_retrain
+    if retrain.checkpoint_protocol != PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
+        raise ValueError("FreqRec Direct CEM supports only fixed_last surrogate retrain.")
+    if bool(retrain.validation_enabled) or retrain.reward_checkpoint != "last":
+        raise ValueError(
+            "FreqRec Direct CEM requires surrogate_retrain.validation_enabled=false "
+            "and reward_checkpoint=last."
+        )
+    if int(config.seeds.surrogate_train_seed) != int(config.seeds.victim_train_seed):
+        raise ValueError(
+            "FreqRec Direct CEM requires seeds.surrogate_train_seed == "
+            "seeds.victim_train_seed."
+        )
+    if (
+        config.attack.fake_session_source.type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
+        and config.attack.poison_model.name == "freqrec"
+        and int(config.seeds.victim_train_seed) != int(config.seeds.surrogate_train_seed)
+    ):
+        raise ValueError(
+            "Generated FreqRec Direct CEM requires FreqRec poison, surrogate, "
+            "and victim seeds to be aligned."
+        )
 
 
 def _build_pts_specs_from_config(
@@ -701,9 +745,10 @@ def resolve_pts_cem_surrogate_effective_seed(
     *,
     target_item: int,
 ) -> int:
+    surrogate_name = _cem_surrogate_model_name(config)
     return victim_effective_train_seed(
         config,
-        victim_name=PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME,
+        victim_name=surrogate_name,
         run_type=_pts_construction_run_type(config),
         target_item=int(target_item),
     )
@@ -718,20 +763,26 @@ def pts_cem_surrogate_seed_alignment_metadata(
         config,
         target_item=int(target_item),
     )
-    return {
+    identity: dict[str, object] = {
         "target_item": int(target_item),
         "pts_cem_surrogate_seed_alignment_mode": (
             PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE
         ),
         "pts_cem_surrogate_seed_alignment_target_victim_name": (
-            PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME
+            _cem_surrogate_model_name(config)
         ),
         "configured_surrogate_train_seed": int(config.seeds.surrogate_train_seed),
         "configured_victim_train_seed": int(config.seeds.victim_train_seed),
         "resolved_surrogate_effective_seed": int(resolved_seed),
         "resolved_victim_effective_seed": int(resolved_seed),
         "surrogate_victim_seed_aligned": True,
+        "cem_surrogate_model": _cem_surrogate_model_name(config),
+        "cem_surrogate_seed": int(resolved_seed),
+        "cem_surrogate_seed_source": (
+            f"matched_to_victim_{_cem_surrogate_model_name(config)}"
+        ),
     }
+    return identity
 
 
 def pts_cem_surrogate_retrain_metadata(config: Config) -> dict[str, object]:
@@ -823,8 +874,9 @@ def _pts_cem_seed_alignment_identity(config: Config) -> dict[str, object]:
             PTS_CEM_SURROGATE_SEED_ALIGNMENT_MODE
         ),
         "pts_cem_surrogate_seed_alignment_target_victim_name": (
-            PTS_CEM_SURROGATE_SEED_ALIGNMENT_TARGET_VICTIM_NAME
+            _cem_surrogate_model_name(config)
         ),
+        "cem_surrogate_model": _cem_surrogate_model_name(config),
         "configured_surrogate_train_seed": int(config.seeds.surrogate_train_seed),
         "configured_victim_train_seed": int(config.seeds.victim_train_seed),
     }
@@ -1220,12 +1272,14 @@ def build_pts_cem_shared_cache_identity(
                 f"{fake_sessions_path}"
             )
     split_config = config.data.canonical_split
+    fake_source_type = config.attack.fake_session_source.type
+    uses_generator_model = fake_source_type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
     poison_checkpoint_identity = (
         _file_sha1_identity(poison_model_path)
-        if poison_model_path is not None and Path(poison_model_path).exists()
+        if uses_generator_model and poison_model_path is not None and Path(poison_model_path).exists()
         else None
     )
-    return {
+    identity: dict[str, object] = {
         "schema_version": PTS_CEM_SHARED_CACHE_SCHEMA_VERSION,
         "artifact_schema_version": PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION,
         "run_type": _pts_construction_run_type(config),
@@ -1248,9 +1302,11 @@ def build_pts_cem_shared_cache_identity(
                 run_type=_pts_construction_run_type(config),
             ),
         },
-        "poison_model": {
-            "key_payload": poison_model_key_payload(config),
-            "checkpoint_identity": poison_checkpoint_identity,
+        "fake_session_source": {
+            "type": fake_source_type,
+            "generator_model": (
+                config.attack.poison_model.name if uses_generator_model else None
+            ),
         },
         "pts_construction": _pts_construction_shared_identity_payload(
             config,
@@ -1258,8 +1314,8 @@ def build_pts_cem_shared_cache_identity(
             fake_sessions_path=fake_sessions_path,
         ),
         "surrogate_reward": {
-            "surrogate_model": "srgnn",
-            "surrogate_train_params": _srgnn_candidate_train_identity_config(config),
+            "surrogate_model": _cem_surrogate_model_name(config),
+            "surrogate_train_params": _cem_surrogate_train_identity_config(config),
             "surrogate_train_identity_excluded_params": sorted(
                 _SURROGATE_TRAIN_IDENTITY_EXCLUDED_PARAM_KEYS
             ),
@@ -1280,12 +1336,31 @@ def build_pts_cem_shared_cache_identity(
                 "targeted_metrics": list(config.evaluation.targeted_metrics),
                 "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
             },
+            **(
+                freqrec_surrogate_identity_extra()
+                if _cem_surrogate_model_name(config) == "freqrec"
+                else {}
+            ),
         },
         "seed_alignment": pts_cem_surrogate_seed_alignment_metadata(
             config,
             target_item=int(target_item),
         ),
     }
+    if uses_generator_model:
+        identity["poison_model"] = {
+            "key_payload": poison_model_key_payload(config),
+            "checkpoint_identity": poison_checkpoint_identity,
+        }
+        if config.attack.poison_model.name == "freqrec":
+            identity["poison_model"].update(freqrec_surrogate_identity_extra())
+            identity["poison_model"]["configured_seed"] = int(
+                config.seeds.victim_train_seed
+            )
+            identity["poison_model"]["seed_source"] = (
+                "configured_victim_train_seed_shared_poison_model"
+            )
+    return identity
 
 
 def _pts_construction_shared_identity_payload(
@@ -2543,12 +2618,37 @@ def _existing_pts_artifact_paths(artifact_dir: Path) -> dict[str, str]:
 def _build_candidate_evaluator_context(
     config: Config,
     shared: SharedAttackArtifacts,
+    *,
+    target_item: int | None = None,
 ) -> dict[str, object]:
-    train_config = _srgnn_candidate_train_config(config)
+    resolved_target_item = 0 if target_item is None else int(target_item)
+    train_config = _cem_surrogate_train_config(config)
     validation_sessions, validation_labels = _resolve_validation_pairs(shared)
     protocol = _pts_cem_surrogate_retrain_protocol(config)
     retrain_epochs = int(train_config["epochs"])
-    if protocol == PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST:
+    surrogate_name = _cem_surrogate_model_name(config)
+    if surrogate_name == "freqrec":
+        if protocol != PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
+            raise ValueError(
+                "FreqRec Direct CEM supports only fixed_last surrogate retrain."
+            )
+        inner_trainer = FreqRecFullRetrainFixedLastInnerTrainer(
+            train_config=train_config,
+            max_epochs=retrain_epochs,
+            log_prefix="[pts-cem:freqrec-candidate-retrain-fixed-last]",
+            log_epochs=False,
+        )
+        validation_eval_data = None
+        backend = FreqRecBackend(
+            config,
+            train_config=train_config,
+            item_count=_shared_item_count(shared),
+            seed=resolve_pts_cem_surrogate_effective_seed(
+                config,
+                target_item=int(resolved_target_item),
+            ),
+        )
+    elif protocol == PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST:
         print(
             f"{_LOG_PREFIX} PTS-CEM surrogate validation_best mode: using "
             "per-epoch validation metrics and best checkpoint selection."
@@ -2561,6 +2661,7 @@ def _build_candidate_evaluator_context(
             log_epochs=False,
         )
         validation_eval_data = Data((validation_sessions, validation_labels), shuffle=False)
+        backend = SRGNNBackend(config, base_dir=Path.cwd(), train_config=train_config)
     elif protocol == PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
         print(
             f"{_LOG_PREFIX} PTS-CEM surrogate fixed_last mode: training for "
@@ -2574,17 +2675,29 @@ def _build_candidate_evaluator_context(
             log_epochs=False,
         )
         validation_eval_data = None
+        backend = SRGNNBackend(config, base_dir=Path.cwd(), train_config=train_config)
     else:
         raise ValueError(f"Unsupported PTS-CEM surrogate retrain protocol: {protocol!r}")
-    return {
-        "backend": SRGNNBackend(config, base_dir=Path.cwd(), train_config=train_config),
+    identity: dict[str, object] = {
+        "backend": backend,
         "inner_trainer": inner_trainer,
         "validation_sessions": validation_sessions,
         "validation_labels": validation_labels,
         "validation_eval_data": validation_eval_data,
         "train_config": train_config,
         "shared": shared,
+        "surrogate_model": surrogate_name,
+        "cem_surrogate_model": surrogate_name,
+        "surrogate_train_identity": _cem_surrogate_train_identity_config(config),
+        "surrogate_retrain_protocol": protocol,
+        "seed_alignment": pts_cem_surrogate_seed_alignment_metadata(
+            config,
+            target_item=int(resolved_target_item),
+        ),
     }
+    if surrogate_name == "freqrec":
+        identity.update(freqrec_surrogate_identity_extra())
+    return identity
 
 
 def _evaluate_candidate_retrain_validation_reward(
@@ -2605,15 +2718,9 @@ def _evaluate_candidate_retrain_validation_reward(
     inner_trainer = evaluator_context["inner_trainer"]
     validation_sessions = evaluator_context["validation_sessions"]
     validation_eval_data = evaluator_context["validation_eval_data"]
-    if not isinstance(backend, SRGNNBackend):
-        raise TypeError("PTS-CEM evaluator context has invalid SRGNNBackend.")
-    if not isinstance(
-        inner_trainer,
-        (
-            SRGNNFullRetrainValidationBestInnerTrainer,
-            SRGNNFullRetrainFixedLastInnerTrainer,
-        ),
-    ):
+    if not hasattr(backend, "score_target"):
+        raise TypeError("PTS-CEM evaluator context has invalid surrogate backend.")
+    if not hasattr(inner_trainer, "run"):
         raise TypeError("PTS-CEM evaluator context has invalid inner trainer.")
 
     pts_config = _require_pts_config(config)
@@ -2685,12 +2792,17 @@ def _evaluate_candidate_retrain_validation_reward(
     )
     retrain_seconds = time.perf_counter() - retrain_start
 
-    reward, reward_metrics, score_target_seconds = _score_candidate_target_reward(
-        backend=backend,
-        model=inner_result.model,
-        validation_sessions=validation_sessions,
-        target_item=int(target_item),
-    )
+    try:
+        reward, reward_metrics, score_target_seconds = _score_candidate_target_reward(
+            backend=backend,
+            model=inner_result.model,
+            validation_sessions=validation_sessions,
+            target_item=int(target_item),
+        )
+    finally:
+        cleanup = getattr(inner_result.model, "cleanup", None)
+        if callable(cleanup):
+            cleanup()
     candidate_total_seconds = time.perf_counter() - candidate_start
     checkpoint_metadata = _candidate_checkpoint_metadata(inner_result.history)
     metadata: dict[str, object] = {
@@ -2807,7 +2919,7 @@ def _evaluate_candidate_retrain_validation_reward(
 
 def _score_candidate_target_reward(
     *,
-    backend: SRGNNBackend,
+    backend: object,
     model: object,
     validation_sessions: Sequence[Sequence[int]],
     target_item: int,
@@ -2893,6 +3005,12 @@ def _candidate_checkpoint_metadata(
 
 
 def _srgnn_candidate_train_config(config: Config) -> dict[str, Any]:
+    surrogate_model = _require_pts_config(config).cem.surrogate_model
+    if surrogate_model.name == "srgnn" and surrogate_model.params is not None:
+        train = surrogate_model.params.get("train")
+        if not isinstance(train, Mapping):
+            raise ValueError("attack.pts_construction.cem.surrogate_model.params.train is required.")
+        return dict(train)
     victim_params = config.victims.params.get("srgnn")
     if not isinstance(victim_params, Mapping):
         raise ValueError("PTS-CEM Phase 3 requires victims.params.srgnn.")
@@ -2900,6 +3018,49 @@ def _srgnn_candidate_train_config(config: Config) -> dict[str, Any]:
     if not isinstance(train_config, Mapping):
         raise ValueError("PTS-CEM Phase 3 requires victims.params.srgnn.train.")
     return dict(train_config)
+
+
+def _cem_surrogate_model_name(config: Config) -> str:
+    return str(_require_pts_config(config).cem.surrogate_model.name)
+
+
+def _shared_item_count(shared: SharedAttackArtifacts) -> int:
+    candidates: list[int] = []
+    if shared.canonical_dataset.item_map:
+        candidates.append(len(shared.canonical_dataset.item_map))
+    counts = shared.canonical_dataset.metadata.get("counts")
+    if isinstance(counts, Mapping) and counts.get("items") is not None:
+        candidates.append(int(counts["items"]))
+    if shared.canonical_dataset.metadata.get("item_count") is not None:
+        candidates.append(int(shared.canonical_dataset.metadata["item_count"]))
+    if not candidates:
+        max_item = max(shared.stats.item_counts) if shared.stats.item_counts else 0
+        if max_item > 0:
+            candidates.append(int(max_item))
+    if not candidates or len(set(candidates)) != 1:
+        raise ValueError(f"Unable to resolve unique item_count for FreqRec: {candidates}.")
+    return int(candidates[0])
+
+
+def _cem_surrogate_train_config(config: Config) -> dict[str, Any]:
+    surrogate_model = _require_pts_config(config).cem.surrogate_model
+    if surrogate_model.name == "srgnn":
+        return _srgnn_candidate_train_config(config)
+    if surrogate_model.name == "freqrec":
+        params = surrogate_model.params
+        if not isinstance(params, Mapping):
+            raise ValueError(
+                "FreqRec Direct CEM requires "
+                "attack.pts_construction.cem.surrogate_model.params.train."
+            )
+        train = params.get("train")
+        if not isinstance(train, Mapping):
+            raise ValueError(
+                "FreqRec Direct CEM requires "
+                "attack.pts_construction.cem.surrogate_model.params.train."
+            )
+        return dict(train)
+    raise ValueError(f"Unsupported CEM surrogate model: {surrogate_model.name!r}")
 
 
 def _srgnn_candidate_train_identity_config(config: Config) -> dict[str, Any]:
@@ -2910,8 +3071,17 @@ def _srgnn_candidate_train_identity_config(config: Config) -> dict[str, Any]:
     }
 
 
+def _cem_surrogate_train_identity_config(config: Config) -> dict[str, Any]:
+    train_config = _cem_surrogate_train_config(config)
+    return {
+        key: value
+        for key, value in train_config.items()
+        if key not in _SURROGATE_TRAIN_IDENTITY_EXCLUDED_PARAM_KEYS
+    }
+
+
 def _resolved_pts_candidate_retrain_epochs(config: Config) -> int:
-    train_config = _srgnn_candidate_train_config(config)
+    train_config = _cem_surrogate_train_config(config)
     epochs = train_config.get("epochs")
     if isinstance(epochs, bool) or not isinstance(epochs, int):
         raise TypeError("victims.params.srgnn.train.epochs must be an integer.")
@@ -3088,6 +3258,7 @@ def _target_metadata(
         "pts_population_size": cem_config.population_size,
         **method_metadata,
         "pts_reward_target_summary": pts_config.reward.target_summary,
+        **_direct_cem_model_metadata(config, target_item=int(target_item)),
         "pts_candidate_retrain_seed": int(
             seed_alignment["resolved_surrogate_effective_seed"]
         ),
@@ -3164,6 +3335,7 @@ def _target_metadata_from_cache(
         "pts_population_size": cem_config.population_size,
         **method_metadata,
         "pts_reward_target_summary": pts_config.reward.target_summary,
+        **_direct_cem_model_metadata(config, target_item=int(target_item)),
         "pts_candidate_retrain_seed": int(
             seed_alignment["resolved_surrogate_effective_seed"]
         ),
@@ -3194,6 +3366,40 @@ def _target_metadata_from_cache(
             cached.complete_marker_path
         )
     _copy_cached_best_candidate_fields(payload, cached.metadata)
+    return payload
+
+
+def _direct_cem_model_metadata(config: Config, *, target_item: int) -> dict[str, object]:
+    source_type = config.attack.fake_session_source.type
+    generator_model = (
+        config.attack.poison_model.name
+        if source_type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
+        else None
+    )
+    surrogate_model = _cem_surrogate_model_name(config)
+    payload: dict[str, object] = {
+        "fake_session_source": source_type,
+        "fake_session_generator_model": generator_model,
+        "cem_surrogate_model": surrogate_model,
+        "cem_surrogate_seed": int(
+            resolve_pts_cem_surrogate_effective_seed(
+                config,
+                target_item=int(target_item),
+            )
+        ),
+        "cem_surrogate_seed_source": f"matched_to_victim_{surrogate_model}",
+    }
+    if generator_model == "freqrec":
+        payload.update(
+            {
+                "fake_session_generator_seed": int(config.seeds.victim_train_seed),
+                "fake_session_generator_seed_source": (
+                    "configured_victim_train_seed_shared_poison_model"
+                ),
+            }
+        )
+    if generator_model == "freqrec" or surrogate_model == "freqrec":
+        payload.update(freqrec_surrogate_identity_extra())
     return payload
 
 
