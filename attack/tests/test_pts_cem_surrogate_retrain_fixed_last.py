@@ -261,8 +261,16 @@ def test_candidate_evaluator_context_selects_protocol_specific_trainer(monkeypat
         lambda shared: ([[1, 2]], [3]),
     )
 
-    default_context = pts_runner._build_candidate_evaluator_context(config, shared)
-    fixed_context = pts_runner._build_candidate_evaluator_context(fixed_config, shared)
+    default_context = pts_runner._build_candidate_evaluator_context(
+        config,
+        shared,
+        target_item=3,
+    )
+    fixed_context = pts_runner._build_candidate_evaluator_context(
+        fixed_config,
+        shared,
+        target_item=3,
+    )
 
     assert isinstance(
         default_context["inner_trainer"],

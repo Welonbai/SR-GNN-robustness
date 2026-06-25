@@ -2619,9 +2619,9 @@ def _build_candidate_evaluator_context(
     config: Config,
     shared: SharedAttackArtifacts,
     *,
-    target_item: int | None = None,
+    target_item: int,
 ) -> dict[str, object]:
-    resolved_target_item = 0 if target_item is None else int(target_item)
+    resolved_target_item = int(target_item)
     train_config = _cem_surrogate_train_config(config)
     validation_sessions, validation_labels = _resolve_validation_pairs(shared)
     protocol = _pts_cem_surrogate_retrain_protocol(config)
