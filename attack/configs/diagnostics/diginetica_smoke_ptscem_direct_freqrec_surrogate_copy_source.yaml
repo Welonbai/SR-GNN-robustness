@@ -141,12 +141,12 @@ victims:
       train: *freqrec_train
   runtime:
     freqrec:
-      python_executable: "C:\\Users\\User\\anaconda3\\python.exe"
-      repo_root: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\freqrec"
-      working_dir: "D:\\code_SBR_robustness\\SR-GNN-robustness\\third_party\\freqrec"
+      python_executable: /data2/welon/miniconda3/envs/robustness/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/freqrec
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/freqrec
       device:
         use_gpu: true
-        gpu_id: "0"
+        gpu_id: "1"
       dataloader:
         num_workers: 0
 

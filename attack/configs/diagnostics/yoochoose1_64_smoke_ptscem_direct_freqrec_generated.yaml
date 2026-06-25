@@ -1,15 +1,15 @@
 experiment:
-  name: diagnostic_diginetica_smoke_ptscem_direct_freqrec_generated
+  name: diagnostic_yoochoose1_64_smoke_ptscem_direct_freqrec_generated
 
 data:
-  dataset_name: diginetica
+  dataset_name: yoochoose1_64
   split_protocol: unified
   poison_train_only: true
   canonical_split:
     min_item_count: 5
     min_session_len: 2
     valid_ratio: 0.1
-    test_days: 7
+    test_days: 1
 
 seeds:
   fake_session_seed: 20260405
@@ -89,6 +89,10 @@ attack:
         reward_checkpoint: last
       epoch_reward_diagnostics:
         enabled: false
+        epochs: [3, 4, 5, 6, 7]
+        include_final_epoch: true
+        write_candidate_epoch_metrics: true
+        write_ranking_summary: true
     reward:
       target_summary: raw_lowk_mrr_recall_10_20
       enable_gt_penalty: false

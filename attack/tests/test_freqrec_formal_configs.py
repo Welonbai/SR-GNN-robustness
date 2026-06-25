@@ -105,6 +105,10 @@ FREQREC_DIRECT_CEM_CONFIG_NAMES = {
     "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_freqrec_only.yaml",
     "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_generated_popular_freqrec_only.yaml",
     "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_generated_unpopular_freqrec_only.yaml",
+    "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_popular_freqrec_only.yaml",
+    "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_freqrec_only.yaml",
+    "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_generated_popular_freqrec_only.yaml",
+    "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_generated_unpopular_freqrec_only.yaml",
 }
 
 
@@ -127,7 +131,7 @@ def test_complete_formal_freqrec_matrix_exists() -> None:
         path.name for path in CONFIG_DIR.glob("ssh_*_freqrec_only.yaml")
     }
     assert actual == expected
-    assert len(actual) == 24
+    assert len(actual) == 28
 
 
 @pytest.mark.parametrize(("stem", "source_name"), FORMAL_CONFIG_PAIRS)

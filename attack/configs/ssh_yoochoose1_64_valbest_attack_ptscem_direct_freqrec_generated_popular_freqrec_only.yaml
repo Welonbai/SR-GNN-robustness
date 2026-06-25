@@ -1,15 +1,15 @@
 experiment:
-  name: diagnostic_diginetica_smoke_ptscem_direct_freqrec_generated
+  name: ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_generated_popular_freqrec_only
 
 data:
-  dataset_name: diginetica
+  dataset_name: yoochoose1_64
   split_protocol: unified
   poison_train_only: true
   canonical_split:
     min_item_count: 5
     min_session_len: 2
     valid_ratio: 0.1
-    test_days: 7
+    test_days: 1
 
 seeds:
   fake_session_seed: 20260405
@@ -29,7 +29,7 @@ attack:
     params:
       train: &freqrec_train
         model_type: freqrec
-        epochs: 1
+        epochs: 18
         batch_size: 512
         lr: 0.0005
         max_seq_length: 50
@@ -67,9 +67,9 @@ attack:
       parameterization: direct_action_mlp_h2
       length_feature: z_score
     cem:
-      iterations: 1
-      population_schedule: [2]
-      elite_ratio: 0.5
+      iterations: 3
+      population_schedule: [16, 8, 8]
+      elite_ratio: 0.25
       sampler:
         type: gaussian
         concentration_scale: 20.0
@@ -89,6 +89,10 @@ attack:
         reward_checkpoint: last
       epoch_reward_diagnostics:
         enabled: false
+        epochs: [3, 4, 5, 6, 7]
+        include_final_epoch: true
+        write_candidate_epoch_metrics: true
+        write_ranking_summary: true
     reward:
       target_summary: raw_lowk_mrr_recall_10_20
       enable_gt_penalty: false
@@ -109,8 +113,8 @@ attack:
 targets:
   mode: sampled
   explicit_list: []
-  bucket: unpopular
-  count: 1
+  bucket: popular
+  count: 10
   reuse_saved_targets: false
 
 victims:
@@ -125,17 +129,17 @@ victims:
       working_dir: /data2/welon/SR-GNN-robustness/third_party/freqrec
       device:
         use_gpu: true
-        gpu_id: "1"
+        gpu_id: "0"
       dataloader:
         num_workers: 0
 
 evaluation:
-  topk: [5, 10, 20]
+  topk: [5, 10, 15, 20, 25, 30, 40, 50]
   targeted_metrics: [precision, recall, mrr, ndcg]
   ground_truth_metrics: [precision, recall, mrr, ndcg]
 
 artifacts:
-  root: outputs/diagnostics
+  root: outputs
   shared_dir: shared
   runs_dir: runs
-  cleanup_victim_intermediates: false
+  cleanup_victim_intermediates: true
