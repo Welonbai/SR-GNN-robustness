@@ -92,13 +92,20 @@ FORMAL_CONFIG_PAIRS = (
     ),
     (
         "ssh_yoochoose1_64_valbest_attack_create_copy_source_popular_sample",
-        "ssh_yoochoose1_64_valbest_attack_create_copy_source_popular_sample.yaml",
+        "ssh_yoochoose1_64_valbest_attack_create_copy_source_popular_sample_nonzero_dpp001_consistency03.yaml",
     ),
     (
         "ssh_yoochoose1_64_valbest_attack_create_copy_source_unpopular_sample",
-        "ssh_yoochoose1_64_valbest_attack_create_copy_source_unpopular_sample.yaml",
+        "ssh_yoochoose1_64_valbest_attack_create_copy_source_unpopular_sample_nonzero_dpp001_consistency03.yaml",
     ),
 )
+
+FREQREC_DIRECT_CEM_CONFIG_NAMES = {
+    "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_popular_freqrec_only.yaml",
+    "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_freqrec_only.yaml",
+    "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_generated_popular_freqrec_only.yaml",
+    "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_generated_unpopular_freqrec_only.yaml",
+}
 
 
 def _run_type_and_context(config, config_name: str):
@@ -115,12 +122,12 @@ def _run_type_and_context(config, config_name: str):
 def test_complete_formal_freqrec_matrix_exists() -> None:
     expected = {
         f"{stem}_freqrec_only.yaml" for stem, _source_name in FORMAL_CONFIG_PAIRS
-    }
+    } | FREQREC_DIRECT_CEM_CONFIG_NAMES
     actual = {
         path.name for path in CONFIG_DIR.glob("ssh_*_freqrec_only.yaml")
     }
     assert actual == expected
-    assert len(actual) == 20
+    assert len(actual) == 24
 
 
 @pytest.mark.parametrize(("stem", "source_name"), FORMAL_CONFIG_PAIRS)
