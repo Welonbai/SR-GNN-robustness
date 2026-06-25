@@ -11,6 +11,7 @@ from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.exporters.miasrec_exporter import MiaSRecExporter
 from attack.data.exporters.mdhg_exporter import MDHGExporter
 from attack.data.exporters.freqrec_exporter import FreqRecExporter
+from attack.data.exporters.dtgat_exporter import DTGATExporter
 from attack.data.exporters.wearec_exporter import WEARecExporter, WEARecExportResult
 from attack.data.canonical_fingerprints import (
     CANONICAL_FINGERPRINT_SEMANTICS,
@@ -496,6 +497,110 @@ def execute_single_victim(
             predictions=rankings,
             predictions_path=predictions_path,
             extra={"freqrec": run_info, "freqrec_export": export_metadata},
+            poisoned_train_path=None,
+        )
+
+    if victim_name == "dtgat":
+        victim_train_config = _require_victim_train_config(config, victim_name)
+        export_root = run_dir / "export" / "dtgat"
+        export_result = DTGATExporter().export_with_poisoned_train(
+            canonical_dataset,
+            poisoned_prefixes=poisoned_sessions,
+            poisoned_labels=poisoned_labels,
+            raw_fake_sessions=raw_fake_sessions,
+            output_dir=export_root,
+            dataset_name=config.data.dataset_name,
+        )
+        runner = get_victim_runner(victim_name)(config)
+        raw_predictions_path = run_dir / "dtgat_topk_raw.json"
+        requested_topk = max(int(max_topk), int(victim_train_config.get("topk", 50)))
+        pipeline_injected = {
+            "dataset_name": config.data.dataset_name,
+            "run_type": run_type,
+            "data_dir": export_result.data_dir,
+            "n_node": int(export_result.n_node),
+            "expected_test_count": int(export_result.test_example_count),
+            "export_topk_k": int(requested_topk),
+            "export_topk_path": raw_predictions_path,
+            "run_dir": run_dir,
+            "log_path": run_dir / "dtgat_stdout.log",
+            "metrics_output_path": run_dir / "dtgat_third_party_metrics.json",
+            "third_party_resolved_config_output_path": (
+                run_dir / "dtgat_third_party_resolved_config.json"
+            ),
+            "victim_train_seed": int(victim_stage_seed),
+            "target_item": int(target_item),
+            "evaluation_topk": [int(k) for k in eval_topk],
+            "targeted_metrics": list(config.evaluation.targeted_metrics),
+            "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
+            "dtgat_test_data_path": export_result.files["test"].resolve(),
+            "shared_clean_prediction_cache_enabled": False,
+            "shared_clean_prediction_cache_note": (
+                "DT-GAT Phase 4 intentionally runs per victim cell until "
+                "cache provenance is added."
+            ),
+        }
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected=pipeline_injected,
+        )
+        run_info = runner.run(
+            data_dir=export_result.data_dir,
+            dataset_name=config.data.dataset_name,
+            n_node=export_result.n_node,
+            expected_test_count=export_result.test_example_count,
+            run_dir=run_dir,
+            prediction_output_path=raw_predictions_path,
+            requested_topk=requested_topk,
+            epochs=int(victim_train_config["epochs"]),
+            victim_train_seed=int(victim_stage_seed),
+            target_item=int(target_item),
+        )
+        _write_victim_resolved_config(
+            config,
+            victim_name,
+            run_dir,
+            pipeline_injected={**pipeline_injected, **run_info},
+        )
+        rankings = runner.predict_topk(
+            predictions_path=raw_predictions_path,
+            expected_test_count=export_result.test_example_count,
+            n_node=export_result.n_node,
+            requested_topk=requested_topk,
+            topk=requested_topk,
+        )
+        if predictions_path is not None:
+            effective_topk = len(rankings[0]) if rankings else min(requested_topk, export_result.n_node)
+            save_predictions(
+                predictions_path,
+                topk=effective_topk,
+                rankings=rankings,
+                victim=victim_name,
+                target_item=target_item,
+            )
+        export_metadata = {
+            "data_dir": str(export_result.data_dir),
+            "n_node": export_result.n_node,
+            "train_example_count": export_result.train_example_count,
+            "test_example_count": export_result.test_example_count,
+            "raw_train_session_count": export_result.raw_train_session_count,
+            "raw_fake_session_count": export_result.raw_fake_session_count,
+            "observed_max_item_id": export_result.observed_max_item_id,
+            "max_train_prefix_length": export_result.max_train_prefix_length,
+            "max_test_prefix_length": export_result.max_test_prefix_length,
+            "max_all_train_seq_length": export_result.max_all_train_seq_length,
+            "expected_fake_expanded_pair_count": (
+                export_result.expected_fake_expanded_pair_count
+            ),
+            "fake_pairs_present_in_train": export_result.fake_pairs_present_in_train,
+            "files": {key: str(path) for key, path in export_result.files.items()},
+        }
+        return VictimExecutionResult(
+            predictions=rankings,
+            predictions_path=predictions_path,
+            extra={"dtgat": run_info, "dtgat_export": export_metadata},
             poisoned_train_path=None,
         )
 

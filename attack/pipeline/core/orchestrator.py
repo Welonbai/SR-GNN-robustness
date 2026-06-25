@@ -1971,30 +1971,40 @@ def _maybe_reuse_or_execute_victim(
                 "shared_artifact_manifest": shared_base / "artifact_manifest.json",
             }
         )
-    _guard_clean_shared_cache_bootstrap(
-        run_type=run_type,
-        run_coverage=run_coverage,
-        victim_name=victim_name,
-        artifacts=artifacts,
-    )
-    reused = _load_shared_victim_result(
-        config,
-        run_type=run_type,
-        victim_name=victim_name,
-        target_item=target_item,
-        run_dir=run_dir,
-        artifacts=artifacts,
-        predictions_path=predictions_path,
-        canonical_dataset=canonical_dataset,
-        eval_topk=eval_topk,
-        wearec_identity=(
-            prepared_wearec["identity"] if prepared_wearec is not None else None
-        ),
-        wearec_expected_labels=(
-            prepared_wearec["test_labels"] if prepared_wearec is not None else None
-        ),
-    )
-    if reused is None and victim_attack_identity_context is not None:
+    # DT-GAT Phase 4 deliberately avoids the shared clean prediction cache until
+    # cache provenance and raw third-party artifact retention are specified.
+    shared_cache_enabled = victim_name != "dtgat"
+    if shared_cache_enabled:
+        _guard_clean_shared_cache_bootstrap(
+            run_type=run_type,
+            run_coverage=run_coverage,
+            victim_name=victim_name,
+            artifacts=artifacts,
+        )
+        reused = _load_shared_victim_result(
+            config,
+            run_type=run_type,
+            victim_name=victim_name,
+            target_item=target_item,
+            run_dir=run_dir,
+            artifacts=artifacts,
+            predictions_path=predictions_path,
+            canonical_dataset=canonical_dataset,
+            eval_topk=eval_topk,
+            wearec_identity=(
+                prepared_wearec["identity"] if prepared_wearec is not None else None
+            ),
+            wearec_expected_labels=(
+                prepared_wearec["test_labels"] if prepared_wearec is not None else None
+            ),
+        )
+    else:
+        reused = None
+    if (
+        reused is None
+        and shared_cache_enabled
+        and victim_attack_identity_context is not None
+    ):
         reused = _load_legacy_pts_cem_victim_result(
             config,
             run_type=run_type,
@@ -2025,11 +2035,12 @@ def _maybe_reuse_or_execute_victim(
         predictions_path=predictions_path,
         prepared_wearec=prepared_wearec,
     )
-    _persist_shared_victim_result(
-        run_type=run_type,
-        victim_result=victim_result,
-        artifacts=artifacts,
-    )
+    if shared_cache_enabled:
+        _persist_shared_victim_result(
+            run_type=run_type,
+            victim_result=victim_result,
+            artifacts=artifacts,
+        )
     if victim_name == "wearec":
         persisted = _validate_wearec_shared_entry(
             artifacts=artifacts,

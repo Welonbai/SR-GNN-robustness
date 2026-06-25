@@ -18,7 +18,7 @@ from attack.common.srgnn_training_protocol import (
 )
 
 
-_ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron", "mdhg", "freqrec", "wearec"}
+_ALLOWED_VICTIMS = {"srgnn", "miasrec", "tron", "mdhg", "freqrec", "wearec", "dtgat"}
 _ALLOWED_TARGET_BUCKETS = {"popular", "unpopular", "all"}
 _ALLOWED_EVAL_METRICS = {"precision", "recall", "mrr", "ndcg"}
 VICTIM_VALIDATION_BEST_PROTOCOL = "validation_best"
@@ -4290,6 +4290,10 @@ def _normalize_victims_config(victims: Mapping[str, Any]) -> dict[str, Any]:
         if runtime is None or "wearec" not in runtime:
             raise ValueError("Missing required runtime configuration: victims.runtime.wearec")
         _validate_wearec_runtime(runtime["wearec"], "victims.runtime.wearec")
+    if "dtgat" in enabled:
+        if runtime is None or "dtgat" not in runtime:
+            raise ValueError("Missing required runtime configuration: victims.runtime.dtgat")
+        _validate_dtgat_runtime(runtime["dtgat"], "victims.runtime.dtgat")
 
     return {
         "enabled": enabled,
@@ -4330,6 +4334,10 @@ def _normalize_victim_params(value: Any, context: str) -> dict[str, dict[str, An
             )
         elif victim_name == "wearec":
             primitive["train"] = _normalize_wearec_train(
+                train, f"{context}.{victim_name}.train"
+            )
+        elif victim_name == "dtgat":
+            primitive["train"] = _normalize_dtgat_train(
                 train, f"{context}.{victim_name}.train"
             )
         normalized[victim_name] = primitive
@@ -4490,6 +4498,21 @@ def _validate_wearec_runtime(runtime: dict[str, Any], context: str) -> None:
             )
         if "per_epoch_predictions" in mapping:
             _as_bool(mapping["per_epoch_predictions"], f"{context}.diagnostics.per_epoch_predictions")
+
+
+def _validate_dtgat_runtime(runtime: dict[str, Any], context: str) -> None:
+    for field in ("python_executable", "repo_root", "working_dir"):
+        value = _as_str(_require(runtime, field, context), f"{context}.{field}")
+        if not value.strip():
+            raise ValueError(f"{context}.{field} must be a non-empty string.")
+    device = _as_mapping(_require(runtime, "device", context), f"{context}.device")
+    _as_bool(_require(device, "use_gpu", f"{context}.device"), f"{context}.device.use_gpu")
+    gpu_id = _as_gpu_id(
+        _require(device, "gpu_id", f"{context}.device"),
+        f"{context}.device.gpu_id",
+    )
+    if not gpu_id.isdigit():
+        raise ValueError(f"{context}.device.gpu_id must be one non-negative integer.")
 
 
 def _normalize_srgnn_train(train: Mapping[str, Any], context: str) -> dict[str, Any]:
@@ -4851,6 +4874,57 @@ def _normalize_wearec_train(train: Mapping[str, Any], context: str) -> dict[str,
     if len(cutoffs) != len(set(cutoffs)):
         raise ValueError(f"{context}.metric_cutoffs must not contain duplicates.")
     normalized["metric_cutoffs"] = sorted(cutoffs)
+    return normalized
+
+
+def _normalize_dtgat_train(train: Mapping[str, Any], context: str) -> dict[str, Any]:
+    normalized = _normalize_primitive(train, context)
+    if not isinstance(normalized, dict):
+        raise TypeError(f"Expected {context} to be a mapping.")
+    defaults: dict[str, Any] = {
+        "epochs": 1,
+        "batch_size": 100,
+        "emb_size": 100,
+        "time_dims": 100,
+        "intent_num": 4,
+        "lr": 0.001,
+        "dropout": 0.0,
+        "l2": 1e-4,
+        "lr_dc": 0.1,
+        "lr_dc_step": 10,
+        "layer": 1,
+        "beta": 0.005,
+        "topk": 50,
+        "checkpoint_protocol": VICTIM_FIXED_EPOCH_PROTOCOL,
+        "validation_enabled": False,
+        "export_model": VICTIM_EXPORT_LAST,
+    }
+    for key, value in defaults.items():
+        normalized.setdefault(key, value)
+    for key in ("epochs", "batch_size", "emb_size", "time_dims", "intent_num", "lr_dc_step", "layer", "topk"):
+        normalized[key] = _as_int(normalized[key], f"{context}.{key}")
+        if normalized[key] <= 0:
+            raise ValueError(f"{context}.{key} must be positive.")
+    for key in ("lr", "dropout", "l2", "lr_dc", "beta"):
+        normalized[key] = _as_float(normalized[key], f"{context}.{key}")
+    if normalized["lr"] <= 0:
+        raise ValueError(f"{context}.lr must be positive.")
+    if not 0.0 <= normalized["dropout"] < 1.0:
+        raise ValueError(f"{context}.dropout must be in [0, 1).")
+    for key in ("l2", "lr_dc", "beta"):
+        if normalized[key] < 0:
+            raise ValueError(f"{context}.{key} must be non-negative.")
+    _normalize_external_victim_train_protocol(
+        normalized,
+        context,
+        default_export_model=VICTIM_EXPORT_LAST,
+    )
+    if normalized["checkpoint_protocol"] != VICTIM_FIXED_EPOCH_PROTOCOL:
+        raise ValueError(f"{context}.checkpoint_protocol must be fixed_epoch for DT-GAT.")
+    if normalized["validation_enabled"]:
+        raise ValueError(f"{context}.validation_enabled must be false for DT-GAT.")
+    if normalized["export_model"] != VICTIM_EXPORT_LAST:
+        raise ValueError(f"{context}.export_model must be last for DT-GAT.")
     return normalized
 
 
