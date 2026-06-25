@@ -259,6 +259,28 @@ Exporter requirements:
 - If authoritative timestamps exist, export transition intervals in milliseconds and session stamps in seconds.
 - If no authoritative timestamps exist in the canonical dataset, decide and document a deterministic synthetic timestamp policy before running comparisons. Zero intervals/stamps are format-valid but may materially change DT-GAT behavior because temporal encoders and session-wise future-blocking depend on these fields.
 
+## Project Integration Note: Poison Budget Semantics
+
+This project uses a 1% expanded-prefix-pair poisoning budget, not a 1% raw-session budget. The DT-GAT exporter must not recompute `attack.size` or generate fake sessions. It must consume the already resolved clean or poisoned training sessions from the existing attack pipeline and only convert them into DT-GAT's required pickle format.
+
+Because DT-GAT `train.txt` contains explicit prefix-label examples, any poisoned fake session should be expanded into supervised training rows:
+
+```text
+fake session of length L -> L - 1 prefix-label rows
+```
+
+For poisoned runs, export semantics should be:
+
+```text
+processed_data/train.txt:
+  prefix-label examples expanded from clean training sessions plus poisoned fake sessions
+
+processed_data/all_train_seq.txt:
+  full clean training sessions plus full poisoned fake sessions
+```
+
+Do not export expanded prefix rows into `all_train_seq.txt`; it should remain a list of full training sessions.
+
 ## Required Third-Party Patches
 
 Later integration should patch DT-GAT, not the project runtime first.
