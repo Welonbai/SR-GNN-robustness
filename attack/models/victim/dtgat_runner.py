@@ -135,13 +135,14 @@ class DTGATRunner(VictimRunnerBase):
             ("repository", self.repo_root, "directory"),
             ("working directory", self.working_dir, "directory"),
             ("entrypoint", main_path, "file"),
-            ("dataset directory", Path(data_dir), "directory"),
         ):
             if not path.is_absolute():
                 raise ValueError(f"DT-GAT {label} must be an absolute path: {path}")
             valid = path.is_file() if kind == "file" else path.is_dir()
             if not valid:
                 raise FileNotFoundError(f"DT-GAT {label} not found: {path}")
+        if not Path(data_dir).is_dir():
+            raise FileNotFoundError(f"DT-GAT dataset directory not found: {data_dir}")
 
         run_dir.mkdir(parents=True, exist_ok=True)
         log_path = run_dir / "dtgat_stdout.log"

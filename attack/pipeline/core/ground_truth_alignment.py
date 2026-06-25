@@ -21,7 +21,7 @@ def resolve_ground_truth_labels(
 
     if victim_name == "srgnn":
         labels = _sequence_prefix_labels(canonical_dataset.test)
-    elif victim_name in {"miasrec", "mdhg", "freqrec", "wearec"}:
+    elif victim_name in {"miasrec", "mdhg", "freqrec", "wearec", "dtgat"}:
         labels = _sequence_prefix_labels(canonical_dataset.test)
     elif victim_name == "tron":
         labels = _resolve_tron_ground_truth_labels(config, canonical_dataset)
