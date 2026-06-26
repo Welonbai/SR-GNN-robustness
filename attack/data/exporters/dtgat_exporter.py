@@ -452,6 +452,12 @@ def _contains_ordered_subsequence(
 ) -> bool:
     if not needle:
         return True
+    if len(needle) > len(haystack):
+        return False
+    # build_poisoned_dataset appends expanded fake-session pairs after clean pairs.
+    # Check that formal path directly before falling back to a general search.
+    if list(haystack[-len(needle) :]) == list(needle):
+        return True
     start_max = len(haystack) - len(needle)
     for start in range(start_max + 1):
         if list(haystack[start : start + len(needle)]) == list(needle):
