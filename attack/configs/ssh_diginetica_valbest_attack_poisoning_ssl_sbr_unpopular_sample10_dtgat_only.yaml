@@ -1,0 +1,141 @@
+experiment:
+  name: ssh_diginetica_valbest_attack_poisoning_ssl_sbr_unpopular_sample10_all_victims
+data:
+  dataset_name: diginetica
+  split_protocol: unified
+  poison_train_only: true
+  canonical_split:
+    min_item_count: 5
+    min_session_len: 2
+    valid_ratio: 0.1
+    test_days: 7
+seeds:
+  fake_session_seed: 20260405
+  target_selection_seed: 20260405
+  position_opt_seed: 20260405
+  surrogate_train_seed: 20260405
+  victim_train_seed: 20260405
+attack:
+  size: 0.01
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 1.0
+  fake_session_source:
+    type: poison_model_generated
+  poison_model:
+    name: srgnn
+    params:
+      train:
+        epochs: 30
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-05
+        step: 1
+        patience: 10
+        nonhybrid: false
+        checkpoint_protocol: validation_best
+        best_metric: valid_ground_truth_mrr@20
+        patience_metric: recall20_or_mrr20
+  poisoning_ssl_sbr:
+    enabled: true
+    generation_backend: real
+    max_seq_len_policy: train_sub_p99
+    original_max_seq_len_cap: 50
+    max_seq_len_override: null
+    enforce_single_target: true
+    enforce_nonzero_target_position: false
+    filter_no_target: true
+    filter_short_sessions: true
+    fallback_fill_when_insufficient: true
+    fallback_fill_policy: non_target_generated
+    strict_generation_budget: false
+    first_step_target_mask: true
+    target_logit_bias_after_first_step: 2.0
+    classifier_epochs: 20
+    mle_epochs: 20
+    adversarial_epochs: 30
+    batch_size: 32
+    embedding_dim: 64
+    hidden_dim: 64
+    discriminator_embedding_dim: 64
+    discriminator_hidden_dim: 64
+    classifier_embedding_dim: 64
+    candidate_multiplier: 20
+    max_generation_rounds: 100
+    target_probability: 0.9
+    acceptance_eval_enabled: true
+    acceptance_eval_interval_epochs: 10
+    acceptance_eval_candidate_count: 200
+    candidate_save_policy: summary_only
+    max_saved_candidates: 1000
+    save_generated_candidates: false
+    save_checkpoints: true
+    reuse_existing_artifacts: true
+    generation_seed_offset: 0
+    generation_sample_batch_size: 256
+    device: null
+    gpu_id: '0'
+targets:
+  mode: sampled
+  explicit_list: []
+  bucket: unpopular
+  count: 10
+  reuse_saved_targets: false
+victims:
+  enabled:
+  - dtgat
+  params:
+    dtgat:
+      train:
+        epochs: 4
+        batch_size: 100
+        emb_size: 100
+        time_dims: 100
+        intent_num: 4
+        lr: 0.001
+        dropout: 0.0
+        l2: 0.0001
+        lr_dc: 0.1
+        lr_dc_step: 10
+        layer: 1
+        beta: 0.005
+        topk: 50
+        per_epoch_diagnostics: false
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+  runtime:
+    dtgat:
+      python_executable: C:\Users\User\anaconda3\python.exe
+      repo_root: D:\code_SBR_robustness\SR-GNN-robustness\third_party\dtgat
+      working_dir: D:\code_SBR_robustness\SR-GNN-robustness\third_party\dtgat
+      device:
+        use_gpu: true
+        gpu_id: '0'
+evaluation:
+  topk:
+  - 5
+  - 10
+  - 15
+  - 20
+  - 25
+  - 30
+  - 40
+  - 50
+  targeted_metrics:
+  - precision
+  - recall
+  - mrr
+  - ndcg
+  ground_truth_metrics:
+  - precision
+  - recall
+  - mrr
+  - ndcg
+artifacts:
+  root: outputs
+  shared_dir: shared
+  runs_dir: runs
+  cleanup_victim_intermediates: true

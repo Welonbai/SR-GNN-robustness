@@ -1,0 +1,136 @@
+experiment:
+  name: ssh_diginetica_valbest_attack_create_copy_source_popular_sample_nonzero_dpp001_consistency03
+data:
+  dataset_name: diginetica
+  split_protocol: unified
+  poison_train_only: true
+  canonical_split:
+    min_item_count: 5
+    min_session_len: 2
+    valid_ratio: 0.1
+    test_days: 7
+seeds:
+  fake_session_seed: 20260405
+  target_selection_seed: 20260405
+  position_opt_seed: 20260405
+  surrogate_train_seed: 20260405
+  victim_train_seed: 20260405
+attack:
+  size: 0.01
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 1.0
+  fake_session_source:
+    type: train_template_clean_exact_length_matched
+    train_template:
+      reference_split: train_sub
+      target_filtering: none
+      replacement: false
+      fallback:
+        nearest_length_redistribution: true
+        replacement_if_needed: true
+      record_distribution_diagnostics: true
+  poison_model:
+    name: srgnn
+    params:
+      train:
+        epochs: 30
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-05
+        step: 1
+        patience: 10
+        nonhybrid: false
+        checkpoint_protocol: validation_best
+        best_metric: valid_ground_truth_mrr@20
+        patience_metric: recall20_or_mrr20
+  creat_additive_sbr:
+    enabled: true
+    variant: v2
+    epochs: 10
+    attack_epochs: 10
+    consistency_epochs: 10
+    batch_size: 128
+    lr: 0.001
+    hidden_dim: 64
+    position_embedding_dim: 16
+    max_attack_num: 1
+    nonzero_when_possible: true
+    attack_reward_mode: score
+    stealth_weight: 0.1
+    local_weight: 0.0
+    entropy_weight: 0.0
+    pattern_reward_weight: 0.1
+    dpp_reward_weight: 0.01
+    dpp_score_mode: bounded_determinant
+    dpp_eps: 1.0e-06
+    global_consistency_weight: 0.3
+    local_consistency_weight: 0.3
+    local_window_size: 3
+    consistency_mode: local_global
+    final_policy_selection: last
+    seed_source: position_opt_seed
+targets:
+  mode: sampled
+  explicit_list: []
+  bucket: popular
+  count: 10
+  reuse_saved_targets: false
+victims:
+  enabled:
+  - dtgat
+  params:
+    dtgat:
+      train:
+        epochs: 4
+        batch_size: 100
+        emb_size: 100
+        time_dims: 100
+        intent_num: 4
+        lr: 0.001
+        dropout: 0.0
+        l2: 0.0001
+        lr_dc: 0.1
+        lr_dc_step: 10
+        layer: 1
+        beta: 0.005
+        topk: 50
+        per_epoch_diagnostics: false
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+  runtime:
+    dtgat:
+      python_executable: C:\Users\User\anaconda3\python.exe
+      repo_root: D:\code_SBR_robustness\SR-GNN-robustness\third_party\dtgat
+      working_dir: D:\code_SBR_robustness\SR-GNN-robustness\third_party\dtgat
+      device:
+        use_gpu: true
+        gpu_id: '0'
+evaluation:
+  topk:
+  - 5
+  - 10
+  - 15
+  - 20
+  - 25
+  - 30
+  - 40
+  - 50
+  targeted_metrics:
+  - precision
+  - recall
+  - mrr
+  - ndcg
+  ground_truth_metrics:
+  - precision
+  - recall
+  - mrr
+  - ndcg
+artifacts:
+  root: outputs
+  shared_dir: shared
+  runs_dir: runs
+  cleanup_victim_intermediates: true
