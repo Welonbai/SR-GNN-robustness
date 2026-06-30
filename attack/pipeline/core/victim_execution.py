@@ -549,11 +549,13 @@ def execute_single_victim(
             "targeted_metrics": list(config.evaluation.targeted_metrics),
             "ground_truth_metrics": list(config.evaluation.ground_truth_metrics),
             "dtgat_test_data_path": export_result.files["test"].resolve(),
-            "shared_clean_prediction_cache_enabled": False,
+            "shared_clean_prediction_cache_enabled": run_type == "clean",
             "shared_clean_prediction_cache_note": (
-                "DT-GAT Phase 4 intentionally runs per victim cell until "
-                "cache provenance is added."
-            ),
+                "Clean DT-GAT predictions are target-agnostic and can be reused "
+                "across target evaluations; targeted metrics are recomputed per target."
+            )
+            if run_type == "clean"
+            else None,
         }
         _write_victim_resolved_config(
             config,

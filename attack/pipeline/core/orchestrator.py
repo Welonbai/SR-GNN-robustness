@@ -1971,9 +1971,7 @@ def _maybe_reuse_or_execute_victim(
                 "shared_artifact_manifest": shared_base / "artifact_manifest.json",
             }
         )
-    # DT-GAT Phase 4 deliberately avoids the shared clean prediction cache until
-    # cache provenance and raw third-party artifact retention are specified.
-    shared_cache_enabled = victim_name != "dtgat"
+    shared_cache_enabled = True
     if shared_cache_enabled:
         _guard_clean_shared_cache_bootstrap(
             run_type=run_type,

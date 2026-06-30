@@ -362,6 +362,94 @@ def test_clean_initial_run_executes_each_victim_once_and_reuses_predictions(monk
         assert victim_summary["reused_predictions"] is (index != 0)
 
 
+def test_clean_dtgat_reuses_predictions_across_targets(monkeypatch) -> None:
+    with _temp_root() as temp_root:
+        base_config = _config_for_temp_root(temp_root, count=3, victims=("miasrec",))
+        victim_params = dict(base_config.victims.params)
+        victim_params["dtgat"] = {
+            "train": {
+                "epochs": 4,
+                "batch_size": 100,
+                "emb_size": 100,
+                "time_dims": 100,
+                "intent_num": 4,
+                "lr": 0.001,
+                "dropout": 0.0,
+                "l2": 1.0e-4,
+                "lr_dc": 0.1,
+                "lr_dc_step": 10,
+                "layer": 1,
+                "beta": 0.005,
+                "topk": 50,
+                "checkpoint_protocol": "fixed_epoch",
+                "validation_enabled": False,
+                "export_model": "last",
+            }
+        }
+        config = replace(
+            base_config,
+            victims=replace(
+                base_config.victims,
+                enabled=("dtgat",),
+                params=victim_params,
+            ),
+        )
+        context = _minimal_context(config)
+        expected_targets = _expected_target_prefix(config)
+        execute_calls: list[dict[str, object]] = []
+        _install_fake_clean_execution(monkeypatch, execute_calls=execute_calls)
+
+        run_targets_and_victims(
+            config,
+            config_path=None,
+            context=context,
+            run_type="clean",
+            build_poisoned=_build_clean_poisoned,
+        )
+
+        metadata_paths = run_metadata_paths(config, run_type="clean")
+        run_coverage = load_run_coverage(metadata_paths["run_coverage"])
+        summary_current = load_summary_current(metadata_paths["summary_current"])
+        first_artifacts = run_artifact_paths(
+            config,
+            run_type="clean",
+            target_id=expected_targets[0],
+            victim_name="dtgat",
+        )
+        second_artifacts = run_artifact_paths(
+            config,
+            run_type="clean",
+            target_id=expected_targets[1],
+            victim_name="dtgat",
+        )
+        shared_predictions_exists = first_artifacts["shared_predictions"].exists()
+        shared_execution_result_exists = first_artifacts[
+            "shared_execution_result"
+        ].exists()
+        second_predictions = load_json(second_artifacts["predictions"])
+
+    assert len(execute_calls) == 1
+    assert execute_calls[0]["run_type"] == "clean"
+    assert execute_calls[0]["target_item"] == int(expected_targets[0])
+    assert first_artifacts["shared_dir"] == second_artifacts["shared_dir"]
+    assert shared_predictions_exists
+    assert shared_execution_result_exists
+
+    assert run_coverage is not None
+    for target_item in expected_targets:
+        assert run_coverage["cells"][str(target_item)]["dtgat"]["status"] == "completed"
+
+    assert second_predictions is not None
+    assert second_predictions["target_item"] == int(expected_targets[1])
+
+    assert summary_current is not None
+    for index, target_item in enumerate(expected_targets):
+        victim_summary = summary_current["targets"][str(target_item)]["victims"]["dtgat"]
+        assert victim_summary["metrics"]["targeted_recall@10"] == float(target_item)
+        assert victim_summary["metrics"]["ground_truth_recall@10"] == 0.5
+        assert victim_summary["reused_predictions"] is (index != 0)
+
+
 def test_reused_clean_cells_strip_stale_local_path_metadata(monkeypatch) -> None:
     with _temp_root() as temp_root:
         config = _config_for_temp_root(temp_root, count=2)
