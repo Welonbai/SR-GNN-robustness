@@ -563,6 +563,8 @@ def _pts_construction_identity_payload(config: Config) -> Any:
             cem.pop("save_top_k_candidates", None)
             cem.pop("epoch_reward_diagnostics", None)
             cem.pop("surrogate_retrain", None)
+            if _is_legacy_default_pts_cem_surrogate_model(cem.get("surrogate_model")):
+                cem.pop("surrogate_model", None)
             if method == "continuous_mlp_cem":
                 sampler = cem.get("sampler")
                 if isinstance(sampler, dict):
@@ -587,6 +589,12 @@ def _pts_construction_identity_payload(config: Config) -> Any:
             payload = dict(payload)
             payload["cem"] = cem
     return payload
+
+
+def _is_legacy_default_pts_cem_surrogate_model(value: Any) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    return str(value.get("name", "")).strip().lower() == "srgnn" and value.get("params") is None
 
 
 def attack_key(

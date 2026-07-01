@@ -776,12 +776,17 @@ def pts_cem_surrogate_seed_alignment_metadata(
         "resolved_surrogate_effective_seed": int(resolved_seed),
         "resolved_victim_effective_seed": int(resolved_seed),
         "surrogate_victim_seed_aligned": True,
-        "cem_surrogate_model": _cem_surrogate_model_name(config),
         "cem_surrogate_seed": int(resolved_seed),
-        "cem_surrogate_seed_source": (
-            f"matched_to_victim_{_cem_surrogate_model_name(config)}"
-        ),
     }
+    if not _uses_legacy_default_srgnn_pts_cem_surrogate(config):
+        identity.update(
+            {
+                "cem_surrogate_model": _cem_surrogate_model_name(config),
+                "cem_surrogate_seed_source": (
+                    f"matched_to_victim_{_cem_surrogate_model_name(config)}"
+                ),
+            }
+        )
     return identity
 
 
@@ -876,10 +881,11 @@ def _pts_cem_seed_alignment_identity(config: Config) -> dict[str, object]:
         "pts_cem_surrogate_seed_alignment_target_victim_name": (
             _cem_surrogate_model_name(config)
         ),
-        "cem_surrogate_model": _cem_surrogate_model_name(config),
         "configured_surrogate_train_seed": int(config.seeds.surrogate_train_seed),
         "configured_victim_train_seed": int(config.seeds.victim_train_seed),
     }
+    if not _uses_legacy_default_srgnn_pts_cem_surrogate(config):
+        identity["cem_surrogate_model"] = _cem_surrogate_model_name(config)
     if config.targets.mode == "explicit_list" and len(config.targets.explicit_list) == 1:
         target_item = int(config.targets.explicit_list[0])
         identity.update(
@@ -1320,7 +1326,11 @@ def build_pts_cem_shared_cache_identity(
             fake_sessions_path=fake_sessions_path,
         ),
         "surrogate_reward": {
-            "surrogate_model": _cem_surrogate_model_name(config),
+            **(
+                {}
+                if _uses_legacy_default_srgnn_pts_cem_surrogate(config)
+                else {"surrogate_model": _cem_surrogate_model_name(config)}
+            ),
             "surrogate_train_params": _cem_surrogate_train_identity_config(config),
             "surrogate_train_identity_excluded_params": sorted(
                 _SURROGATE_TRAIN_IDENTITY_EXCLUDED_PARAM_KEYS
@@ -1849,10 +1859,25 @@ def _validate_local_marker_shared_cache(
         )
     saved_key = marker.get("shared_pts_cem_cache_key")
     if str(saved_key) != str(current_shared_cache_key):
+        if _is_legacy_default_srgnn_pts_cem_marker(marker):
+            return
         raise ValueError(
             "PTS-CEM local marker shared cache key mismatch: "
             f"expected {current_shared_cache_key!r}, found {saved_key!r}."
         )
+
+
+def _is_legacy_default_srgnn_pts_cem_marker(marker: Mapping[str, object]) -> bool:
+    if marker.get("local_artifact_schema_version") != PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION:
+        return False
+    if marker.get("pts_cem_surrogate_seed_alignment_target_victim_name") != "srgnn":
+        return False
+    if marker.get("cem_surrogate_model") is not None:
+        return False
+    identity = marker.get("identity")
+    if isinstance(identity, Mapping) and identity.get("cem_surrogate_model") is not None:
+        return False
+    return True
 
 
 def _raise_incompatible_local_pts_cache(
@@ -3057,6 +3082,11 @@ def _srgnn_candidate_train_config(config: Config) -> dict[str, Any]:
 
 def _cem_surrogate_model_name(config: Config) -> str:
     return str(_require_pts_config(config).cem.surrogate_model.name)
+
+
+def _uses_legacy_default_srgnn_pts_cem_surrogate(config: Config) -> bool:
+    surrogate_model = _require_pts_config(config).cem.surrogate_model
+    return surrogate_model.name == "srgnn" and surrogate_model.params is None
 
 
 def _shared_item_count(shared: SharedAttackArtifacts) -> int:
