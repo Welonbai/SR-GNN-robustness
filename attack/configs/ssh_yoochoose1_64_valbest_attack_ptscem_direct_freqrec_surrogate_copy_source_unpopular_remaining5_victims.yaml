@@ -1,5 +1,5 @@
 experiment:
-  name: ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_remaining5_victims
+  name: ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_freqrec_only
 
 data:
   dataset_name: yoochoose1_64

@@ -306,6 +306,7 @@ def test_freqrec_direct_cem_remaining5_configs_only_change_final_victims(
             assert device.get("gpu_id") == "0"
 
     for field in (
+        "experiment",
         "data",
         "seeds",
         "attack",
