@@ -1849,10 +1849,25 @@ def _validate_local_marker_shared_cache(
         )
     saved_key = marker.get("shared_pts_cem_cache_key")
     if str(saved_key) != str(current_shared_cache_key):
+        if _allow_fresh_local_pts_cem_shared_key_mismatch(marker):
+            return
         raise ValueError(
             "PTS-CEM local marker shared cache key mismatch: "
             f"expected {current_shared_cache_key!r}, found {saved_key!r}."
         )
+
+
+def _allow_fresh_local_pts_cem_shared_key_mismatch(
+    marker: Mapping[str, object],
+) -> bool:
+    # A fresh local CEM artifact is already scoped by target and run_group identity.
+    # The shared cache key is used for cross-run materialization and may change when
+    # shared identity metadata is extended after the local artifact was produced.
+    return bool(
+        marker.get("cache_mode") == "fresh_cem"
+        and not bool(marker.get("reused_shared_pts_cem", False))
+        and not bool(marker.get("local_materialized_from_shared", False))
+    )
 
 
 def _raise_incompatible_local_pts_cache(

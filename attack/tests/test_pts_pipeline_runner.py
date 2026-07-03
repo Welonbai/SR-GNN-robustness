@@ -1300,6 +1300,63 @@ def test_incompatible_local_pts_cem_marker_raises_clear_error() -> None:
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+def test_fresh_local_pts_cem_marker_allows_shared_key_schema_drift() -> None:
+    work_dir = _make_test_output_dir()
+    try:
+        root = work_dir / "pts_construction_cem"
+        rank1 = root / "top_candidates" / "rank_1"
+        rank1.mkdir(parents=True)
+        save_json([[1, 2, 5334]], rank1 / "sessions.json")
+        save_json({"rank": 1, "target_item": 5334}, rank1 / "metadata.json")
+        save_json({"type": "policy"}, rank1 / "policy.json")
+        save_json({"candidates": [{"rank": 1}]}, root / "pts_top_candidates.json")
+        current_identity = {
+            "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+            "attack_key": "attack_same",
+            "run_group_key": "run_group_same",
+        }
+        save_json(
+            {
+                "schema_version": "pts_construction_cache_v1",
+                "local_artifact_schema_version": PTS_CEM_LOCAL_ARTIFACT_SCHEMA_VERSION,
+                "status": "completed",
+                "run_type": PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
+                "target_item": 5334,
+                "cache_mode": "fresh_cem",
+                "shared_pts_cem_cache_key": "pts_cem_shared_old_schema",
+                "reused_shared_pts_cem": False,
+                "local_materialized_from_shared": False,
+                "identity": current_identity,
+                "best_candidate": {
+                    "rank": 1,
+                    "iteration": 0,
+                    "candidate_id": 0,
+                    "candidate_seed": 123,
+                    "reward": 0.1,
+                    "reward_metrics": {"targeted_recall@20": 0.1},
+                    "sessions_path": "top_candidates/rank_1/sessions.json",
+                    "metadata_path": "top_candidates/rank_1/metadata.json",
+                    "policy_path": "top_candidates/rank_1/policy.json",
+                },
+            },
+            root / "pts_construction_complete.json",
+        )
+
+        cached = _try_load_cached_pts_best_candidate(
+            artifact_dir=root,
+            target_item=5334,
+            current_identity=current_identity,
+            current_shared_cache_key="pts_cem_shared_new_schema",
+        )
+
+        assert cached is not None
+        assert cached.cache_mode == "complete_marker"
+        assert cached.sessions == [[1, 2, 5334]]
+        assert cached.shared_pts_cem_cache_key == "pts_cem_shared_old_schema"
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def test_pts_complete_marker_writer_creates_candidate_fields() -> None:
     work_dir = _make_test_output_dir()
     try:
