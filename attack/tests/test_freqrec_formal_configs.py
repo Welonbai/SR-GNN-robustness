@@ -117,6 +117,24 @@ FREQREC_DIRECT_CEM_SMOKE_CONFIG_NAMES = {
     "yoochoose1_64_smoke_ptscem_direct_freqrec_surrogate_copy_source.yaml",
     "yoochoose1_64_smoke_ptscem_direct_freqrec_generated.yaml",
 }
+FREQREC_DIRECT_CEM_REMAINING5_CONFIG_PAIRS = {
+    (
+        "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_popular_freqrec_only.yaml",
+        "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_popular_remaining5_victims.yaml",
+    ),
+    (
+        "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_freqrec_only.yaml",
+        "ssh_diginetica_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_remaining5_victims.yaml",
+    ),
+    (
+        "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_popular_freqrec_only.yaml",
+        "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_popular_remaining5_victims.yaml",
+    ),
+    (
+        "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_freqrec_only.yaml",
+        "ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_unpopular_remaining5_victims.yaml",
+    ),
+}
 
 
 def _run_type_and_context(config, config_name: str):
@@ -262,6 +280,65 @@ def test_freqrec_direct_cem_generated_configs_use_freqrec_generator_and_surrogat
     assert (
         config.attack.pts_construction.cem.surrogate_model.name
         == "freqrec"
+    )
+
+
+@pytest.mark.parametrize(
+    ("base_name", "remaining_name"),
+    sorted(FREQREC_DIRECT_CEM_REMAINING5_CONFIG_PAIRS),
+)
+def test_freqrec_direct_cem_remaining5_configs_only_change_final_victims(
+    base_name: str,
+    remaining_name: str,
+) -> None:
+    base = load_config(CONFIG_DIR / base_name)
+    remaining = load_config(CONFIG_DIR / remaining_name)
+
+    assert remaining.victims.enabled == ("srgnn", "miasrec", "tron", "mdhg", "wearec")
+    assert set(remaining.victims.params) == set(remaining.victims.enabled)
+    assert "freqrec" not in remaining.victims.params
+    assert "freqrec" not in remaining.victims.runtime
+    assert remaining.attack.poison_model.name == "freqrec"
+    assert remaining.attack.pts_construction.cem.surrogate_model.name == "freqrec"
+    for runtime in remaining.victims.runtime.values():
+        device = runtime.get("device")
+        if isinstance(device, dict):
+            assert device.get("gpu_id") == "0"
+
+    for field in (
+        "data",
+        "seeds",
+        "attack",
+        "targets",
+        "evaluation",
+        "artifacts",
+    ):
+        assert getattr(remaining, field) == getattr(base, field)
+
+    run_type, base_context = _run_type_and_context(base, base_name)
+    _, remaining_context = _run_type_and_context(remaining, remaining_name)
+    assert remaining_context == base_context
+    assert shared_attack_artifact_key(
+        remaining,
+        run_type=run_type,
+    ) == shared_attack_artifact_key(base, run_type=run_type)
+    assert attack_key(
+        remaining,
+        run_type=run_type,
+        attack_identity_context=remaining_context,
+    ) == attack_key(
+        base,
+        run_type=run_type,
+        attack_identity_context=base_context,
+    )
+    assert run_group_key(
+        remaining,
+        run_type=run_type,
+        attack_identity_context=remaining_context,
+    ) == run_group_key(
+        base,
+        run_type=run_type,
+        attack_identity_context=base_context,
     )
 
 

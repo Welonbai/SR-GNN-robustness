@@ -1,0 +1,233 @@
+experiment:
+  name: ssh_diginetica_valbest_attack_ptscem_direct_freqrec_surrogate_copy_source_popular_remaining5_victims
+
+data:
+  dataset_name: diginetica
+  split_protocol: unified
+  poison_train_only: true
+  canonical_split:
+    min_item_count: 5
+    min_session_len: 2
+    valid_ratio: 0.1
+    test_days: 7
+
+seeds:
+  fake_session_seed: 20260405
+  target_selection_seed: 20260405
+  position_opt_seed: 20260405
+  surrogate_train_seed: 20260405
+  victim_train_seed: 20260405
+
+attack:
+  size: 0.01
+  fake_session_generation_topk: 100
+  replacement_topk_ratio: 1.0
+  fake_session_source:
+    type: train_template_clean_exact_length_matched
+    train_template:
+      reference_split: train_sub
+      target_filtering: none
+      replacement: false
+      fallback:
+        nearest_length_redistribution: true
+        replacement_if_needed: true
+      record_distribution_diagnostics: true
+  poison_model:
+    name: freqrec
+    params:
+      train: &freqrec_train
+        model_type: freqrec
+        epochs: 18
+        batch_size: 512
+        lr: 0.0005
+        max_seq_length: 50
+        hidden_size: 64
+        num_hidden_layers: 2
+        num_attention_heads: 1
+        hidden_act: gelu
+        attention_probs_dropout_prob: 0.5
+        hidden_dropout_prob: 0.5
+        initializer_range: 0.02
+        alpha: 0.7
+        gama: 0.7
+        alpha_loss: 0.6
+        fft_loss_type: l2
+        chux: p
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.0
+        patience: 4
+        fre: 1.0
+        fourier_loss: true
+        checkpoint_protocol: fixed_epoch
+        validation_metric: ndcg@20
+        metric_cutoffs: [5, 10, 20]
+  pts_construction:
+    enabled: true
+    method: direct_action_mlp_cem
+    prefix_selector:
+      range: internal
+      sampler: uniform
+    generation:
+      topk: 100
+      length_policy: same_as_residual_suffix
+    direct_action_policy:
+      parameterization: direct_action_mlp_h2
+      length_feature: z_score
+    cem:
+      iterations: 3
+      population_schedule: [16, 8, 8]
+      elite_ratio: 0.25
+      sampler:
+        type: gaussian
+        concentration_scale: 20.0
+      update:
+        mode: elite_centered_empirical_gaussian
+        elite_min_std: 0.25
+      seed_source: position_opt_seed
+      candidate_seed_stride: 1000
+      save_top_k_candidates: 1
+      surrogate_model:
+        name: freqrec
+        params:
+          train: *freqrec_train
+      surrogate_retrain:
+        checkpoint_protocol: fixed_last
+        validation_enabled: false
+        reward_checkpoint: last
+      epoch_reward_diagnostics:
+        enabled: false
+    reward:
+      target_summary: raw_lowk_mrr_recall_10_20
+      enable_gt_penalty: false
+      gt_penalty_weight: 0.0
+      enable_length_penalty: false
+      length_penalty_weight: 0.0
+    artifacts:
+      save_cem_trace: true
+      save_best_policy: true
+      save_final_policy: true
+      save_per_session_records: false
+      save_candidate_sessions: false
+      save_best_sessions: true
+      save_top_candidate_sessions: true
+    final_selection:
+      mode: global_best_candidate
+
+targets:
+  mode: sampled
+  explicit_list: []
+  bucket: popular
+  count: 10
+  reuse_saved_targets: false
+
+victims:
+  enabled:
+  - srgnn
+  - miasrec
+  - tron
+  - mdhg
+  - wearec
+  params:
+    srgnn:
+      train:
+        epochs: 4
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-05
+        step: 1
+        patience: 10
+        nonhybrid: false
+        checkpoint_protocol: fixed_last
+    miasrec:
+      train:
+        epochs: 6
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+        train_batch_size: 32
+        eval_batch_size: 32
+    tron:
+      train:
+        epochs: 3
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+    mdhg:
+      train:
+        epochs: 2
+        batch_size: 100
+        lr: 0.001
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+    wearec:
+      train:
+        model_type: WEARec
+        epochs: 23
+        batch_size: 256
+        lr: 0.001
+        max_seq_length: 50
+        hidden_size: 64
+        num_hidden_layers: 2
+        hidden_act: gelu
+        hidden_dropout_prob: 0.5
+        initializer_range: 0.02
+        num_heads: 2
+        alpha: 0.3
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.0
+        checkpoint_protocol: fixed_epoch
+        metric_cutoffs:
+        - 5
+        - 10
+        - 20
+  runtime:
+    miasrec:
+      python_executable: /data2/welon/miniconda3/envs/miasrec/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/miasrec
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/miasrec
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      logging:
+        show_progress: false
+    tron:
+      python_executable: /data2/welon/miniconda3/envs/tron-gpu/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/tron
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/tron
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      dataloader:
+        num_workers: 2
+    mdhg:
+      python_executable: /data2/welon/miniconda3/envs/robustness/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/mdhg
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/mdhg
+      device:
+        use_gpu: true
+        gpu_id: "0"
+    wearec:
+      python_executable: /data2/welon/miniconda3/envs/robustness/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/wearec
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/wearec
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      dataloader:
+        num_workers: 0
+evaluation:
+  topk: [5, 10, 15, 20, 25, 30, 40, 50]
+  targeted_metrics: [precision, recall, mrr, ndcg]
+  ground_truth_metrics: [precision, recall, mrr, ndcg]
+
+artifacts:
+  root: outputs
+  shared_dir: shared
+  runs_dir: runs
+  cleanup_victim_intermediates: false
