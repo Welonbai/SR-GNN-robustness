@@ -9,7 +9,7 @@ filters:
   attack_size: 0.01
   metric_name: recall
   metric_scope: ground_truth
-  k: 20
+  k: 50
 
 split_by: []
 rows: [dataset, target_type, attack_method]

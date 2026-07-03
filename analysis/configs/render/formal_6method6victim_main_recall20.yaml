@@ -50,8 +50,8 @@ table:
       attack_method:
         clean: CLEAN
         random_nz: RANDOM-NZ
-        generated_direct_cem: CEM-GENERATE
-        copy_direct_cem: CEM-COPY
+        generated_direct_cem: DA-CEM-G
+        copy_direct_cem: DA-CEM-C
         creat: CREAT-NZ
         poisoning_ssl_sbr: Poisoning-SSL-NZ
   value_alias: {}

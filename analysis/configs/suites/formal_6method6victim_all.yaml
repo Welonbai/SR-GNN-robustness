@@ -1,13 +1,5 @@
 suite_name: formal_6method6victim_all
 steps:
-  - name: build_main_recall20
-    type: view
-    config: analysis/configs/views/formal_6method6victim_main_recall20.yaml
-  - name: render_main_recall20
-    type: render
-    bundle_dir: results/comparisons/formal_6method6victim_all/main_recall20
-    config: analysis/configs/render/formal_6method6victim_main_recall20.yaml
-
   - name: build_main_recall50
     type: view
     config: analysis/configs/views/formal_6method6victim_main_recall50.yaml
@@ -55,3 +47,19 @@ steps:
     type: render
     bundle_dir: results/comparisons/formal_6method6victim_all/best_top2_k50_methods_columns_no_cem_family
     config: analysis/configs/render/formal_6method6victim_best_top2_k50_methods_columns_no_cem_family.yaml
+
+  - name: build_best_top2_recall50
+    type: rank_summary
+    config: analysis/configs/rank_summary/formal_6method6victim_best_top2_recall50.yaml
+  - name: render_best_top2_recall50
+    type: render
+    bundle_dir: results/comparisons/formal_6method6victim_all/best_top2_recall50
+    config: analysis/configs/render/formal_6method6victim_best_top2_recall50.yaml
+
+  - name: build_best_top2_recall_k
+    type: rank_summary
+    config: analysis/configs/rank_summary/formal_6method6victim_best_top2_recall_k.yaml
+  - name: render_best_top2_recall_k
+    type: render
+    bundle_dir: results/comparisons/formal_6method6victim_all/best_top2_recall_k
+    config: analysis/configs/render/formal_6method6victim_best_top2_recall_k.yaml

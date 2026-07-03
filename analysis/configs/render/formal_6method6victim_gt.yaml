@@ -2,7 +2,7 @@ style_name: formal_6method6victim_gt
 output_format: png
 
 title:
-  template: "Ground-truth Recall@20 for different attacks against different victim RS models."
+  template: "Ground-truth Recall@50 for different attacks against different victim RS models."
   align: center
   font_size: 20
   color: "#111111"
@@ -52,8 +52,8 @@ table:
       attack_method:
         clean: CLEAN
         random_nz: RANDOM-NZ
-        generated_direct_cem: CEM-GENERATE
-        copy_direct_cem: CEM-COPY
+        generated_direct_cem: DA-CEM-G
+        copy_direct_cem: DA-CEM-C
         creat: CREAT-NZ
         poisoning_ssl_sbr: Poisoning-SSL-NZ
   value_alias: {}

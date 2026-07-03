@@ -43,8 +43,8 @@ table:
         random_nz: RANDOM-NZ
         creat: CREAT-NZ
         poisoning_ssl_sbr: Poisoning-SSL-NZ
-        generated_direct_cem: cem-generate
-        copy_direct_cem: cem-copy
+        generated_direct_cem: DA-CEM-G
+        copy_direct_cem: DA-CEM-C
         cem_family: CEM family
       rank_threshold:
         best: best

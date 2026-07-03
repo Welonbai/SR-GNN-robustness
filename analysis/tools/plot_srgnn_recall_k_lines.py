@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Plot Target Recall@K curves for five attacks in four dataset/cohort panels, one figure per victim."""
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -9,7 +10,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[2]
 BASE = ROOT / "results/comparisons/formal_6method6victim_all"
 INPUT = BASE / "merged_long_table.csv"
-OUTPUT = BASE / "k_line_compare_srgnn"
+OUTPUT = BASE / "k_line_compare"
 KS = [10, 20, 30, 40, 50]
 VICTIMS = {
     "srgnn": "SRGNN",
@@ -23,8 +24,8 @@ METHODS = {
     "random_nz": "Random-NZ",
     "poisoning_ssl_sbr": "Poisoning-SSL-NZ",
     "creat": "CREAT-NZ",
-    "generated_direct_cem": "Generated CEM",
-    "copy_direct_cem": "Copy CEM",
+    "generated_direct_cem": "DA-CEM-G",
+    "copy_direct_cem": "DA-CEM-C",
 }
 COLORS = dict(zip(METHODS.values(), ["#4C78A8", "#E45756", "#72B7B2", "#F2A541", "#7A5195"]))
 MARKERS = dict(zip(METHODS.values(), ["o", "s", "^", "D", "P"]))
@@ -77,9 +78,26 @@ def plot_victim(df: pd.DataFrame, victim: str, victim_label: str) -> Path:
 def main() -> None:
     df = pd.read_csv(INPUT, low_memory=False)
     outputs = [plot_victim(df, victim, victim_label) for victim, victim_label in VICTIMS.items()]
+    manifest_path = OUTPUT / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "input": str(INPUT),
+                "output_dir": str(OUTPUT),
+                "metric": "targeted recall",
+                "k_values": KS,
+                "victims": VICTIMS,
+                "attack_methods": METHODS,
+                "output_files": [str(path) for path in outputs],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     print("Output files:")
     for path in outputs:
         print(path)
+    print(manifest_path)
 
 
 if __name__ == "__main__": main()
