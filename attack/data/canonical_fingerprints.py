@@ -215,16 +215,13 @@ def _partition_parent_repository_status(status: str) -> dict[str, list[str]]:
 def _is_unrelated_submodule_dirty_status_line(line: str) -> bool:
     if len(line) < 3:
         return False
-    status = line[:2]
     paths = _git_status_line_paths(line)
     if len(paths) != 1:
         return False
     path = paths[0].replace("\\", "/")
     if not path.startswith("third_party/") or path == "third_party/wearec":
         return False
-    # Lowercase submodule flags are dirty/untracked markers from inside the
-    # submodule worktree. Uppercase M is a gitlink change and remains blocking.
-    return status[0] in {" ", "?"} and status[1] in {"m", "?"}
+    return "/" not in path.removeprefix("third_party/")
 
 
 def _git_status_line_paths(line: str) -> list[str]:

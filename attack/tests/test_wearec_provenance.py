@@ -101,6 +101,17 @@ def test_parent_unrelated_submodule_dirty_status_is_ignored(tmp_path, submodule_
     assert result["parent_ignored_runtime_cache_dirty_paths"] == [submodule_path]
 
 
+def test_parent_unrelated_submodule_gitlink_change_is_ignored(tmp_path):
+    parent = tmp_path / "parent"; wearec = tmp_path / "wearec"
+    parent.mkdir(); wearec.mkdir()
+    fake = FakeGit(parent_status=" M third_party/mdhg")
+    result = resolve_wearec_repository_provenance(
+        parent, wearec, command_runner=fake
+    )
+    assert result["parent_tracked_worktree_clean"] is True
+    assert result["parent_ignored_runtime_cache_dirty_paths"] == ["third_party/mdhg"]
+
+
 def test_parent_real_source_dirty_status_is_rejected(tmp_path):
     parent = tmp_path / "parent"; wearec = tmp_path / "wearec"
     parent.mkdir(); wearec.mkdir()
