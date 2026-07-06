@@ -1,15 +1,15 @@
 experiment:
-  name: ssh_diginetica_valbest_attack_ptscem_direct_freqrec_generated_unpopular_freqrec_only
+  name: ssh_yoochoose1_64_valbest_attack_ptscem_direct_freqrec_generated_unpopular_all_victims
 
 data:
-  dataset_name: diginetica
+  dataset_name: yoochoose1_64
   split_protocol: unified
   poison_train_only: true
   canonical_split:
     min_item_count: 5
     min_session_len: 2
     valid_ratio: 0.1
-    test_days: 7
+    test_days: 1
 
 seeds:
   fake_session_seed: 20260405
@@ -89,6 +89,10 @@ attack:
         reward_checkpoint: last
       epoch_reward_diagnostics:
         enabled: false
+        epochs: [3, 4, 5, 6, 7]
+        include_final_epoch: true
+        write_candidate_epoch_metrics: true
+        write_ranking_summary: true
     reward:
       target_summary: raw_lowk_mrr_recall_10_20
       enable_gt_penalty: false
@@ -114,15 +118,112 @@ targets:
   reuse_saved_targets: false
 
 victims:
-  enabled: [freqrec]
+  enabled:
+  - freqrec
+  - srgnn
+  - miasrec
+  - tron
+  - mdhg
+  - wearec
   params:
     freqrec:
       train: *freqrec_train
+    srgnn:
+      train:
+        epochs: 4
+        batch_size: 100
+        hidden_size: 100
+        lr: 0.001
+        lr_dc: 0.1
+        lr_dc_step: 3
+        l2: 1.0e-05
+        step: 1
+        patience: 10
+        nonhybrid: false
+        checkpoint_protocol: fixed_last
+    miasrec:
+      train:
+        epochs: 6
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+        train_batch_size: 64
+        eval_batch_size: 32
+    tron:
+      train:
+        epochs: 6
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+    mdhg:
+      train:
+        epochs: 2
+        batch_size: 100
+        lr: 0.001
+        checkpoint_protocol: fixed_epoch
+        validation_enabled: false
+        export_model: last
+    wearec:
+      train:
+        model_type: WEARec
+        epochs: 23
+        batch_size: 256
+        lr: 0.001
+        max_seq_length: 50
+        hidden_size: 64
+        num_hidden_layers: 2
+        hidden_act: gelu
+        hidden_dropout_prob: 0.5
+        initializer_range: 0.02
+        num_heads: 2
+        alpha: 0.3
+        adam_beta1: 0.9
+        adam_beta2: 0.999
+        weight_decay: 0.0
+        checkpoint_protocol: fixed_epoch
+        metric_cutoffs:
+        - 5
+        - 10
+        - 20
   runtime:
     freqrec:
       python_executable: /data2/welon/miniconda3/envs/robustness/bin/python
       repo_root: /data2/welon/SR-GNN-robustness/third_party/freqrec
       working_dir: /data2/welon/SR-GNN-robustness/third_party/freqrec
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      dataloader:
+        num_workers: 0
+    miasrec:
+      python_executable: /data2/welon/miniconda3/envs/miasrec/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/miasrec
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/miasrec
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      logging:
+        show_progress: false
+    tron:
+      python_executable: /data2/welon/miniconda3/envs/tron-gpu/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/tron
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/tron
+      device:
+        use_gpu: true
+        gpu_id: "0"
+      dataloader:
+        num_workers: 2
+    mdhg:
+      python_executable: /data2/welon/miniconda3/envs/robustness/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/mdhg
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/mdhg
+      device:
+        use_gpu: true
+        gpu_id: "0"
+    wearec:
+      python_executable: /data2/welon/miniconda3/envs/robustness/bin/python
+      repo_root: /data2/welon/SR-GNN-robustness/third_party/wearec
+      working_dir: /data2/welon/SR-GNN-robustness/third_party/wearec
       device:
         use_gpu: true
         gpu_id: "0"
@@ -138,4 +239,4 @@ artifacts:
   root: outputs
   shared_dir: shared
   runs_dir: runs
-  cleanup_victim_intermediates: false
+  cleanup_victim_intermediates: true
