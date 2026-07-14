@@ -16,6 +16,10 @@ from .srgnn_training_protocol import (
     srgnn_checkpoint_protocol,
     srgnn_validation_protocol_identity,
 )
+from attack.models.mdhg_constants import (
+    MDHG_ADAPTER_VERSION,
+    MDHG_TRAIN_DATA_CONSTRUCTION_MODE,
+)
 
 
 POSITION_OPT_RUN_TYPE = "position_opt_mvp"
@@ -324,6 +328,13 @@ def _poison_model_identity_payload(config: Config) -> dict[str, Any]:
             poison_model_payload.update(
                 srgnn_validation_protocol_identity(train_config, prefix="poison_model")
             )
+    if config.attack.poison_model.name == "mdhg":
+        poison_model_payload.update(
+            {
+                "mdhg_adapter_version": int(MDHG_ADAPTER_VERSION),
+                "mdhg_train_data_construction_mode": MDHG_TRAIN_DATA_CONSTRUCTION_MODE,
+            }
+        )
     return poison_model_payload
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterable, Sequence
 
 
@@ -10,6 +10,7 @@ class PoisonedDataset:
     labels: list[int]
     clean_count: int
     fake_count: int
+    fake_sessions: list[list[int]] = field(default_factory=list)
 
 
 def expand_session_to_samples(session: Sequence[int]) -> tuple[list[list[int]], list[int]]:
@@ -52,6 +53,7 @@ def build_poisoned_dataset(
         labels=poisoned_labels,
         clean_count=len(clean_sessions_list),
         fake_count=len(fake_sessions_list),
+        fake_sessions=fake_sessions_list,
     )
 
 

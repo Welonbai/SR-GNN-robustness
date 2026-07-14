@@ -1392,8 +1392,8 @@ class PTSCEMSurrogateModelRuntimeConfig:
     def __post_init__(self) -> None:
         context = "attack.pts_construction.cem.surrogate_model"
         name = _as_str(self.name, f"{context}.name").strip().lower()
-        if name not in {"srgnn", "freqrec"}:
-            raise ValueError(f"{context}.name must be 'srgnn' or 'freqrec'.")
+        if name not in {"srgnn", "freqrec", "mdhg"}:
+            raise ValueError(f"{context}.name must be 'srgnn', 'freqrec', or 'mdhg'.")
         params = self.params
         if params is None:
             normalized_params: dict[str, Any] | None = None
@@ -1408,8 +1408,13 @@ class PTSCEMSurrogateModelRuntimeConfig:
                     train,
                     f"{context}.params.train",
                 )
-            else:
+            elif name == "freqrec":
                 normalized_train = _normalize_freqrec_train(
+                    train,
+                    f"{context}.params.train",
+                )
+            else:
+                normalized_train = _normalize_mdhg_train(
                     train,
                     f"{context}.params.train",
                 )
@@ -3529,8 +3534,8 @@ def _normalize_attack_config(attack: Mapping[str, Any]) -> dict[str, Any]:
         _require(poison_model, "name", "attack.poison_model"),
         "attack.poison_model.name",
     ).lower()
-    if poison_model_name not in {"srgnn", "freqrec"}:
-        raise ValueError("attack.poison_model.name must be 'srgnn' or 'freqrec'.")
+    if poison_model_name not in {"srgnn", "freqrec", "mdhg"}:
+        raise ValueError("attack.poison_model.name must be 'srgnn', 'freqrec', or 'mdhg'.")
 
     normalized = {
         "size": _as_float(_require(attack, "size", "attack"), "attack.size"),
@@ -4203,6 +4208,12 @@ def _normalize_poison_model_params(
         return {
             **normalized,
             "train": _normalize_freqrec_train(train, f"{context}.train"),
+        }
+    if model_name == "mdhg":
+        train = _as_mapping(_require(normalized, "train", context), f"{context}.train")
+        return {
+            **normalized,
+            "train": _normalize_mdhg_train(train, f"{context}.train"),
         }
     raise ValueError(f"Unsupported poison model: {model_name}")
 

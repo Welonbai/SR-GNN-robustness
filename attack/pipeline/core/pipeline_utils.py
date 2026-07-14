@@ -59,6 +59,7 @@ from attack.data.target_selector import (
 from attack.generation.fake_session_generator import FakeSessionGenerator
 from attack.generation.fake_session_parameter_sampler import FakeSessionParameterSampler
 from attack.models.poison.freqrec_poison_runner import FreqRecPoisonRunner
+from attack.models.poison.mdhg_poison_runner import MDHGPoisonRunner
 from attack.models.poison.srgnn_poison_runner import SRGNNPoisonRunner
 from attack.models.srgnn_validation_training import (
     srgnn_validation_train_history_extra,
@@ -1091,6 +1092,7 @@ def _load_or_train_poison_runner(
     export_paths: dict[str, Path],
     clean_sessions: list[list[int]] | None = None,
     clean_labels: list[int] | None = None,
+    raw_train_sessions: list[list[int]] | None = None,
     item_count: int | None = None,
     seed: int | None = None,
 ) -> Any:
@@ -1124,6 +1126,57 @@ def _load_or_train_poison_runner(
                 train_loss=runner.train_loss_history,
                 valid_loss=[None] * len(runner.train_loss_history),
                 notes="FreqRec poison model trained in-process on canonical prefix-label pairs.",
+            )
+        return runner
+
+    if config.attack.poison_model.name == "mdhg":
+        if (
+            clean_sessions is None
+            or clean_labels is None
+            or raw_train_sessions is None
+            or item_count is None
+            or seed is None
+        ):
+            raise ValueError(
+                "MDHG poison runner requires clean pairs, raw train sessions, "
+                "item_count, and seed."
+            )
+        runner = MDHGPoisonRunner(
+            config,
+            item_count=int(item_count),
+            seed=int(seed),
+            raw_train_sessions=raw_train_sessions,
+        )
+        runner.build_model()
+        if load_poison_model(runner, shared_paths["poison_model"]):
+            print(f"Loaded MDHG poison model checkpoint from {shared_paths['poison_model']}")
+            _write_poison_model_identity(config, shared_paths=shared_paths)
+            return runner
+        train_config = config.attack.poison_model.params["train"]
+        print(
+            "No MDHG poison model checkpoint found. "
+            f"Training new poison model for {int(train_config['epochs'])} epochs."
+        )
+        runner.train_pairs(
+            clean_sessions,
+            clean_labels,
+            raw_train_sessions=raw_train_sessions,
+            epochs=int(train_config["epochs"]),
+        )
+        save_poison_model(runner, shared_paths["poison_model"])
+        _write_poison_model_identity(config, shared_paths=shared_paths)
+        if runner.train_loss_history:
+            save_train_history(
+                shared_paths["poison_train_history"],
+                role="poison",
+                model="mdhg",
+                epochs=len(runner.train_loss_history),
+                train_loss=runner.train_loss_history,
+                valid_loss=[None] * len(runner.train_loss_history),
+                notes=(
+                    "MDHG poison model trained in-process on canonical prefix-label "
+                    "pairs with clean raw train sessions for graph construction."
+                ),
             )
         return runner
 
@@ -1221,7 +1274,7 @@ class SharedAttackArtifacts:
     canonical_dataset: CanonicalDataset
     export_paths: dict[str, Path]
     template_sessions: list[list[int]]
-    poison_runner: SRGNNPoisonRunner | None
+    poison_runner: Any | None
     fake_session_count: int
     shared_paths: dict[str, Path]
 
@@ -1281,6 +1334,10 @@ def prepare_shared_attack_artifacts(
                 export_paths=export_paths,
                 clean_sessions=clean_prefixes,
                 clean_labels=clean_labels,
+                raw_train_sessions=[
+                    [int(item) for item in session]
+                    for session in canonical_dataset.train_sub
+                ],
                 item_count=item_count,
                 seed=int(config.seeds.victim_train_seed),
             )
@@ -1378,6 +1435,10 @@ def prepare_shared_attack_artifacts(
             export_paths=export_paths,
             clean_sessions=clean_prefixes,
             clean_labels=clean_labels,
+            raw_train_sessions=[
+                [int(item) for item in session]
+                for session in canonical_dataset.train_sub
+            ],
             item_count=item_count,
             seed=int(config.seeds.victim_train_seed),
         )

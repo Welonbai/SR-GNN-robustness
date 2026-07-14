@@ -52,6 +52,9 @@ from attack.inner_train.srgnn_full_retrain_fixed_last import (
 from attack.inner_train.freqrec_full_retrain_fixed_last import (
     FreqRecFullRetrainFixedLastInnerTrainer,
 )
+from attack.inner_train.mdhg_full_retrain_fixed_last import (
+    MDHGFullRetrainFixedLastInnerTrainer,
+)
 from attack.inner_train.srgnn_full_retrain_validation_best import (
     SRGNNFullRetrainValidationBestInnerTrainer,
 )
@@ -116,6 +119,10 @@ from attack.surrogate.srgnn_backend import SRGNNBackend
 from attack.surrogate.freqrec_backend import (
     FreqRecBackend,
     freqrec_surrogate_identity_extra,
+)
+from attack.surrogate.mdhg_backend import (
+    MDHGBackend,
+    mdhg_surrogate_identity_extra,
 )
 from pytorch_code.utils import Data
 
@@ -590,34 +597,68 @@ def _validate_pts_construction_run_config(config: Config) -> None:
         )
     _resolve_pts_cem_base_seed(config)
     _cem_surrogate_train_config(config)
-    _validate_freqrec_direct_cem_setup(config)
+    _validate_direct_cem_inprocess_model_setup(config)
     _validate_pts_epoch_reward_diagnostics_config(config)
 
 
-def _validate_freqrec_direct_cem_setup(config: Config) -> None:
+def _validate_direct_cem_inprocess_model_setup(config: Config) -> None:
     pts_config = _require_pts_config(config)
-    if pts_config.cem.surrogate_model.name != "freqrec":
+    surrogate_name = pts_config.cem.surrogate_model.name
+    poison_model_name = config.attack.poison_model.name
+    uses_inprocess_poison_runner = bool(
+        poison_model_name in {"freqrec", "mdhg"}
+        and (
+            config.attack.fake_session_source.type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
+            or _pts_construction_requires_suffix_generator(config)
+        )
+    )
+    if surrogate_name not in {"freqrec", "mdhg"} and not uses_inprocess_poison_runner:
         return
-    retrain = pts_config.cem.surrogate_retrain
-    if retrain.checkpoint_protocol != PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
-        raise ValueError("FreqRec Direct CEM supports only fixed_last surrogate retrain.")
-    if bool(retrain.validation_enabled) or retrain.reward_checkpoint != "last":
-        raise ValueError(
-            "FreqRec Direct CEM requires surrogate_retrain.validation_enabled=false "
-            "and reward_checkpoint=last."
+    if surrogate_name in {"freqrec", "mdhg"}:
+        retrain = pts_config.cem.surrogate_retrain
+        if retrain.checkpoint_protocol != PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
+            raise ValueError(
+                f"{surrogate_name} Direct CEM supports only fixed_last surrogate retrain."
+            )
+        if bool(retrain.validation_enabled) or retrain.reward_checkpoint != "last":
+            raise ValueError(
+                f"{surrogate_name} Direct CEM requires "
+                "surrogate_retrain.validation_enabled=false and reward_checkpoint=last."
+            )
+        if int(config.seeds.surrogate_train_seed) != int(config.seeds.victim_train_seed):
+            raise ValueError(
+                f"{surrogate_name} Direct CEM requires seeds.surrogate_train_seed == "
+                "seeds.victim_train_seed."
+            )
+        if (
+            surrogate_name == "mdhg"
+            and config.attack.fake_session_source.type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
+            and poison_model_name != "mdhg"
+        ):
+            raise ValueError(
+                "Generated MDHG Direct CEM requires attack.poison_model.name == 'mdhg'."
+            )
+    if (
+        surrogate_name == "mdhg"
+        or (
+            poison_model_name == "mdhg"
+            and uses_inprocess_poison_runner
         )
-    if int(config.seeds.surrogate_train_seed) != int(config.seeds.victim_train_seed):
-        raise ValueError(
-            "FreqRec Direct CEM requires seeds.surrogate_train_seed == "
-            "seeds.victim_train_seed."
-        )
+    ):
+        runtime = (config.victims.runtime or {}).get("mdhg")
+        if not isinstance(runtime, Mapping):
+            raise ValueError(
+                "MDHG Direct CEM requires victims.runtime.mdhg for in-process "
+                "poison/surrogate execution."
+            )
     if (
         config.attack.fake_session_source.type == FAKE_SESSION_SOURCE_POISON_MODEL_GENERATED
-        and config.attack.poison_model.name == "freqrec"
+        and poison_model_name in {"freqrec", "mdhg"}
+        and surrogate_name == poison_model_name
         and int(config.seeds.victim_train_seed) != int(config.seeds.surrogate_train_seed)
     ):
         raise ValueError(
-            "Generated FreqRec Direct CEM requires FreqRec poison, surrogate, "
+            f"Generated {poison_model_name} Direct CEM requires poison, surrogate, "
             "and victim seeds to be aligned."
         )
 
@@ -1347,6 +1388,11 @@ def build_pts_cem_shared_cache_identity(
                 if _cem_surrogate_model_name(config) == "freqrec"
                 else {}
             ),
+            **(
+                mdhg_surrogate_identity_extra()
+                if _cem_surrogate_model_name(config) == "mdhg"
+                else {}
+            ),
         },
         "seed_alignment": pts_cem_surrogate_seed_alignment_metadata(
             config,
@@ -1369,6 +1415,14 @@ def build_pts_cem_shared_cache_identity(
         }
         if config.attack.poison_model.name == "freqrec":
             identity["poison_model"].update(freqrec_surrogate_identity_extra())
+            identity["poison_model"]["configured_seed"] = int(
+                config.seeds.victim_train_seed
+            )
+            identity["poison_model"]["seed_source"] = (
+                "configured_victim_train_seed_shared_poison_model"
+            )
+        if config.attack.poison_model.name == "mdhg":
+            identity["poison_model"].update(mdhg_surrogate_identity_extra())
             identity["poison_model"]["configured_seed"] = int(
                 config.seeds.victim_train_seed
             )
@@ -2698,6 +2752,28 @@ def _build_candidate_evaluator_context(
                 target_item=int(resolved_target_item),
             ),
         )
+    elif surrogate_name == "mdhg":
+        if protocol != PTS_CEM_SURROGATE_RETRAIN_FIXED_LAST:
+            raise ValueError(
+                "MDHG Direct CEM supports only fixed_last surrogate retrain."
+            )
+        inner_trainer = MDHGFullRetrainFixedLastInnerTrainer(
+            train_config=train_config,
+            max_epochs=retrain_epochs,
+            log_prefix="[pts-cem:mdhg-candidate-retrain-fixed-last]",
+            log_epochs=False,
+        )
+        validation_eval_data = None
+        backend = MDHGBackend(
+            config,
+            train_config=train_config,
+            item_count=_shared_item_count(shared),
+            seed=resolve_pts_cem_surrogate_effective_seed(
+                config,
+                target_item=int(resolved_target_item),
+            ),
+            clean_train_raw_sessions=shared.canonical_dataset.train_sub,
+        )
     elif protocol == PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST:
         print(
             f"{_LOG_PREFIX} PTS-CEM surrogate validation_best mode: using "
@@ -2747,6 +2823,8 @@ def _build_candidate_evaluator_context(
     }
     if surrogate_name == "freqrec":
         identity.update(freqrec_surrogate_identity_extra())
+    if surrogate_name == "mdhg":
+        identity.update(mdhg_surrogate_identity_extra())
     return identity
 
 
@@ -3088,7 +3166,7 @@ def _shared_item_count(shared: SharedAttackArtifacts) -> int:
         if max_item > 0:
             candidates.append(int(max_item))
     if not candidates or len(set(candidates)) != 1:
-        raise ValueError(f"Unable to resolve unique item_count for FreqRec: {candidates}.")
+        raise ValueError(f"Unable to resolve unique item_count for CEM surrogate: {candidates}.")
     return int(candidates[0])
 
 
@@ -3107,6 +3185,20 @@ def _cem_surrogate_train_config(config: Config) -> dict[str, Any]:
         if not isinstance(train, Mapping):
             raise ValueError(
                 "FreqRec Direct CEM requires "
+                "attack.pts_construction.cem.surrogate_model.params.train."
+            )
+        return dict(train)
+    if surrogate_model.name == "mdhg":
+        params = surrogate_model.params
+        if not isinstance(params, Mapping):
+            raise ValueError(
+                "MDHG Direct CEM requires "
+                "attack.pts_construction.cem.surrogate_model.params.train."
+            )
+        train = params.get("train")
+        if not isinstance(train, Mapping):
+            raise ValueError(
+                "MDHG Direct CEM requires "
                 "attack.pts_construction.cem.surrogate_model.params.train."
             )
         return dict(train)
@@ -3134,9 +3226,9 @@ def _resolved_pts_candidate_retrain_epochs(config: Config) -> int:
     train_config = _cem_surrogate_train_config(config)
     epochs = train_config.get("epochs")
     if isinstance(epochs, bool) or not isinstance(epochs, int):
-        raise TypeError("victims.params.srgnn.train.epochs must be an integer.")
+        raise TypeError("CEM surrogate train epochs must be an integer.")
     if int(epochs) <= 0:
-        raise ValueError("victims.params.srgnn.train.epochs must be positive.")
+        raise ValueError("CEM surrogate train epochs must be positive.")
     return int(epochs)
 
 
@@ -3445,7 +3537,7 @@ def _direct_cem_model_metadata(config: Config, *, target_item: int) -> dict[str,
         ),
         "cem_surrogate_seed_source": f"matched_to_victim_{surrogate_model}",
     }
-    if generator_model == "freqrec":
+    if generator_model in {"freqrec", "mdhg"}:
         payload.update(
             {
                 "fake_session_generator_seed": int(config.seeds.victim_train_seed),
@@ -3454,7 +3546,7 @@ def _direct_cem_model_metadata(config: Config, *, target_item: int) -> dict[str,
                 ),
             }
         )
-    if suffix_generator_model == "freqrec":
+    if suffix_generator_model in {"freqrec", "mdhg"}:
         payload.update(
             {
                 "direct_action_suffix_generator_seed": int(
@@ -3471,6 +3563,12 @@ def _direct_cem_model_metadata(config: Config, *, target_item: int) -> dict[str,
         or surrogate_model == "freqrec"
     ):
         payload.update(freqrec_surrogate_identity_extra())
+    if (
+        generator_model == "mdhg"
+        or suffix_generator_model == "mdhg"
+        or surrogate_model == "mdhg"
+    ):
+        payload.update(mdhg_surrogate_identity_extra())
     return payload
 
 
