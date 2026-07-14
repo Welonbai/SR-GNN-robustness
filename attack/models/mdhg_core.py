@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import importlib
+import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping, Sequence
@@ -22,22 +22,48 @@ def _mdhg_src_dir() -> Path:
     return Path(__file__).resolve().parents[2] / "third_party" / "mdhg"
 
 
-def _ensure_mdhg_import_path() -> None:
-    src = str(_mdhg_src_dir())
-    if src not in sys.path:
-        sys.path.insert(0, src)
+_MDHG_MODULE_FILES = {
+    "model": ("_sbr_mdhg_model", "model.py"),
+    "util": ("_sbr_mdhg_util", "util.py"),
+}
 
 
 def _import_mdhg_module(module_name: str):
-    _ensure_mdhg_import_path()
-    module = importlib.import_module(module_name)
-    module_path = Path(getattr(module, "__file__", "")).resolve()
-    src_dir = _mdhg_src_dir().resolve()
-    if src_dir not in module_path.parents and module_path != src_dir:
-        raise ImportError(
-            f"Imported {module_name!r} from {module_path}, expected it under {src_dir}."
-        )
+    if module_name not in _MDHG_MODULE_FILES:
+        allowed = ", ".join(sorted(_MDHG_MODULE_FILES))
+        raise ValueError(f"Unsupported MDHG module {module_name!r}; expected one of: {allowed}.")
+    alias, filename = _MDHG_MODULE_FILES[module_name]
+    expected_path = (_mdhg_src_dir() / filename).resolve()
+    cached = sys.modules.get(alias)
+    if cached is not None:
+        _validate_mdhg_module_path(cached, module_name=module_name, expected_path=expected_path)
+        return cached
+
+    spec = importlib.util.spec_from_file_location(alias, expected_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load MDHG module {module_name!r} from {expected_path}.")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[alias] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(alias, None)
+        raise
+    _validate_mdhg_module_path(module, module_name=module_name, expected_path=expected_path)
     return module
+
+
+def _validate_mdhg_module_path(
+    module: object,
+    *,
+    module_name: str,
+    expected_path: Path,
+) -> None:
+    module_path = Path(getattr(module, "__file__", "")).resolve()
+    if module_path != expected_path:
+        raise ImportError(
+            f"Imported {module_name!r} from {module_path}, expected {expected_path}."
+        )
 
 
 @dataclass(frozen=True)

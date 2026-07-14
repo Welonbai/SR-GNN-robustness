@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import pickle
+import sys
+from types import ModuleType
 
 import pytest
 
@@ -17,7 +19,11 @@ from attack.models.mdhg_constants import (
     MDHG_ADAPTER_VERSION,
     MDHG_TRAIN_DATA_CONSTRUCTION_MODE,
 )
-from attack.models.mdhg_core import MDHGInProcessModel, build_mdhg_train_rows
+from attack.models.mdhg_core import (
+    MDHGInProcessModel,
+    _import_mdhg_module,
+    build_mdhg_train_rows,
+)
 from attack.pipeline.core.pipeline_utils import SharedAttackArtifacts
 from attack.pipeline.runs.run_pts_construction_cem import (
     PTS_CEM_SURROGATE_RETRAIN_VALIDATION_BEST,
@@ -111,6 +117,53 @@ def _tiny_shared_artifacts() -> SharedAttackArtifacts:
         fake_session_count=0,
         shared_paths={},
     )
+
+
+def test_mdhg_loader_isolated_from_existing_top_level_model_and_util(monkeypatch) -> None:
+    fake_model = ModuleType("model")
+    fake_model.__file__ = str(
+        Path("third_party/freqrec/src/model/__init__.py").resolve()
+    )
+    fake_util = ModuleType("util")
+    fake_util.__file__ = str(Path("third_party/freqrec/src/util.py").resolve())
+    monkeypatch.setitem(sys.modules, "model", fake_model)
+    monkeypatch.setitem(sys.modules, "util", fake_util)
+
+    aliases = ("_sbr_mdhg_model", "_sbr_mdhg_util")
+    sentinel = object()
+    previous_aliases = {
+        alias: sys.modules.get(alias, sentinel)
+        for alias in aliases
+    }
+    for alias, previous in previous_aliases.items():
+        if previous is sentinel:
+            sys.modules.pop(alias, None)
+
+    try:
+        model_module = _import_mdhg_module("model")
+        util_module = _import_mdhg_module("util")
+
+        repo_root = Path(__file__).resolve().parents[2]
+        assert Path(model_module.__file__).resolve() == (
+            repo_root / "third_party" / "mdhg" / "model.py"
+        ).resolve()
+        assert Path(util_module.__file__).resolve() == (
+            repo_root / "third_party" / "mdhg" / "util.py"
+        ).resolve()
+        assert sys.modules["model"] is fake_model
+        assert sys.modules["util"] is fake_util
+        assert sys.modules["_sbr_mdhg_model"] is model_module
+        assert sys.modules["_sbr_mdhg_util"] is util_module
+        assert _import_mdhg_module("model") is model_module
+        assert _import_mdhg_module("util") is util_module
+        with pytest.raises(ValueError, match="Unsupported MDHG module"):
+            _import_mdhg_module("not_supported")
+    finally:
+        for alias, previous in previous_aliases.items():
+            if previous is sentinel:
+                sys.modules.pop(alias, None)
+            else:
+                sys.modules[alias] = previous
 
 
 def test_mdhg_generated_direct_cem_config_validates_and_dispatches() -> None:
