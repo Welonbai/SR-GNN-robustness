@@ -78,7 +78,11 @@ class Data():
         return slices
 
     def get_slice(self, i):
-        inputs, mask, targets = self.inputs[i], self.mask[i], self.targets[i]
+        inputs, targets = self.inputs[i], self.targets[i]
+        # Item id 0 is SR-GNN's padding value. Rebuild each batch mask from the
+        # authoritative padded inputs instead of trusting the long-lived cached
+        # mask array, which may be corrupted independently during large runs.
+        mask = np.not_equal(inputs, 0).astype(np.int64, copy=False)
         items, n_node, A, alias_inputs = [], [], [], []
         for u_input in inputs:
             n_node.append(len(np.unique(u_input)))

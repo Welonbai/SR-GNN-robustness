@@ -81,6 +81,16 @@ def test_srgnn_mask_validation_rejects_empty_sessions_before_cuda_transfer() -> 
         validate_session_mask_array([[0, 0], [1, 1]])
 
 
+def test_srgnn_data_rebuilds_batch_mask_from_padded_inputs() -> None:
+    data = Data(([[1, 2], [3]], [4, 5]), shuffle=False)
+    data.mask = data.mask.astype(np.int64)
+    data.mask[0, 0] = 2**55
+
+    _alias_inputs, _A, _items, mask, _targets = data.get_slice(np.array([0, 1]))
+
+    assert np.array_equal(mask, np.array([[1, 1], [1, 0]], dtype=np.int64))
+
+
 def test_srgnn_adapter_batch_target_scores_match_score_session() -> None:
     from attack.creat.srgnn_adapter import SRGNNRepresentationAdapter
 
