@@ -77,7 +77,21 @@ class SessionGraph(Module):
             weight.data.uniform_(-stdv, stdv)
 
     def compute_session_representation(self, hidden, mask):
-        ht = hidden[torch.arange(mask.shape[0]).long(), torch.sum(mask, 1) - 1]  # batch_size x latent_size
+        if hidden.ndim != 3:
+            raise ValueError("SR-GNN hidden states must have shape [batch, sequence, hidden].")
+        if mask.ndim != 2:
+            raise ValueError("SR-GNN session masks must have shape [batch, sequence].")
+        if hidden.shape[:2] != mask.shape:
+            raise ValueError(
+                "SR-GNN hidden states and session masks must share batch and sequence dimensions."
+            )
+
+        mask = mask.to(device=hidden.device)
+        last_positions = torch.sum(mask, dim=1, dtype=torch.long) - 1
+        batch_positions = torch.arange(
+            hidden.shape[0], dtype=torch.long, device=hidden.device
+        )
+        ht = hidden[batch_positions, last_positions]  # batch_size x latent_size
         q1 = self.linear_one(ht).view(ht.shape[0], 1, ht.shape[1])  # batch_size x 1 x latent_size
         q2 = self.linear_two(hidden)  # batch_size x seq_length x latent_size
         alpha = self.linear_three(torch.sigmoid(q1 + q2))
@@ -112,16 +126,34 @@ def trans_to_cpu(variable):
         return variable
 
 
+def validate_session_mask_array(mask):
+    mask_array = np.asarray(mask, dtype=np.int64)
+    if mask_array.ndim != 2:
+        raise ValueError("SR-GNN session masks must have shape [batch, sequence].")
+    if mask_array.shape[0] == 0 or mask_array.shape[1] == 0:
+        raise ValueError("SR-GNN session masks must contain at least one non-empty session.")
+    if np.any((mask_array != 0) & (mask_array != 1)):
+        raise ValueError("SR-GNN session masks must contain only 0 and 1 values.")
+
+    session_lengths = mask_array.sum(axis=1, dtype=np.int64)
+    if np.any(session_lengths <= 0):
+        raise ValueError("SR-GNN received an empty session in a training or evaluation batch.")
+    if np.any(session_lengths > mask_array.shape[1]):
+        raise ValueError("SR-GNN session length exceeds the padded sequence width.")
+    return mask_array
+
+
 def forward(model, i, data):
     alias_inputs, A, items, mask, targets = data.get_slice(i)
     # Convert lists to numpy arrays first to avoid slow list->tensor paths.
     alias_inputs = trans_to_cuda(torch.from_numpy(np.asarray(alias_inputs, dtype=np.int64)))
     items = trans_to_cuda(torch.from_numpy(np.asarray(items, dtype=np.int64)))
     A = trans_to_cuda(torch.from_numpy(np.asarray(A, dtype=np.float32)))
-    mask = trans_to_cuda(torch.from_numpy(np.asarray(mask, dtype=np.int64)))
+    mask = trans_to_cuda(torch.from_numpy(validate_session_mask_array(mask)))
     hidden = model(items, A)
-    get = lambda i: hidden[i][alias_inputs[i]]
-    seq_hidden = torch.stack([get(i) for i in torch.arange(len(alias_inputs)).long()])
+    seq_hidden = torch.stack(
+        [hidden[row_index][alias_inputs[row_index]] for row_index in range(len(alias_inputs))]
+    )
     return targets, model.compute_scores(seq_hidden, mask)
 
 

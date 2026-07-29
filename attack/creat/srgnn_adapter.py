@@ -6,7 +6,7 @@ import numpy as np
 import torch
 
 from attack.creat.candidates import valid_position_mask_for_session
-from pytorch_code.model import trans_to_cpu, trans_to_cuda
+from pytorch_code.model import trans_to_cpu, trans_to_cuda, validate_session_mask_array
 from pytorch_code.utils import Data
 
 
@@ -106,10 +106,13 @@ class SRGNNRepresentationAdapter:
         alias_inputs = trans_to_cuda(torch.from_numpy(np.asarray(alias_inputs, dtype=np.int64)))
         items = trans_to_cuda(torch.from_numpy(np.asarray(items, dtype=np.int64)))
         A = trans_to_cuda(torch.from_numpy(np.asarray(A, dtype=np.float32)))
-        mask_tensor = trans_to_cuda(torch.from_numpy(np.asarray(mask, dtype=np.int64)))
+        mask_tensor = trans_to_cuda(torch.from_numpy(validate_session_mask_array(mask)))
         hidden = self.model(items, A)
         seq_hidden = torch.stack(
-            [hidden[i][alias_inputs[i]] for i in torch.arange(len(alias_inputs)).long()]
+            [
+                hidden[row_index][alias_inputs[row_index]]
+                for row_index in range(len(alias_inputs))
+            ]
         )
         return seq_hidden, mask_tensor
 
