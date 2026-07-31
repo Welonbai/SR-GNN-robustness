@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from attack.common.artifact_io import save_json
+from attack.common.artifact_io import load_json, save_json
 from attack.common.config import Config
 from attack.common.seed import derive_seed, set_seed
 from attack.data.canonical_dataset import CanonicalDataset
@@ -23,20 +25,15 @@ from attack.data.canonical_fingerprints import (
 from attack.common.paths import attack_key_payload, classify_victim_training_run_type
 from attack.data.exporters.srgnn_exporter import SRGNNExporter
 from attack.data.exporters.tron_exporter import TRONExporter
-from attack.common.srgnn_training_protocol import srgnn_validation_best_enabled
-from attack.models.srgnn_validation_training import (
-    srgnn_validation_train_history_extra,
-    train_srgnn_validation_best,
-)
 from attack.models.victim.registry import get_victim_runner
 from attack.models.victim.mdhg_diagnostics import summarize_mdhg_epoch_diagnostics
+from attack.models.victim.subprocess_progress import run_subprocess_with_epoch_progress
 from attack.models.victim.wearec_runner import (
     WEAREC_ARTIFACT_CONTRACT_VERSION,
     WEAREC_RUNNER_SEMANTICS_VERSION,
     effective_wearec_config,
 )
 from attack.pipeline.core.evaluator import save_predictions
-from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
 from attack.pipeline.core.train_history import save_train_history
 
 
@@ -84,87 +81,86 @@ def execute_single_victim(
             poisoned_labels,
             poisoned_train_path,
         )
+        effective_predictions_path = predictions_path or (run_dir / "predictions.json")
+        config_snapshot_path = run_dir / "config.yaml"
+        if not config_snapshot_path.exists():
+            raise FileNotFoundError(
+                f"SRGNN victim config snapshot not found: {config_snapshot_path}"
+            )
+        subprocess_log_path = run_dir / "srgnn_stdout.log"
+        cmd = [
+            sys.executable,
+            "-m",
+            "attack.models.victim.srgnn_subprocess",
+            "--config",
+            str(config_snapshot_path.resolve()),
+            "--poisoned-train",
+            str(poisoned_train_path.resolve()),
+            "--valid",
+            str(srg_nn_export_paths["valid"].resolve()),
+            "--test",
+            str(srg_nn_export_paths["test"].resolve()),
+            "--run-dir",
+            str(run_dir.resolve()),
+            "--predictions",
+            str(effective_predictions_path.resolve()),
+            "--target-item",
+            str(int(target_item)),
+            "--topk",
+            str(int(max_topk)),
+            "--seed",
+            str(int(victim_stage_seed)),
+        ]
+        if run_type == "clean":
+            cmd.append("--clean-run")
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
         _write_victim_resolved_config(
             config,
             victim_name,
             run_dir,
             pipeline_injected={
+                "execution_mode": "isolated_subprocess",
                 "export_topk_k": int(max_topk),
-                "predictions_path": predictions_path,
+                "predictions_path": effective_predictions_path,
                 "poisoned_train_path": poisoned_train_path,
                 "run_dir": run_dir,
+                "subprocess_log_path": subprocess_log_path,
                 "victim_train_seed": int(victim_stage_seed),
             },
         )
-
-        victim_cls = get_victim_runner(victim_name)
-        attacked_runner = victim_cls(config)
-        attacked_runner.build_model(build_srgnn_opt_from_train_config(victim_train_config))
-        attacked_train_data, attacked_valid_data = attacked_runner.load_dataset(
-            train_path=poisoned_train_path,
-            test_path=srg_nn_export_paths["valid"],
+        result = run_subprocess_with_epoch_progress(
+            cmd,
+            cwd=Path.cwd(),
+            env=env,
+            log_path=subprocess_log_path,
+            model_name="srgnn",
+            target_item=None if run_type == "clean" else int(target_item),
+            total_epochs=victim_epochs,
+            epoch_numbers_are_one_based=True,
         )
-        if srgnn_validation_best_enabled(victim_train_config):
-            result = train_srgnn_validation_best(
-                attacked_runner,
-                attacked_train_data,
-                attacked_valid_data,
-                train_config=victim_train_config,
-                max_epochs=victim_epochs,
-                patience=int(victim_train_config["patience"]),
-                best_checkpoint_path=run_dir / "best_validation.pt",
-                log_prefix="[victim:srgnn-validation-best]",
+        if result.returncode != 0:
+            raise RuntimeError(
+                "SRGNN subprocess failed with code "
+                f"{result.returncode}. See log: {subprocess_log_path}"
             )
-            save_train_history(
-                run_dir / "train_history.json",
-                role="victim",
-                model="srgnn",
-                epochs=len(result.rows),
-                train_loss=[float(row["train_loss"]) for row in result.rows],
-                valid_loss=[None] * len(result.rows),
-                notes=(
-                    "SRGNN victim training selected the checkpoint with highest "
-                    "validation ground-truth MRR@20. Test metrics were not used."
-                ),
-                extra=srgnn_validation_train_history_extra(result),
-            )
-        elif victim_epochs > 0:
-            attacked_runner.train(
-                attacked_train_data,
-                attacked_valid_data,
-                victim_epochs,
-                target_item=(None if run_type == "clean" else target_item),
-                topk=max_topk,
-            )
-            if attacked_runner.train_loss_history:
-                save_train_history(
-                    run_dir / "train_history.json",
-                    role="victim",
-                    model="srgnn",
-                    epochs=len(attacked_runner.train_loss_history),
-                    train_loss=attacked_runner.train_loss_history,
-                    valid_loss=[None] * len(attacked_runner.train_loss_history),
-                    notes="valid_loss not available for SRGNN victim training.",
-                )
-
-        _, attacked_test_data = attacked_runner.load_dataset(
-            train_path=poisoned_train_path,
-            test_path=srg_nn_export_paths["test"],
-            shuffle_train=False,
-        )
-        rankings = attacked_runner.predict_topk(attacked_test_data, topk=max_topk)
-        if predictions_path is not None:
-            save_predictions(
-                predictions_path,
-                topk=max_topk,
-                rankings=rankings,
-                victim=victim_name,
-                target_item=target_item,
-            )
+        predictions_payload = load_json(effective_predictions_path)
+        if not isinstance(predictions_payload, dict):
+            raise RuntimeError("SRGNN subprocess did not write a prediction payload.")
+        raw_rankings = predictions_payload.get("rankings")
+        if not isinstance(raw_rankings, list):
+            raise RuntimeError("SRGNN subprocess prediction payload has no rankings.")
+        rankings = [
+            [int(item) for item in ranking]
+            for ranking in raw_rankings
+            if isinstance(ranking, list)
+        ]
+        if len(rankings) != len(raw_rankings):
+            raise RuntimeError("SRGNN subprocess prediction rankings are malformed.")
         return VictimExecutionResult(
             predictions=rankings,
-            predictions_path=predictions_path,
-            extra={},
+            predictions_path=effective_predictions_path,
+            extra={"execution_mode": "isolated_subprocess"},
             poisoned_train_path=poisoned_train_path,
         )
 
