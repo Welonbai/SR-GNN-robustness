@@ -14,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 from attack.common.config import load_config
 from attack.models._srgnn_base import SRGNNBaseRunner
 from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
+import pytorch_code.model as srgnn_model_module
 from pytorch_code.model import forward as srg_forward, validate_session_mask_array
 from pytorch_code.utils import Data
 
@@ -89,6 +90,87 @@ def test_srgnn_data_rebuilds_batch_mask_from_padded_inputs() -> None:
     _alias_inputs, _A, _items, mask, _targets = data.get_slice(np.array([0, 1]))
 
     assert np.array_equal(mask, np.array([[1, 1], [1, 0]], dtype=np.int64))
+
+
+def test_srgnn_train_test_detaches_loss_totals_and_disables_eval_grad(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SpyLoss:
+        def __init__(self) -> None:
+            self.backward_called = False
+            self.detach_called = False
+
+        def backward(self) -> None:
+            self.backward_called = True
+
+        def detach(self) -> "SpyLoss":
+            self.detach_called = True
+            return self
+
+        def item(self) -> float:
+            return 2.5
+
+        def __radd__(self, other):
+            raise AssertionError("SR-GNN must not retain loss tensors in the epoch total")
+
+    class NoOpOptimizer:
+        def zero_grad(self) -> None:
+            pass
+
+        def step(self) -> None:
+            pass
+
+    class NoOpScheduler:
+        def step(self) -> None:
+            pass
+
+    class DummyModel:
+        batch_size = 1
+
+        def __init__(self) -> None:
+            self.training = True
+            self.optimizer = NoOpOptimizer()
+            self.scheduler = NoOpScheduler()
+            self.losses: list[SpyLoss] = []
+
+        def train(self) -> None:
+            self.training = True
+
+        def eval(self) -> None:
+            self.training = False
+
+        def loss_function(self, scores, targets) -> SpyLoss:
+            loss = SpyLoss()
+            self.losses.append(loss)
+            return loss
+
+    class DummyData:
+        mask = np.array([[1]], dtype=np.int64)
+
+        def generate_batch(self, batch_size):
+            return [np.array([0])]
+
+    grad_states: list[tuple[bool, bool]] = []
+
+    def fake_forward(model, indices, data):
+        grad_states.append((model.training, torch.is_grad_enabled()))
+        return np.array([1]), torch.arange(20, 0, -1, dtype=torch.float32).view(1, 20)
+
+    monkeypatch.setattr(srgnn_model_module, "forward", fake_forward)
+    model = DummyModel()
+    hit, mrr, avg_loss = srgnn_model_module.train_test(
+        model,
+        DummyData(),
+        DummyData(),
+        log_batches=False,
+    )
+
+    assert hit == 100.0
+    assert mrr == 100.0
+    assert avg_loss == 2.5
+    assert model.losses[0].backward_called
+    assert model.losses[0].detach_called
+    assert grad_states == [(True, True), (False, False)]
 
 
 def test_srgnn_adapter_batch_target_scores_match_score_session() -> None:

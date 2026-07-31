@@ -169,27 +169,30 @@ def train_test(model, train_data, test_data, log_batches=True):
         loss = model.loss_function(scores, targets - 1)
         loss.backward()
         model.optimizer.step()
-        total_loss += loss
+        # Accumulate a detached host scalar so the epoch total does not retain
+        # a chain of thousands of completed autograd graphs on large datasets.
+        total_loss += float(loss.detach().item())
         if log_batches and j % int(len(slices) / 5 + 1) == 0:
             print('[%d/%d] Loss: %.4f' % (j, len(slices), loss.item()))
     print('\tLoss:\t%.3f' % total_loss)
-    avg_loss = float(total_loss.item()) / max(1, len(slices))
+    avg_loss = total_loss / max(1, len(slices))
     model.scheduler.step()
 
     print('start predicting: ', datetime.datetime.now())
     model.eval()
     hit, mrr = [], []
     slices = test_data.generate_batch(model.batch_size)
-    for i in slices:
-        targets, scores = forward(model, i, test_data)
-        sub_scores = scores.topk(20)[1]
-        sub_scores = trans_to_cpu(sub_scores).detach().numpy()
-        for score, target, mask in zip(sub_scores, targets, test_data.mask):
-            hit.append(np.isin(target - 1, score))
-            if len(np.where(score == target - 1)[0]) == 0:
-                mrr.append(0)
-            else:
-                mrr.append(1 / (np.where(score == target - 1)[0][0] + 1))
+    with torch.no_grad():
+        for i in slices:
+            targets, scores = forward(model, i, test_data)
+            sub_scores = scores.topk(20)[1]
+            sub_scores = trans_to_cpu(sub_scores).detach().numpy()
+            for score, target, mask in zip(sub_scores, targets, test_data.mask):
+                hit.append(np.isin(target - 1, score))
+                if len(np.where(score == target - 1)[0]) == 0:
+                    mrr.append(0)
+                else:
+                    mrr.append(1 / (np.where(score == target - 1)[0][0] + 1))
     hit = np.mean(hit) * 100
     mrr = np.mean(mrr) * 100
     return hit, mrr, avg_loss
