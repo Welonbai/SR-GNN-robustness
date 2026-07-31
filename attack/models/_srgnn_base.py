@@ -226,7 +226,9 @@ class SRGNNBaseRunner:
             raise RuntimeError("Model is not initialized. Call build_model() first.")
         if not session:
             raise ValueError("Session must contain at least one item.")
-        data = Data(([list(session)], [0]), shuffle=False)
+        # The label is unused for scoring, but keep it inside SR-GNN's valid
+        # one-based item range so batch validation remains strict everywhere.
+        data = Data(([list(session)], [1]), shuffle=False)
         with torch.no_grad():
             _, scores = srg_forward(self.model, np.array([0]), data)
         return trans_to_cpu(scores.squeeze(0).detach())

@@ -78,24 +78,41 @@ class Data():
         return slices
 
     def get_slice(self, i):
-        inputs, targets = self.inputs[i], self.targets[i]
+        inputs = np.asarray(self.inputs[i], dtype=np.int64)
+        targets = np.asarray(self.targets[i], dtype=np.int64)
         # Item id 0 is SR-GNN's padding value. Rebuild each batch mask from the
         # authoritative padded inputs instead of trusting the long-lived cached
         # mask array, which may be corrupted independently during large runs.
         mask = np.not_equal(inputs, 0).astype(np.int64, copy=False)
-        items, n_node, A, alias_inputs = [], [], [], []
-        for u_input in inputs:
-            n_node.append(len(np.unique(u_input)))
-        max_n_node = np.max(n_node)
-        for u_input in inputs:
-            node = np.unique(u_input)
-            items.append(node.tolist() + (max_n_node - len(node)) * [0])
-            u_A = np.zeros((max_n_node, max_n_node))
-            for i in np.arange(len(u_input) - 1):
-                if u_input[i + 1] == 0:
+        if inputs.ndim != 2 or inputs.shape[0] == 0 or inputs.shape[1] == 0:
+            raise ValueError("SR-GNN batches must contain a non-empty 2D input array.")
+
+        # Resolve the sorted unique nodes once per session. The legacy code ran
+        # np.unique twice and accumulated several nested Python lists per batch;
+        # preallocating the output arrays reduces allocator churn while keeping
+        # the exact node order and graph normalization unchanged.
+        nodes = [np.unique(u_input) for u_input in inputs]
+        max_n_node = max(len(node) for node in nodes)
+        batch_size, sequence_width = inputs.shape
+        items = np.zeros((batch_size, max_n_node), dtype=np.int64)
+        alias_inputs = np.empty((batch_size, sequence_width), dtype=np.int64)
+        A = np.zeros((batch_size, max_n_node, 2 * max_n_node), dtype=np.float64)
+
+        for row_index, (u_input, node) in enumerate(zip(inputs, nodes)):
+            items[row_index, : len(node)] = node
+            node_positions = {
+                int(item): int(position) for position, item in enumerate(node)
+            }
+            alias_inputs[row_index] = [
+                node_positions[int(item)] for item in u_input
+            ]
+
+            u_A = np.zeros((max_n_node, max_n_node), dtype=np.float64)
+            for position in range(len(u_input) - 1):
+                if u_input[position + 1] == 0:
                     break
-                u = np.where(node == u_input[i])[0][0]
-                v = np.where(node == u_input[i + 1])[0][0]
+                u = node_positions[int(u_input[position])]
+                v = node_positions[int(u_input[position + 1])]
                 u_A[u][v] = 1
             u_sum_in = np.sum(u_A, 0)
             u_sum_in[np.where(u_sum_in == 0)] = 1
@@ -103,7 +120,5 @@ class Data():
             u_sum_out = np.sum(u_A, 1)
             u_sum_out[np.where(u_sum_out == 0)] = 1
             u_A_out = np.divide(u_A.transpose(), u_sum_out)
-            u_A = np.concatenate([u_A_in, u_A_out]).transpose()
-            A.append(u_A)
-            alias_inputs.append([np.where(node == i)[0][0] for i in u_input])
+            A[row_index] = np.concatenate([u_A_in, u_A_out]).transpose()
         return alias_inputs, A, items, mask, targets

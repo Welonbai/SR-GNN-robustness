@@ -143,13 +143,106 @@ def validate_session_mask_array(mask):
     return mask_array
 
 
+def validate_srgnn_batch_arrays(
+    *,
+    alias_inputs,
+    adjacency,
+    items,
+    mask,
+    targets,
+    n_node,
+    sample_indices=None,
+):
+    alias_array = np.asarray(alias_inputs, dtype=np.int64)
+    adjacency_array = np.asarray(adjacency, dtype=np.float32)
+    items_array = np.asarray(items, dtype=np.int64)
+    mask_array = validate_session_mask_array(mask)
+    targets_array = np.asarray(targets, dtype=np.int64)
+    indices_array = (
+        None if sample_indices is None else np.asarray(sample_indices, dtype=np.int64)
+    )
+
+    if items_array.ndim != 2 or items_array.shape[0] == 0 or items_array.shape[1] == 0:
+        raise ValueError("SR-GNN batch items must have a non-empty 2D shape.")
+    if alias_array.shape != mask_array.shape:
+        raise ValueError(
+            "SR-GNN alias inputs and masks must share batch and sequence dimensions."
+        )
+    if alias_array.shape[0] != items_array.shape[0]:
+        raise ValueError("SR-GNN alias inputs and items must share the batch dimension.")
+    if targets_array.ndim != 1 or targets_array.shape[0] != items_array.shape[0]:
+        raise ValueError("SR-GNN targets must contain exactly one label per batch row.")
+    if adjacency_array.shape != (
+        items_array.shape[0],
+        items_array.shape[1],
+        2 * items_array.shape[1],
+    ):
+        raise ValueError(
+            "SR-GNN adjacency must have shape [batch, nodes, 2 * nodes]."
+        )
+
+    def _location(row_index):
+        if indices_array is None or row_index >= len(indices_array):
+            return f"batch_row={row_index}"
+        return f"batch_row={row_index} sample_index={int(indices_array[row_index])}"
+
+    bad_items = np.argwhere((items_array < 0) | (items_array >= int(n_node)))
+    if bad_items.size:
+        row_index, column_index = map(int, bad_items[0])
+        raise ValueError(
+            "SR-GNN item id is outside the embedding range: "
+            f"{_location(row_index)} column={column_index} "
+            f"value={int(items_array[row_index, column_index])} "
+            f"expected=0..{int(n_node) - 1}."
+        )
+
+    bad_alias = np.argwhere(
+        (alias_array < 0) | (alias_array >= int(items_array.shape[1]))
+    )
+    if bad_alias.size:
+        row_index, column_index = map(int, bad_alias[0])
+        raise ValueError(
+            "SR-GNN alias index is outside the batch node range: "
+            f"{_location(row_index)} column={column_index} "
+            f"value={int(alias_array[row_index, column_index])} "
+            f"expected=0..{int(items_array.shape[1]) - 1}."
+        )
+
+    bad_targets = np.argwhere(
+        (targets_array < 1) | (targets_array >= int(n_node))
+    )
+    if bad_targets.size:
+        row_index = int(bad_targets[0, 0])
+        raise ValueError(
+            "SR-GNN target id is outside the score range: "
+            f"{_location(row_index)} value={int(targets_array[row_index])} "
+            f"expected=1..{int(n_node) - 1}."
+        )
+
+    return (
+        alias_array,
+        adjacency_array,
+        items_array,
+        mask_array,
+        targets_array,
+    )
+
+
 def forward(model, i, data):
     alias_inputs, A, items, mask, targets = data.get_slice(i)
-    # Convert lists to numpy arrays first to avoid slow list->tensor paths.
-    alias_inputs = trans_to_cuda(torch.from_numpy(np.asarray(alias_inputs, dtype=np.int64)))
-    items = trans_to_cuda(torch.from_numpy(np.asarray(items, dtype=np.int64)))
-    A = trans_to_cuda(torch.from_numpy(np.asarray(A, dtype=np.float32)))
-    mask = trans_to_cuda(torch.from_numpy(validate_session_mask_array(mask)))
+    alias_inputs, A, items, mask, targets = validate_srgnn_batch_arrays(
+        alias_inputs=alias_inputs,
+        adjacency=A,
+        items=items,
+        mask=mask,
+        targets=targets,
+        n_node=model.n_node,
+        sample_indices=i,
+    )
+    alias_inputs = trans_to_cuda(torch.from_numpy(alias_inputs))
+    items = trans_to_cuda(torch.from_numpy(items))
+    A = trans_to_cuda(torch.from_numpy(A))
+    mask = trans_to_cuda(torch.from_numpy(mask))
     hidden = model(items, A)
     seq_hidden = torch.stack(
         [hidden[row_index][alias_inputs[row_index]] for row_index in range(len(alias_inputs))]
@@ -163,15 +256,25 @@ def train_test(model, train_data, test_data, log_batches=True):
     total_loss = 0.0
     slices = train_data.generate_batch(model.batch_size)
     for i, j in zip(slices, np.arange(len(slices))):
-        model.optimizer.zero_grad()
-        targets, scores = forward(model, i, train_data)
-        targets = trans_to_cuda(torch.Tensor(targets).long())
-        loss = model.loss_function(scores, targets - 1)
-        loss.backward()
-        model.optimizer.step()
-        # Accumulate a detached host scalar so the epoch total does not retain
-        # a chain of thousands of completed autograd graphs on large datasets.
-        total_loss += float(loss.detach().item())
+        try:
+            model.optimizer.zero_grad()
+            targets, scores = forward(model, i, train_data)
+            targets = trans_to_cuda(torch.from_numpy(targets))
+            loss = model.loss_function(scores, targets - 1)
+            loss.backward()
+            model.optimizer.step()
+            # Accumulate a detached host scalar so the epoch total does not retain
+            # a chain of thousands of completed autograd graphs on large datasets.
+            total_loss += float(loss.detach().item())
+        except Exception:
+            first_index = int(i[0]) if len(i) else None
+            last_index = int(i[-1]) if len(i) else None
+            print(
+                "[srgnn] training batch failed: "
+                f"batch={int(j) + 1}/{len(slices)} "
+                f"sample_indices={first_index}..{last_index}"
+            )
+            raise
         if log_batches and j % int(len(slices) / 5 + 1) == 0:
             print('[%d/%d] Loss: %.4f' % (j, len(slices), loss.item()))
     print('\tLoss:\t%.3f' % total_loss)

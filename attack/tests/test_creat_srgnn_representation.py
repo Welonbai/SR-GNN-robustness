@@ -15,8 +15,47 @@ from attack.common.config import load_config
 from attack.models._srgnn_base import SRGNNBaseRunner
 from attack.pipeline.core.pipeline_utils import build_srgnn_opt_from_train_config
 import pytorch_code.model as srgnn_model_module
-from pytorch_code.model import forward as srg_forward, validate_session_mask_array
+from pytorch_code.model import (
+    forward as srg_forward,
+    validate_session_mask_array,
+    validate_srgnn_batch_arrays,
+)
 from pytorch_code.utils import Data
+
+
+def _legacy_srgnn_get_slice(data: Data, indices: np.ndarray):
+    inputs, mask, targets = (
+        data.inputs[indices],
+        data.mask[indices],
+        data.targets[indices],
+    )
+    items, node_counts, adjacency, alias_inputs = [], [], [], []
+    for session in inputs:
+        node_counts.append(len(np.unique(session)))
+    max_node_count = int(np.max(node_counts))
+    for session in inputs:
+        nodes = np.unique(session)
+        items.append(nodes.tolist() + (max_node_count - len(nodes)) * [0])
+        session_adjacency = np.zeros((max_node_count, max_node_count))
+        for position in np.arange(len(session) - 1):
+            if session[position + 1] == 0:
+                break
+            source = np.where(nodes == session[position])[0][0]
+            destination = np.where(nodes == session[position + 1])[0][0]
+            session_adjacency[source][destination] = 1
+        sum_in = np.sum(session_adjacency, 0)
+        sum_in[np.where(sum_in == 0)] = 1
+        adjacency_in = np.divide(session_adjacency, sum_in)
+        sum_out = np.sum(session_adjacency, 1)
+        sum_out[np.where(sum_out == 0)] = 1
+        adjacency_out = np.divide(session_adjacency.transpose(), sum_out)
+        adjacency.append(
+            np.concatenate([adjacency_in, adjacency_out]).transpose()
+        )
+        alias_inputs.append(
+            [np.where(nodes == item)[0][0] for item in session]
+        )
+    return alias_inputs, adjacency, items, mask, targets
 
 
 def test_srgnn_score_session_matches_forward_after_representation_refactor() -> None:
@@ -27,7 +66,7 @@ def test_srgnn_score_session_matches_forward_after_representation_refactor() -> 
     runner.build_model(build_srgnn_opt_from_train_config(config.attack.poison_model.params["train"]))
     session = [1, 2, 3]
     score_session_scores = runner.score_session(session)
-    data = Data(([session], [0]), shuffle=False)
+    data = Data(([session], [1]), shuffle=False)
     with torch.no_grad():
         _targets, forward_scores = srg_forward(runner.model, np.array([0]), data)
     assert torch.allclose(score_session_scores, forward_scores.squeeze(0).cpu())
@@ -90,6 +129,39 @@ def test_srgnn_data_rebuilds_batch_mask_from_padded_inputs() -> None:
     _alias_inputs, _A, _items, mask, _targets = data.get_slice(np.array([0, 1]))
 
     assert np.array_equal(mask, np.array([[1, 1], [1, 0]], dtype=np.int64))
+
+
+def test_srgnn_data_get_slice_matches_legacy_graph_construction() -> None:
+    data = Data(
+        (
+            [[7, 3, 7, 9], [4, 4], [8, 2, 6]],
+            [10, 11, 12],
+        ),
+        shuffle=False,
+    )
+    indices = np.array([2, 0, 1])
+
+    legacy = _legacy_srgnn_get_slice(data, indices)
+    actual = data.get_slice(indices)
+
+    for legacy_value, actual_value in zip(legacy, actual):
+        assert np.array_equal(np.asarray(legacy_value), np.asarray(actual_value))
+
+
+def test_srgnn_batch_validation_rejects_item_before_cuda_transfer() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"sample_index=42.*value=54043195528445952.*expected=0\.\.19",
+    ):
+        validate_srgnn_batch_arrays(
+            alias_inputs=np.array([[0, 1]], dtype=np.int64),
+            adjacency=np.zeros((1, 2, 4), dtype=np.float32),
+            items=np.array([[1, 54043195528445952]], dtype=np.int64),
+            mask=np.array([[1, 1]], dtype=np.int64),
+            targets=np.array([3], dtype=np.int64),
+            n_node=20,
+            sample_indices=np.array([42], dtype=np.int64),
+        )
 
 
 def test_srgnn_train_test_detaches_loss_totals_and_disables_eval_grad(
