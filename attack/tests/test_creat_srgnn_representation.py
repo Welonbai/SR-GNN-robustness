@@ -148,6 +148,34 @@ def test_srgnn_data_get_slice_matches_legacy_graph_construction() -> None:
         assert np.array_equal(np.asarray(legacy_value), np.asarray(actual_value))
 
 
+def test_srgnn_data_shuffle_preserves_legacy_cumulative_order_without_copies() -> None:
+    sessions = [[item, item + 1] for item in range(1, 11)]
+    labels = list(range(11, 21))
+    data = Data((sessions, labels), shuffle=True)
+    original_inputs = data.inputs.copy()
+    original_mask = data.mask.copy()
+    original_targets = data.targets.copy()
+
+    rng = np.random.RandomState(20260405)
+    first_permutation = np.arange(data.length)
+    rng.shuffle(first_permutation)
+    second_permutation = np.arange(data.length)
+    rng.shuffle(second_permutation)
+    expected_second_order = first_permutation[second_permutation]
+
+    np.random.seed(20260405)
+    first_batches = data.generate_batch(4)
+    second_batches = data.generate_batch(4)
+    first_order = np.concatenate(first_batches)
+    second_order = np.concatenate(second_batches)
+
+    assert np.array_equal(first_order, first_permutation)
+    assert np.array_equal(second_order, expected_second_order)
+    assert np.array_equal(data.inputs, original_inputs)
+    assert np.array_equal(data.mask, original_mask)
+    assert np.array_equal(data.targets, original_targets)
+
+
 def test_srgnn_batch_validation_rejects_item_before_cuda_transfer() -> None:
     with pytest.raises(
         ValueError,

@@ -62,19 +62,22 @@ class Data():
         self.length = len(inputs)
         self.shuffle = shuffle
         self.graph = graph
+        # Preserve the legacy cumulative shuffle order without repeatedly
+        # copying the large padded inputs and masks on every epoch.
+        self._sample_order = np.arange(self.length, dtype=np.int64)
 
     def generate_batch(self, batch_size):
         if self.shuffle:
             shuffled_arg = np.arange(self.length)
             np.random.shuffle(shuffled_arg)
-            self.inputs = self.inputs[shuffled_arg]
-            self.mask = self.mask[shuffled_arg]
-            self.targets = self.targets[shuffled_arg]
-        n_batch = int(self.length / batch_size)
-        if self.length % batch_size != 0:
-            n_batch += 1
-        slices = np.split(np.arange(n_batch * batch_size), n_batch)
-        slices[-1] = slices[-1][:(self.length - batch_size * (n_batch - 1))]
+            self._sample_order = self._sample_order[shuffled_arg]
+            sample_order = self._sample_order
+        else:
+            sample_order = np.arange(self.length, dtype=np.int64)
+        slices = [
+            sample_order[start:min(start + batch_size, self.length)]
+            for start in range(0, self.length, batch_size)
+        ]
         return slices
 
     def get_slice(self, i):
