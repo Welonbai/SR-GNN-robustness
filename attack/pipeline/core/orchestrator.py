@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import shutil
 import time
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -121,6 +121,7 @@ def run_targets_and_victims(
     run_type: str,
     build_poisoned: Callable[[int], TargetPoisonOutput],
     attack_identity_context: Mapping[str, object] | None = None,
+    max_targets_per_execution: int | None = None,
 ) -> dict[str, object]:
     metadata_paths = run_metadata_paths(
         config,
@@ -200,6 +201,10 @@ def run_targets_and_victims(
         requested_victims=requested_victims,
     )
     planned_cells = list(plan["planned_cells"])
+    planned_cells = _limit_planned_cells_by_target(
+        planned_cells,
+        max_targets=max_targets_per_execution,
+    )
     skipped_completed_cells = list(plan["skipped_completed_cells"])
     progress_payload = _initial_progress_payload(
         config,
@@ -1028,6 +1033,24 @@ def _group_planned_cells_by_target(
         target_item = int(cell["target_item"])
         grouped.setdefault(target_item, []).append(dict(cell))
     return grouped
+
+
+def _limit_planned_cells_by_target(
+    planned_cells: list[dict[str, Any]],
+    *,
+    max_targets: int | None,
+) -> list[dict[str, Any]]:
+    if max_targets is None:
+        return list(planned_cells)
+    limit = int(max_targets)
+    if limit <= 0:
+        raise ValueError("max_targets_per_execution must be positive when provided.")
+    selected_targets = set(_unique_targets(planned_cells)[:limit])
+    return [
+        dict(cell)
+        for cell in planned_cells
+        if int(cell["target_item"]) in selected_targets
+    ]
 
 
 def _execution_timestamp() -> str:

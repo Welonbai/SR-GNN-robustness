@@ -3,15 +3,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import time
 from typing import Any, Mapping, Sequence
 
 if __package__ is None or __package__ == "":
-    import sys
-
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from attack.common.config import (
@@ -33,13 +34,19 @@ from attack.common.config import (
     PTSConstructionConfig,
     load_config,
 )
-from attack.common.artifact_io import load_fake_sessions, load_json, save_json
+from attack.common.artifact_io import (
+    load_fake_sessions,
+    load_json,
+    load_run_coverage,
+    save_json,
+)
 from attack.common.paths import (
     PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
     PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
     attack_key,
     poison_model_key_payload,
     run_group_key,
+    run_metadata_paths,
     shared_attack_artifact_key_payload,
     shared_root,
     target_dir,
@@ -98,7 +105,6 @@ from attack.pts.continuous_policy import (
     CONTINUOUS_BETA_SHARED_PREFIX_TAG,
 )
 from attack.pts.direct_action_cem import (
-    DIRECT_ACTION_MLP_CEM_METHOD,
     PTSDirectActionMLPCEMConfig,
     PTSDirectActionMLPCEMTrainer,
 )
@@ -186,6 +192,7 @@ def run_pts_construction_grouped_cem(
     *,
     config_path: str | Path | None = None,
     force_recompute_pts_cem: bool = False,
+    max_targets_per_execution: int | None = None,
 ) -> dict[str, object]:
     _validate_pts_construction_run_config(config)
 
@@ -492,6 +499,7 @@ def run_pts_construction_grouped_cem(
         run_type=run_type,
         build_poisoned=build_poisoned,
         attack_identity_context=attack_identity_context,
+        max_targets_per_execution=max_targets_per_execution,
     )
 
 
@@ -3613,6 +3621,124 @@ def _selected_sessions_sha1(
     return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
 
 
+def _requires_target_process_isolation(config: Config) -> bool:
+    pts_config = _require_pts_config(config)
+    return bool(
+        pts_config.cem.surrogate_model.name == "mdhg"
+        or config.attack.poison_model.name == "mdhg"
+    )
+
+
+def _coverage_completion_snapshot(config: Config) -> tuple[int, int | None]:
+    run_type = _pts_construction_run_type(config)
+    attack_identity_context = build_pts_construction_attack_identity_context(config)
+    metadata_paths = run_metadata_paths(
+        config,
+        run_type=run_type,
+        attack_identity_context=attack_identity_context,
+    )
+    coverage = load_run_coverage(metadata_paths["run_coverage"])
+    if coverage is None:
+        return 0, None
+    targets = coverage.get("targets_order", [])
+    victims_payload = coverage.get("victims", {})
+    cells = coverage.get("cells", {})
+    if not isinstance(targets, list):
+        raise ValueError("run_coverage.json targets_order must be a list.")
+    if not isinstance(victims_payload, Mapping):
+        raise ValueError("run_coverage.json victims must be an object.")
+    if not isinstance(cells, Mapping):
+        raise ValueError("run_coverage.json cells must be an object.")
+    victims = [str(name) for name in victims_payload]
+    completed = 0
+    for target_item in targets:
+        target_cells = cells.get(str(target_item), {})
+        if not isinstance(target_cells, Mapping):
+            continue
+        completed += sum(
+            1
+            for victim_name in victims
+            if isinstance(target_cells.get(victim_name), Mapping)
+            and target_cells[victim_name].get("status") == "completed"
+        )
+    return int(completed), int(len(targets) * len(victims))
+
+
+def _run_target_isolation_supervisor(
+    config: Config,
+    *,
+    config_path: Path,
+    force_recompute_pts_cem: bool,
+) -> None:
+    completed, total = _coverage_completion_snapshot(config)
+    worker_number = 0
+    consecutive_no_progress_failures = 0
+    while total is None or completed < total:
+        worker_number += 1
+        cmd = [
+            sys.executable,
+            "-u",
+            "-m",
+            "attack.pipeline.runs.run_pts_construction_cem",
+            "--config",
+            str(config_path.resolve()),
+            "--target-isolation-worker",
+        ]
+        if force_recompute_pts_cem:
+            cmd.append("--force-recompute-pts-cem")
+        print(
+            f"{_LOG_PREFIX} supervisor starting fresh target worker={worker_number} "
+            f"coverage={completed}/{total if total is not None else '?'}",
+            flush=True,
+        )
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        result = subprocess.run(
+            cmd,
+            cwd=Path(__file__).resolve().parents[3],
+            env=env,
+            check=False,
+        )
+        next_completed, next_total = _coverage_completion_snapshot(config)
+        made_progress = next_completed > completed
+        print(
+            f"{_LOG_PREFIX} supervisor worker={worker_number} "
+            f"exit={result.returncode} coverage={next_completed}/"
+            f"{next_total if next_total is not None else '?'}",
+            flush=True,
+        )
+        if next_total is not None and next_completed == next_total:
+            return
+        if result.returncode != 0:
+            if made_progress:
+                consecutive_no_progress_failures = 0
+                print(
+                    f"{_LOG_PREFIX} worker exited abnormally after committing progress; "
+                    "restarting from coverage in a clean process.",
+                    flush=True,
+                )
+            else:
+                consecutive_no_progress_failures += 1
+                if consecutive_no_progress_failures >= 2:
+                    raise RuntimeError(
+                        "PTS-CEM target worker failed twice without committing a new "
+                        f"coverage cell; last exit code={result.returncode}."
+                    )
+                print(
+                    f"{_LOG_PREFIX} worker exited without new coverage; allowing one "
+                    "clean-process retry.",
+                    flush=True,
+                )
+        elif not made_progress:
+            raise RuntimeError(
+                "PTS-CEM target worker exited successfully without completing the run "
+                "or committing a new coverage cell."
+            )
+        else:
+            consecutive_no_progress_failures = 0
+        completed, total = next_completed, next_total
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         description="Run PTS-CEM construction through the attack pipeline."
@@ -3627,13 +3753,29 @@ def main(argv: Sequence[str] | None = None) -> None:
         action="store_true",
         help="Ignore existing target-level PTS-CEM best-candidate cache and rerun CEM.",
     )
+    parser.add_argument(
+        "--target-isolation-worker",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args(argv)
     config_path = Path(args.config)
     config = load_config(config_path)
+    if (
+        not bool(args.target_isolation_worker)
+        and _requires_target_process_isolation(config)
+    ):
+        _run_target_isolation_supervisor(
+            config,
+            config_path=config_path,
+            force_recompute_pts_cem=bool(args.force_recompute_pts_cem),
+        )
+        return
     run_pts_construction_grouped_cem(
         config,
         config_path=config_path,
         force_recompute_pts_cem=bool(args.force_recompute_pts_cem),
+        max_targets_per_execution=(1 if args.target_isolation_worker else None),
     )
 
 
