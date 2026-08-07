@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import errno
 import hashlib
 import json
 import math
@@ -50,7 +51,11 @@ from attack.data.canonical_dataset import CanonicalDataset
 from attack.data.canonical_fingerprints import file_provenance
 from attack.data.poisoned_dataset_builder import PoisonedDataset
 from attack.data.session_stats import SessionStats
-from attack.pipeline.core.evaluator import evaluate_prediction_metrics, save_metrics
+from attack.pipeline.core.evaluator import (
+    evaluate_prediction_metrics,
+    save_metrics,
+    save_prediction_payload,
+)
 from attack.pipeline.core.ground_truth_alignment import resolve_ground_truth_labels
 from attack.pipeline.core.pipeline_utils import (
     SharedAttackArtifacts,
@@ -2124,6 +2129,7 @@ def _load_shared_victim_result(
     _save_reused_predictions_payload(
         predictions_payload,
         predictions_path=predictions_path,
+        predictions_source=shared_predictions,
         target_item=target_item,
     )
     _copy_if_exists(artifacts["shared_train_history"], artifacts["train_history"])
@@ -2466,6 +2472,7 @@ def _load_legacy_pts_cem_victim_result(
         _save_reused_predictions_payload(
             predictions_payload,
             predictions_path=predictions_path,
+            predictions_source=predictions_source,
             target_item=target_item,
         )
         train_history_source = metrics_path.parent / "train_history.json"
@@ -2584,9 +2591,11 @@ def _persist_shared_victim_result(
 ) -> None:
     artifacts["shared_dir"].mkdir(parents=True, exist_ok=True)
     if "wearec" in victim_result.extra:
-        _atomic_copy(artifacts["predictions"], artifacts["shared_predictions"])
+        _atomic_link_or_copy(artifacts["predictions"], artifacts["shared_predictions"])
     else:
-        _copy_if_exists(artifacts["predictions"], artifacts["shared_predictions"])
+        _link_or_copy_if_exists(
+            artifacts["predictions"], artifacts["shared_predictions"]
+        )
     _copy_if_exists(artifacts["train_history"], artifacts["shared_train_history"])
     if "wearec" in victim_result.extra:
         _atomic_copy(
@@ -2804,6 +2813,47 @@ def _copy_if_exists(source: Path, destination: Path) -> None:
     shutil.copyfile(source, destination)
 
 
+def _link_or_copy_if_exists(source: Path, destination: Path) -> None:
+    if not source.exists():
+        return
+    _atomic_link_or_copy(source, destination)
+
+
+def _atomic_link_or_copy(source: Path, destination: Path) -> None:
+    """Materialize an immutable artifact without duplicating data when possible."""
+    source = Path(source)
+    destination = Path(destination)
+    if not source.is_file():
+        raise FileNotFoundError(f"Required retained artifact is missing: {source}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if destination.exists() and os.path.samefile(source, destination):
+        return
+
+    temp = destination.parent / f".{destination.name}.{uuid4().hex}.tmp"
+    try:
+        try:
+            os.link(source, temp)
+        except OSError as exc:
+            fallback_errnos = {
+                errno.EACCES,
+                errno.EINVAL,
+                errno.EMLINK,
+                errno.EPERM,
+                errno.EXDEV,
+            }
+            if hasattr(errno, "ENOTSUP"):
+                fallback_errnos.add(errno.ENOTSUP)
+            if hasattr(errno, "EOPNOTSUPP"):
+                fallback_errnos.add(errno.EOPNOTSUPP)
+            if exc.errno not in fallback_errnos:
+                raise
+            shutil.copyfile(source, temp)
+        os.replace(temp, destination)
+    finally:
+        if temp.exists():
+            temp.unlink()
+
+
 def _atomic_copy(source: Path, destination: Path) -> None:
     if not source.is_file():
         raise FileNotFoundError(f"Required retained artifact is missing: {source}")
@@ -2955,11 +3005,20 @@ def _save_reused_predictions_payload(
     predictions_payload: Mapping[str, Any],
     *,
     predictions_path: Path,
+    predictions_source: Path | None = None,
     target_item: int,
 ) -> None:
+    if predictions_source is not None:
+        try:
+            source_target_item = int(predictions_payload.get("target_item"))
+        except (TypeError, ValueError):
+            source_target_item = None
+        if source_target_item == int(target_item):
+            _atomic_link_or_copy(Path(predictions_source), predictions_path)
+            return
     local_payload = dict(predictions_payload)
     local_payload["target_item"] = int(target_item)
-    save_json(local_payload, predictions_path)
+    save_prediction_payload(local_payload, predictions_path)
 
 
 def _write_reused_victim_resolved_config(

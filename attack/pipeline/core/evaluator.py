@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 from math import log2
+import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from uuid import uuid4
 
 
 _SUPPORTED_METRIC_BASES = ("precision", "recall", "mrr", "ndcg")
@@ -105,8 +107,24 @@ def save_predictions(
         payload["rankings"] = [list(map(int, ranking)) for ranking in rankings]
     if reason:
         payload["reason"] = reason
-    with path.open("w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
+    save_prediction_payload(payload, path)
+
+
+def save_prediction_payload(
+    payload: Mapping[str, Any],
+    path: str | Path,
+) -> None:
+    """Atomically save the large standardized prediction payload as compact JSON."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        with temp.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, separators=(",", ":"), sort_keys=True)
+        os.replace(temp, path)
+    finally:
+        if temp.exists():
+            temp.unlink()
 
 
 def _compute_ranks(rankings: Sequence[Sequence[int]], target_item: int) -> list[int]:
