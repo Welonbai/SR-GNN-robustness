@@ -199,7 +199,10 @@ def _partition_parent_repository_status(status: str) -> dict[str, list[str]]:
     ignored = list(partitioned["ignored"])
     blocking: list[str] = []
     for line in status.splitlines():
-        if _is_unrelated_submodule_dirty_status_line(line):
+        if (
+            _is_unrelated_submodule_dirty_status_line(line)
+            or _is_analysis_only_dirty_status_line(line)
+        ):
             ignored.extend(_git_status_line_paths(line))
             continue
     ignored_set = set(ignored)
@@ -210,6 +213,14 @@ def _partition_parent_repository_status(status: str) -> dict[str, list[str]]:
         "ignored": _dedupe_preserving_order(ignored),
         "blocking": _dedupe_preserving_order(blocking),
     }
+
+
+def _is_analysis_only_dirty_status_line(line: str) -> bool:
+    """Ignore parent analysis artifacts that cannot affect victim execution."""
+    paths = _git_status_line_paths(line)
+    return bool(paths) and all(
+        path.replace("\\", "/").startswith("analysis/") for path in paths
+    )
 
 
 def _is_unrelated_submodule_dirty_status_line(line: str) -> bool:

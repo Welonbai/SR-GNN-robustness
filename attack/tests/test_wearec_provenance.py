@@ -112,6 +112,45 @@ def test_parent_unrelated_submodule_gitlink_change_is_ignored(tmp_path):
     assert result["parent_ignored_runtime_cache_dirty_paths"] == ["third_party/mdhg"]
 
 
+def test_parent_analysis_only_dirty_status_is_ignored(tmp_path):
+    parent = tmp_path / "parent"; wearec = tmp_path / "wearec"
+    parent.mkdir(); wearec.mkdir()
+    fake = FakeGit(
+        parent_status="\n".join(
+            [
+                " M analysis/pipeline/report_table_renderer.py",
+                "M  analysis/configs/render/formal.yaml",
+            ]
+        )
+    )
+    result = resolve_wearec_repository_provenance(
+        parent, wearec, command_runner=fake
+    )
+    assert result["parent_tracked_worktree_clean"] is True
+    assert result["parent_ignored_runtime_cache_dirty_paths"] == [
+        "analysis/pipeline/report_table_renderer.py",
+        "analysis/configs/render/formal.yaml",
+    ]
+
+
+def test_parent_analysis_dirty_does_not_hide_runtime_change(tmp_path):
+    parent = tmp_path / "parent"; wearec = tmp_path / "wearec"
+    parent.mkdir(); wearec.mkdir()
+    fake = FakeGit(
+        parent_status="\n".join(
+            [
+                " M analysis/pipeline/report_table_renderer.py",
+                " M attack/models/victim/wearec_runner.py",
+            ]
+        )
+    )
+    with pytest.raises(RuntimeError) as exc_info:
+        resolve_wearec_repository_provenance(parent, wearec, command_runner=fake)
+    message = str(exc_info.value)
+    assert "attack/models/victim/wearec_runner.py" in message
+    assert "analysis/pipeline/report_table_renderer.py" not in message
+
+
 def test_parent_real_source_dirty_status_is_rejected(tmp_path):
     parent = tmp_path / "parent"; wearec = tmp_path / "wearec"
     parent.mkdir(); wearec.mkdir()
