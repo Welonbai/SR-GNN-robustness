@@ -55,7 +55,7 @@ victims:
   params:
     srgnn:
       train:
-        epochs: 30
+        epochs: 4
         batch_size: 100
         hidden_size: 100
         lr: 0.001
@@ -65,9 +65,9 @@ victims:
         step: 1
         patience: 10
         nonhybrid: false
-        checkpoint_protocol: validation_best
-        best_metric: valid_ground_truth_mrr@20
-        patience_metric: recall20_or_mrr20
+        checkpoint_protocol: fixed_last
+        validation_enabled: false
+        export_model: last
     miasrec:
       train:
         epochs: 6
@@ -212,4 +212,3 @@ artifacts:
   shared_dir: shared
   runs_dir: runs
   cleanup_victim_intermediates: true
-
