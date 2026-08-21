@@ -108,6 +108,27 @@ def test_uniform_identity_is_fixed_and_classified_as_poisoned() -> None:
     assert "final_selection" not in pts_payload
 
 
+def test_uniform_validation_allows_preexisting_target_at_session_start() -> None:
+    uniform_runner._validate_constructed_sessions(
+        sessions=[[50, 50, 2]],
+        session_contexts=[SimpleNamespace(anchor_position=1)],
+        target_item=50,
+        expected_count=1,
+        max_item=100,
+    )
+
+
+def test_uniform_validation_requires_inserted_target_at_internal_anchor() -> None:
+    with pytest.raises(ValueError, match="inserted target at its internal anchor"):
+        uniform_runner._validate_constructed_sessions(
+            sessions=[[50, 2, 3]],
+            session_contexts=[SimpleNamespace(anchor_position=1)],
+            target_item=50,
+            expected_count=1,
+            max_item=100,
+        )
+
+
 def test_runner_materializes_one_zero_policy_batch_without_cem_or_surrogate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -144,8 +165,13 @@ def test_runner_materializes_one_zero_policy_batch_without_cem_or_surrogate(
         captured["candidate_key"] = kwargs["candidate_key"]
         captured["iteration"] = kwargs["iteration"]
         captured["poison_runner"] = kwargs["poison_runner"]
+        final_sessions = [
+            [*context.prefix, 50, *context.residual_suffix]
+            for context in kwargs["session_contexts"]
+        ]
+        captured["final_sessions"] = final_sessions
         return PTSConstructionBatchResult(
-            final_sessions=[[1, 50, 2], [4, 50, 5]],
+            final_sessions=final_sessions,
             per_session_records=[{"index": 0}, {"index": 1}],
             summary={"session_count": 2, "action_counts": {"stop": 2}},
         )
@@ -183,7 +209,7 @@ def test_runner_materializes_one_zero_policy_batch_without_cem_or_surrogate(
     assert captured["run_type"] == PTS_CONSTRUCTION_DIRECT_ACTION_MLP_UNIFORM_RUN_TYPE
 
     output = captured["output"]
-    assert output.raw_fake_sessions == [[1, 50, 2], [4, 50, 5]]
+    assert output.raw_fake_sessions == captured["final_sessions"]
     assert output.poisoned.fake_count == 2
     assert output.metadata["pts_uniform_cem_enabled"] is False
     assert output.metadata["pts_uniform_surrogate_evaluation_count"] == 0

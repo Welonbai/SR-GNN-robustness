@@ -115,6 +115,7 @@ def run_pts_direct_action_uniform(
         )
         _validate_constructed_sessions(
             sessions=result.final_sessions,
+            session_contexts=session_contexts,
             target_item=int(target_item),
             expected_count=len(shared.template_sessions),
             max_item=max(shared.stats.item_counts),
@@ -272,6 +273,7 @@ def _require_pts_config(config: Config):
 def _validate_constructed_sessions(
     *,
     sessions: Sequence[Sequence[int]],
+    session_contexts: Sequence[DirectActionFormalSessionContext],
     target_item: int,
     expected_count: int,
     max_item: int,
@@ -281,14 +283,26 @@ def _validate_constructed_sessions(
             "Uniform construction session count mismatch: "
             f"expected {int(expected_count)}, got {len(sessions)}."
         )
+    if len(session_contexts) != int(expected_count):
+        raise ValueError(
+            "Uniform construction context count mismatch: "
+            f"expected {int(expected_count)}, got {len(session_contexts)}."
+        )
     target = int(target_item)
-    for index, session in enumerate(sessions):
+    for index, (session, context) in enumerate(zip(sessions, session_contexts)):
         values = [int(item) for item in session]
         if not values:
             raise ValueError(f"Uniform construction produced empty session at index {index}.")
-        if values[0] == target:
+        anchor_position = int(context.anchor_position)
+        if anchor_position <= 0 or anchor_position >= len(values):
             raise ValueError(
-                f"Uniform construction placed target first at session index {index}."
+                "Uniform construction produced an invalid internal anchor at "
+                f"session index {index}: anchor={anchor_position}, length={len(values)}."
+            )
+        if values[anchor_position] != target:
+            raise ValueError(
+                "Uniform construction omitted the inserted target at its internal anchor: "
+                f"session index {index}, anchor={anchor_position}."
             )
         if target not in values:
             raise ValueError(
