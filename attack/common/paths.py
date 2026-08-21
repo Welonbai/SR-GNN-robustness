@@ -28,6 +28,9 @@ POSITION_OPT_RANK_BUCKET_CEM_RUN_TYPE = "rank_bucket_cem"
 POSITION_OPT_RANK_BUCKET_CEM_CANDIDATE_REPLAY_RUN_TYPE = "rank_bucket_cem_candidate_replay"
 PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE = "pts_construction_grouped_cem"
 PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE = "pts_construction_direct_action_mlp_cem"
+PTS_CONSTRUCTION_DIRECT_ACTION_MLP_UNIFORM_RUN_TYPE = (
+    "pts_construction_direct_action_mlp_uniform"
+)
 PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE = "pts_construction_candidate_replay"
 CREAT_ADDITIVE_SBR_RUN_TYPE = "creat_additive_sbr"
 CREAT_ADDITIVE_SBR_GENERATE_ONLY_RUN_TYPE = "creat_additive_sbr_generate_only"
@@ -111,6 +114,7 @@ _WEAREC_POISONED_VICTIM_RUN_TYPES = frozenset(
         PREFIX_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
         PTS_CONSTRUCTION_CANDIDATE_REPLAY_RUN_TYPE,
         PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+        PTS_CONSTRUCTION_DIRECT_ACTION_MLP_UNIFORM_RUN_TYPE,
         PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
         RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
         RANDOM_INSERTION_THEN_CROP_NONZERO_WHEN_POSSIBLE_RUN_TYPE,
@@ -139,6 +143,8 @@ def shared_attack_identity_requires_poison_runner(run_type: str) -> bool:
     return run_type in {
         CREAT_ADDITIVE_SBR_RUN_TYPE,
         CREAT_ADDITIVE_SBR_GENERATE_ONLY_RUN_TYPE,
+        PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+        PTS_CONSTRUCTION_DIRECT_ACTION_MLP_UNIFORM_RUN_TYPE,
         TARGET_AWARE_CARRIER_SELECTION_NZ_RUN_TYPE,
         TARGET_AWARE_CARRIER_LOCAL_POSITION_RUN_TYPE,
         TARGET_AWARE_COVERAGE_LOCAL_POSITION_RUN_TYPE,
@@ -497,6 +503,7 @@ def attack_key_payload(
     if run_type in {
         PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE,
         PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE,
+        PTS_CONSTRUCTION_DIRECT_ACTION_MLP_UNIFORM_RUN_TYPE,
     }:
         if config.attack.pts_construction is None:
             raise ValueError(
@@ -554,7 +561,7 @@ def _pts_construction_identity_payload(config: Config) -> Any:
             continuous = payload.get("continuous_policy")
             if isinstance(continuous, dict):
                 payload["continuous_policy"] = dict(continuous)
-        elif method == "direct_action_mlp_cem":
+        elif method in {"direct_action_mlp_cem", "direct_action_mlp_uniform"}:
             payload.pop("grouping", None)
             payload.pop("actions", None)
             payload.pop("continuous_policy", None)
@@ -563,11 +570,20 @@ def _pts_construction_identity_payload(config: Config) -> Any:
                 payload["direct_action_policy"] = {
                     "parameterization": direct_action.get("parameterization"),
                     "length_feature": direct_action.get("length_feature"),
-                    "cem_init": {
+                }
+                if method == "direct_action_mlp_cem":
+                    payload["direct_action_policy"]["cem_init"] = {
                         "mode": "standard_normal",
                         "parameter_space": "standardized_policy_parameter_space",
-                    },
-                }
+                    }
+                else:
+                    payload["direct_action_policy"]["fixed_policy"] = {
+                        "mode": "zero_logits_uniform_atomic_actions",
+                        "parameter_vector": "all_zero",
+                    }
+                    payload.pop("cem", None)
+                    payload.pop("reward", None)
+                    payload.pop("final_selection", None)
         cem = payload.get("cem")
         if isinstance(cem, dict):
             cem = dict(cem)
@@ -1390,6 +1406,7 @@ __all__ = [
     "CREAT_ADDITIVE_SBR_RUN_TYPE",
     "CREAT_ADDITIVE_SBR_GENERATE_ONLY_RUN_TYPE",
     "PTS_CONSTRUCTION_DIRECT_ACTION_MLP_CEM_RUN_TYPE",
+    "PTS_CONSTRUCTION_DIRECT_ACTION_MLP_UNIFORM_RUN_TYPE",
     "PTS_CONSTRUCTION_GROUPED_CEM_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_GENERATED_CONTINUATION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",
     "INTERNAL_RANDOM_INSERTION_NONZERO_WHEN_POSSIBLE_RUN_TYPE",

@@ -138,6 +138,7 @@ _ALLOWED_ANCHOR_ASSIGNMENT_STRATEGIES = {
 PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1 = "grouped_cem_v1"
 PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM = "continuous_mlp_cem"
 PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM = "direct_action_mlp_cem"
+PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_UNIFORM = "direct_action_mlp_uniform"
 PTS_PREFIX_RANGE_INTERNAL = "internal"
 PTS_PREFIX_SAMPLER_UNIFORM = "uniform"
 PTS_GROUPING_RESIDUAL_SUFFIX_LENGTH = "residual_suffix_length"
@@ -1828,10 +1829,12 @@ class PTSConstructionConfig:
             PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1,
             PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM,
             PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM,
+            PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_UNIFORM,
         }:
             raise ValueError(
                 "attack.pts_construction.method must be 'grouped_cem_v1', "
-                "'continuous_mlp_cem', or 'direct_action_mlp_cem'."
+                "'continuous_mlp_cem', 'direct_action_mlp_cem', or "
+                "'direct_action_mlp_uniform'."
             )
         object.__setattr__(self, "enabled", enabled)
         object.__setattr__(self, "method", method)
@@ -5254,6 +5257,7 @@ __all__ = [
     "PTSDirectActionPolicyConfig",
     "PTS_CONSTRUCTION_METHOD_CONTINUOUS_MLP_CEM",
     "PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_CEM",
+    "PTS_CONSTRUCTION_METHOD_DIRECT_ACTION_MLP_UNIFORM",
     "PTS_CONSTRUCTION_METHOD_GROUPED_CEM_V1",
     "PTS_CONTINUOUS_BETA_INITIALIZATION_BEHAVIOR_COVERING_V1",
     "PTS_CONTINUOUS_BETA_INPUT_SUFFIX_LENGTH_PERCENTILE",
