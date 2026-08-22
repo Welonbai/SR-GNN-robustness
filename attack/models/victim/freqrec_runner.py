@@ -179,7 +179,7 @@ class FreqRecRunner(VictimRunnerBase):
         env = os.environ.copy()
         env["PYTHONHASHSEED"] = str(int(seed))
         if use_gpu:
-            env["CUDA_VISIBLE_DEVICES"] = gpu_id
+            env.setdefault("CUDA_VISIBLE_DEVICES", gpu_id)
         return cmd, env
 
     def run(

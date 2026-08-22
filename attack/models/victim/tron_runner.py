@@ -175,7 +175,9 @@ class TRONRunner(VictimRunnerBase):
         env["PYTHONPATH"] = _prepend_pythonpath(env.get("PYTHONPATH"), self.repo_root)
         env["PYTHONHASHSEED"] = str(effective_seed)
         if bool(self.device_config["use_gpu"]):
-            env["CUDA_VISIBLE_DEVICES"] = str(self.device_config["gpu_id"]).strip()
+            env.setdefault(
+                "CUDA_VISIBLE_DEVICES", str(self.device_config["gpu_id"]).strip()
+            )
         else:
             env.pop("CUDA_VISIBLE_DEVICES", None)
 

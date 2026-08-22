@@ -162,7 +162,9 @@ class WEARecRunner(VictimRunnerBase):
         env = os.environ.copy()
         env["PYTHONHASHSEED"] = str(seed)
         if bool(self.device_config["use_gpu"]):
-            env["CUDA_VISIBLE_DEVICES"] = _single_gpu_id(self.device_config["gpu_id"])
+            env.setdefault(
+                "CUDA_VISIBLE_DEVICES", _single_gpu_id(self.device_config["gpu_id"])
+            )
         return cmd, env
 
     def run(
