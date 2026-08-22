@@ -78,7 +78,9 @@ attack:
     generation_seed_offset: 0
     generation_sample_batch_size: 256
     device: null
-    gpu_id: '1'
+    # CUDA_VISIBLE_DEVICES exposes one physical GPU as logical cuda:0.
+    # Victim subprocess runtime IDs below remain physical GPU 1.
+    gpu_id: '0'
 targets:
   mode: explicit_list
   explicit_list:
