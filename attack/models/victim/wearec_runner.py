@@ -9,7 +9,10 @@ from typing import Any, Mapping, Sequence
 from attack.common.config import Config
 from attack.models.victim.base_runner import VictimRunnerBase
 from attack.models.victim.registry import register_victim
-from attack.models.victim.subprocess_progress import run_subprocess_with_epoch_progress
+from attack.models.victim.subprocess_progress import (
+    resolve_subprocess_gpu_selector,
+    run_subprocess_with_epoch_progress,
+)
 from attack.models.victim.wearec_diagnostics import validate_wearec_metrics
 from attack.data.canonical_fingerprints import (
     file_provenance,
@@ -118,6 +121,12 @@ class WEARecRunner(VictimRunnerBase):
         )
         if int(self.dataloader_config["num_workers"]) != 0:
             raise ValueError("WEARec Phase 2 requires num_workers == 0.")
+        configured_gpu_id = _single_gpu_id(self.device_config["gpu_id"])
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = str(seed)
+        if bool(self.device_config["use_gpu"]):
+            env.setdefault("CUDA_VISIBLE_DEVICES", configured_gpu_id)
+        subprocess_gpu_id = resolve_subprocess_gpu_selector(configured_gpu_id, env)
         cmd = [
             self.python_executable,
             str((self.repo_root / "src" / "main.py").resolve()),
@@ -138,7 +147,7 @@ class WEARecRunner(VictimRunnerBase):
             "--topk", str(effective["requested_topk"]),
             "--seed", str(effective["seed"]),
             "--num_workers", "0",
-            "--gpu_id", _single_gpu_id(self.device_config["gpu_id"]),
+            "--gpu_id", subprocess_gpu_id,
             "--hidden_size", str(effective["hidden_size"]),
             "--num_hidden_layers", str(effective["num_hidden_layers"]),
             "--hidden_act", effective["hidden_act"],
@@ -159,12 +168,6 @@ class WEARecRunner(VictimRunnerBase):
                 cmd.extend(["--per_epoch_prediction_dir", str(per_epoch_prediction_dir.resolve())])
         if not bool(self.device_config["use_gpu"]):
             cmd.append("--no_cuda")
-        env = os.environ.copy()
-        env["PYTHONHASHSEED"] = str(seed)
-        if bool(self.device_config["use_gpu"]):
-            env.setdefault(
-                "CUDA_VISIBLE_DEVICES", _single_gpu_id(self.device_config["gpu_id"])
-            )
         return cmd, env
 
     def run(

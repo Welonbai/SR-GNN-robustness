@@ -117,6 +117,52 @@ def test_runner_command_and_json_validation(monkeypatch, tmp_path) -> None:
     assert run_info["gpu_id"] == "3"
 
 
+def test_runner_passes_single_inherited_gpu_to_child(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    config = _runner_config(tmp_path)
+    repo = Path(config.victims.runtime["mdhg"]["repo_root"])
+    repo.mkdir()
+    (repo / "main.py").write_text("", encoding="utf-8")
+    data_dir = tmp_path / "export"
+    data_dir.mkdir()
+    output_path = tmp_path / "run" / "mdhg_topk_raw.json"
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = list(cmd)
+        captured["env"] = dict(kwargs["env"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "topk": 1,
+                    "requested_topk": 1,
+                    "n_node": 2,
+                    "rankings": [[1]],
+                }
+            ),
+            encoding="utf-8",
+        )
+        return type("Result", (), {"returncode": 0})()
+
+    monkeypatch.setattr(
+        "attack.models.victim.mdhg_runner.run_subprocess_with_epoch_progress",
+        fake_run,
+    )
+    MDHGRunner(config).run(
+        data_dir=data_dir,
+        dataset_name="toy",
+        n_node=2,
+        expected_test_count=1,
+        run_dir=tmp_path / "run",
+        export_topk_path=output_path,
+        topk=1,
+    )
+
+    assert captured["env"]["CUDA_VISIBLE_DEVICES"] == "1"
+    assert captured["cmd"][captured["cmd"].index("--gpu_id") + 1] == "1"
+
+
 def test_runner_rejects_invalid_prediction_rows(tmp_path) -> None:
     runner = MDHGRunner(_runner_config(tmp_path))
     path = tmp_path / "bad.json"

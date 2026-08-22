@@ -175,3 +175,35 @@ def test_runner_rejects_directory_as_python_executable(tmp_path):
     )
     with pytest.raises(FileNotFoundError, match="python executable"):
         _run_for_path_validation(runner, tmp_path)
+
+
+def test_build_command_passes_single_inherited_gpu_to_child(monkeypatch, tmp_path):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    runner = WEARecRunner(
+        _runner_config(
+            tmp_path,
+            device={"use_gpu": True, "gpu_id": "0"},
+        )
+    )
+    paths = {
+        name: tmp_path / f"{name}.jsonl"
+        for name in ("train", "valid", "test", "metadata")
+    }
+    cmd, env = runner.build_command(
+        train_path=paths["train"],
+        valid_path=paths["valid"],
+        test_path=paths["test"],
+        metadata_path=paths["metadata"],
+        prediction_output_path=tmp_path / "predictions.json",
+        checkpoint_output_path=tmp_path / "checkpoint.pt",
+        epoch_metrics_output_path=None,
+        per_epoch_prediction_dir=None,
+        internal_output_dir=tmp_path / "internal",
+        requested_topk=5,
+        epochs=1,
+        seed=7,
+        per_epoch_diagnostics=False,
+    )
+
+    assert env["CUDA_VISIBLE_DEVICES"] == "1"
+    assert cmd[cmd.index("--gpu_id") + 1] == "1"

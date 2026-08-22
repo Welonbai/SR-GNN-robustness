@@ -10,6 +10,29 @@ from pathlib import Path
 _EPOCH_PATTERN = re.compile(r"\bepoch\s+(\d+)\b", re.IGNORECASE)
 
 
+def resolve_subprocess_gpu_selector(
+    configured_gpu_id: str | int,
+    env: Mapping[str, str],
+) -> str:
+    """Resolve the selector passed to a child that resets CUDA visibility.
+
+    Some third-party victim entry points assign ``CUDA_VISIBLE_DEVICES`` from
+    their ``--gpu_id`` argument after the parent runner has already isolated a
+    physical GPU.  When the parent exposes exactly one device, pass that same
+    physical selector to the child so the child cannot undo the isolation.
+
+    Multi-device visibility keeps the configured value for backward
+    compatibility; those configurations may intentionally use a physical GPU
+    selector rather than a logical index.
+    """
+    configured = str(configured_gpu_id).strip()
+    inherited = str(env.get("CUDA_VISIBLE_DEVICES", "")).strip()
+    visible = [value.strip() for value in inherited.split(",") if value.strip()]
+    if len(visible) == 1:
+        return visible[0]
+    return configured
+
+
 def run_subprocess_with_epoch_progress(
     cmd: Sequence[str],
     *,
@@ -93,4 +116,4 @@ def _print_epoch_progress(
         print(f"{epoch_index + 1}/{int(total_epochs)}", flush=True)
 
 
-__all__ = ["run_subprocess_with_epoch_progress"]
+__all__ = ["resolve_subprocess_gpu_selector", "run_subprocess_with_epoch_progress"]

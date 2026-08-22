@@ -8,7 +8,10 @@ from typing import Any
 from attack.common.config import Config
 from attack.models.victim.base_runner import VictimRunnerBase
 from attack.models.victim.registry import register_victim
-from attack.models.victim.subprocess_progress import run_subprocess_with_epoch_progress
+from attack.models.victim.subprocess_progress import (
+    resolve_subprocess_gpu_selector,
+    run_subprocess_with_epoch_progress,
+)
 
 
 class MDHGRunner(VictimRunnerBase):
@@ -77,6 +80,9 @@ class MDHGRunner(VictimRunnerBase):
             else self.config.seeds.victim_train_seed
         )
         gpu_id = str(self.device_config["gpu_id"]).strip()
+        env = os.environ.copy()
+        env["PYTHONHASHSEED"] = str(effective_seed)
+        subprocess_gpu_id = resolve_subprocess_gpu_selector(gpu_id, env)
         run_dir.mkdir(parents=True, exist_ok=True)
         log_path = run_dir / "mdhg_stdout.log"
         diagnostics_dir = run_dir / "diagnostics"
@@ -103,7 +109,7 @@ class MDHGRunner(VictimRunnerBase):
             "--lr",
             str(float(self.train_config["lr"])),
             "--gpu_id",
-            gpu_id,
+            subprocess_gpu_id,
             "--seed",
             str(effective_seed),
             "--topk",
@@ -125,8 +131,6 @@ class MDHGRunner(VictimRunnerBase):
                     str(per_epoch_prediction_dir.resolve()),
                 ]
             )
-        env = os.environ.copy()
-        env["PYTHONHASHSEED"] = str(effective_seed)
         result = run_subprocess_with_epoch_progress(
             cmd,
             cwd=self.working_dir,
