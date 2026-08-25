@@ -2163,6 +2163,21 @@ def _load_shared_victim_result(
         run_type=run_type,
         extra=execution_payload.get("extra", {}),
     )
+    if victim_name == "wearec" and wearec_identity is not None:
+        # A validated WEARec cache entry already proves that the top-level
+        # scientific identity matches the requested execution.  Older cache
+        # entries may not duplicate that identity under extra["wearec"], but
+        # downstream metrics/key construction expects it there.  Rehydrate
+        # the compatibility field after validation instead of rejecting and
+        # retraining an otherwise complete cache entry.
+        cached_wearec_extra = extra.get("wearec")
+        wearec_extra = (
+            dict(cached_wearec_extra)
+            if isinstance(cached_wearec_extra, Mapping)
+            else {}
+        )
+        wearec_extra["scientific_identity"] = dict(wearec_identity)
+        extra["wearec"] = wearec_extra
     return VictimExecutionResult(
         predictions=rankings,
         predictions_path=predictions_path,

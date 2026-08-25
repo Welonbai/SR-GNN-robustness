@@ -143,6 +143,7 @@ def test_complete_entry_is_reused_and_partial_entries_are_stale(tmp_path):
         wearec_expected_labels=[1, 2, 3],
     )
     assert reused is not None
+    assert reused.extra["wearec"]["scientific_identity"] == identity
 
     artifacts["shared_wearec_raw_predictions"].unlink()
     assert _load_shared_victim_result(
@@ -152,6 +153,35 @@ def test_complete_entry_is_reused_and_partial_entries_are_stale(tmp_path):
         eval_topk=(1, 3, 5), wearec_identity=identity,
         wearec_expected_labels=[1, 2, 3],
     ) is None
+
+
+def test_reuse_rehydrates_identity_missing_from_legacy_execution_extra(tmp_path):
+    config, artifacts, identity = _persist(tmp_path)
+    execution_payload = json.loads(artifacts["shared_execution_result"].read_text())
+    execution_payload["extra"] = {}
+    _rewrite_json(artifacts["shared_execution_result"], execution_payload)
+    _refresh_manifest_provenance(
+        artifacts, "execution_result", "shared_execution_result"
+    )
+
+    reused = _load_shared_victim_result(
+        config,
+        run_type="clean",
+        victim_name="wearec",
+        target_item=1,
+        run_dir=artifacts["run_dir"],
+        artifacts=artifacts,
+        predictions_path=artifacts["predictions"],
+        canonical_dataset=_dataset(),
+        eval_topk=(1, 3, 5),
+        wearec_identity=identity,
+        wearec_expected_labels=[1, 2, 3],
+    )
+
+    assert reused is not None
+    assert reused.extra == {
+        "wearec": {"scientific_identity": identity}
+    }
 
 
 def test_missing_checkpoint_or_manifest_reference_is_stale(tmp_path):
