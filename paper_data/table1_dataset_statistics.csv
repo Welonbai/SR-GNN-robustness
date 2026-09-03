@@ -1,0 +1,3 @@
+dataset,clicks,items,train_sequence_label_pairs,test_sequence_label_pairs,mean_expanded_session_length
+diginetica,982961,43097,719470,60858,5.12
+yoochoose1_64,557248,16766,369859,55898,6.16

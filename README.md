@@ -1,5 +1,12 @@
 # SR-GNN
 
+## TC-SACP manuscript results
+
+Numerical results for the TC-SACP manuscript and Supplementary Material are
+in [paper_data/](paper_data/README.md), including figure/table mappings,
+column definitions, and benchmark-source links. The older SR-GNN material
+below is retained for reference.
+
 ## Run Commands
 
 ### Clean

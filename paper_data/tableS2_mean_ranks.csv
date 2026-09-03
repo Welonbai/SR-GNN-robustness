@@ -1,0 +1,61 @@
+method,metric,k,mean_rank
+DPSBR,recall,10,3.96
+DPSBR,recall,20,3.67
+DPSBR,recall,30,3.42
+DPSBR,recall,40,3.29
+DPSBR,recall,50,3.21
+DPSBR,mrr,10,3.96
+DPSBR,mrr,20,3.75
+DPSBR,mrr,30,3.71
+DPSBR,mrr,40,3.71
+DPSBR,mrr,50,3.58
+CREAT,recall,10,3.71
+CREAT,recall,20,4.83
+CREAT,recall,30,5
+CREAT,recall,40,5
+CREAT,recall,50,5.08
+CREAT,mrr,10,3.33
+CREAT,mrr,20,3.88
+CREAT,mrr,30,4.12
+CREAT,mrr,40,4.21
+CREAT,mrr,50,4.29
+Poisoning-SSL,recall,10,2.96
+Poisoning-SSL,recall,20,3.67
+Poisoning-SSL,recall,30,4
+Poisoning-SSL,recall,40,4.17
+Poisoning-SSL,recall,50,4.46
+Poisoning-SSL,mrr,10,2.79
+Poisoning-SSL,mrr,20,3
+Poisoning-SSL,mrr,30,3.21
+Poisoning-SSL,mrr,40,3.38
+Poisoning-SSL,mrr,50,3.5
+TC-SACP-G w/o Sur.,recall,10,3.83
+TC-SACP-G w/o Sur.,recall,20,3.04
+TC-SACP-G w/o Sur.,recall,30,2.96
+TC-SACP-G w/o Sur.,recall,40,2.96
+TC-SACP-G w/o Sur.,recall,50,3.12
+TC-SACP-G w/o Sur.,mrr,10,4.08
+TC-SACP-G w/o Sur.,mrr,20,3.58
+TC-SACP-G w/o Sur.,mrr,30,3.42
+TC-SACP-G w/o Sur.,mrr,40,3.29
+TC-SACP-G w/o Sur.,mrr,50,3.25
+TC-SACP-G,recall,10,2.75
+TC-SACP-G,recall,20,2.54
+TC-SACP-G,recall,30,2.38
+TC-SACP-G,recall,40,2.5
+TC-SACP-G,recall,50,2.42
+TC-SACP-G,mrr,10,2.67
+TC-SACP-G,mrr,20,2.75
+TC-SACP-G,mrr,30,2.75
+TC-SACP-G,mrr,40,2.62
+TC-SACP-G,mrr,50,2.62
+TC-SACP-C,recall,10,3.79
+TC-SACP-C,recall,20,3.25
+TC-SACP-C,recall,30,3.25
+TC-SACP-C,recall,40,3.08
+TC-SACP-C,recall,50,2.71
+TC-SACP-C,mrr,10,4.17
+TC-SACP-C,mrr,20,4.04
+TC-SACP-C,mrr,30,3.79
+TC-SACP-C,mrr,40,3.79
+TC-SACP-C,mrr,50,3.75

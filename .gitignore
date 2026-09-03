@@ -26,6 +26,7 @@ Thumbs.db
 datasets/
 *.pkl
 *.csv
+!paper_data/*.csv
 
 # ===== Model / Output =====
 checkpoints/

@@ -1,0 +1,7 @@
+method,comparison,minutes
+DPSBR,<,1
+CREAT,=,3.1
+Poisoning-SSL,=,54
+TC-SACP-G w/o Sur.,<,1
+TC-SACP-G,=,437.3
+TC-SACP-C,=,344.3
